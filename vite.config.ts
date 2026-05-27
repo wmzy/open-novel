@@ -18,7 +18,7 @@ function honoApiPlugin() {
           return;
         }
         const { default: app } = await import('./src/api-app.ts');
-        const url = new URL(req.url || '/', `http://${req.headers.host}`);
+        const url = new URL(`/api${req.url || '/'}`, `http://${req.headers.host}`);
         const headers = new Headers();
         for (const [key, value] of Object.entries(req.headers)) {
           if (value) headers.set(key, Array.isArray(value) ? value.join(', ') : value);
