@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ensureDbReady } from './db/drizzle';
 import { initPlugins } from './plugins/registry';
 import projectsRouter from './api/routes/projects';
@@ -30,5 +32,18 @@ app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);
 app.route('/api/runs', runsRouter);
 app.route('/api/plugins', pluginsRouter);
+
+// File serving endpoint
+app.get('/api/projects/:id/files/*', async (c) => {
+  const id = c.req.param('id');
+  const filePath = c.req.path.replace(`/api/projects/${id}/files/`, '');
+  const fullPath = path.resolve('./data/projects', id, filePath);
+  try {
+    const content = await readFile(fullPath, 'utf-8');
+    return c.text(content);
+  } catch {
+    return c.json({ error: 'File not found' }, 404);
+  }
+});
 
 export default app;
