@@ -5,6 +5,7 @@ import projectsRouter from './api/routes/projects';
 import chaptersRouter from './api/routes/chapters';
 import settingsRouter from './api/routes/settings';
 import agentsRouter from './api/routes/agents';
+import runsRouter from './api/routes/runs';
 
 const app = new Hono();
 
@@ -24,5 +25,6 @@ app.route('/api/projects', projectsRouter);
 app.route('/api/projects/:projectId/chapters', chaptersRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);
+app.route('/api/runs', runsRouter);
 
 export default app;
