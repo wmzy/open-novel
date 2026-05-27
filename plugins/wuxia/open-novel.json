@@ -1,0 +1,8 @@
+{
+  "id": "wuxia",
+  "name": "武侠创作",
+  "description": "武侠小说创作工作流",
+  "version": "1.0.0",
+  "stages": ["concept", "world", "characters", "outline", "scenes", "writing"],
+  "templates": ["concept.md", "world-building.md", "characters/"]
+}
