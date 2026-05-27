@@ -4,6 +4,7 @@ import { ensureDbReady } from './db/drizzle';
 import projectsRouter from './api/routes/projects';
 import chaptersRouter from './api/routes/chapters';
 import settingsRouter from './api/routes/settings';
+import agentsRouter from './api/routes/agents';
 
 const app = new Hono();
 
@@ -22,5 +23,6 @@ app.get('/api/health', (c) => c.json({ status: 'ok' }));
 app.route('/api/projects', projectsRouter);
 app.route('/api/projects/:projectId/chapters', chaptersRouter);
 app.route('/api/settings', settingsRouter);
+app.route('/api/agents', agentsRouter);
 
 export default app;
