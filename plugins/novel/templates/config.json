@@ -1,0 +1,8 @@
+{
+  "title": "{title}",
+  "genre": "{genre}",
+  "targetWords": {targetWords},
+  "chapterCount": {chapterCount},
+  "perspective": "third-person",
+  "createdAt": "{createdAt}"
+}

@@ -1,0 +1,11 @@
+{
+  "foreshadows": [
+    {
+      "id": 1,
+      "content": "伏笔内容",
+      "status": "pending",
+      "plantedIn": null,
+      "resolvedIn": null
+    }
+  ]
+}
