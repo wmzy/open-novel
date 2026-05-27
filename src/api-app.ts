@@ -1,11 +1,13 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { ensureDbReady } from './db/drizzle';
+import { initPlugins } from './plugins/registry';
 import projectsRouter from './api/routes/projects';
 import chaptersRouter from './api/routes/chapters';
 import settingsRouter from './api/routes/settings';
 import agentsRouter from './api/routes/agents';
 import runsRouter from './api/routes/runs';
+import pluginsRouter from './api/routes/plugins';
 
 const app = new Hono();
 
@@ -13,6 +15,7 @@ let dbReady = false;
 app.use('/api/*', async (c, next) => {
   if (!dbReady) {
     await ensureDbReady();
+    initPlugins();
     dbReady = true;
   }
   return next();
@@ -26,5 +29,6 @@ app.route('/api/projects/:projectId/chapters', chaptersRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);
 app.route('/api/runs', runsRouter);
+app.route('/api/plugins', pluginsRouter);
 
 export default app;
