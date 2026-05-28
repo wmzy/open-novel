@@ -69,6 +69,55 @@ projectsRouter.post('/', async (c) => {
   return c.json({ project }, 201);
 });
 
+// Import an existing .novel/ directory
+projectsRouter.post('/import', async (c) => {
+  const body = await c.req.json();
+  const userPath = path.resolve(body.path);
+  const novelDir = path.join(userPath, '.novel');
+
+  if (!existsSync(novelDir)) {
+    return c.json({ error: '该目录下不存在 .novel/ 结构' }, 400);
+  }
+
+  // Read config.json if it exists
+  let title = body.title || path.basename(userPath);
+  let genre = 'general';
+  let targetWords = 100000;
+  let chapterCount = 20;
+  let perspective = 'third-person';
+
+  const configPath = path.join(novelDir, 'config.json');
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      title = config.title || title;
+      genre = config.genre || genre;
+      targetWords = config.targetWords || targetWords;
+      chapterCount = config.chapterCount || chapterCount;
+      perspective = config.perspective || perspective;
+    } catch { /* ignore */ }
+  }
+
+  // Check if already imported
+  const existing = await db.select().from(projects).where(eq(projects.path, userPath)).limit(1);
+  if (existing.length > 0) {
+    return c.json({ error: '该项目已导入' }, 400);
+  }
+
+  const id = generateId('proj_');
+  const [project] = await db.insert(projects).values({
+    id,
+    title,
+    path: userPath,
+    genre,
+    targetWords,
+    chapterCount,
+    perspective,
+  }).returning();
+
+  return c.json({ project }, 201);
+});
+
 projectsRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);

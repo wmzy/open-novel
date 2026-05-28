@@ -118,6 +118,8 @@ export default function HomePage() {
   const [projectPath, setProjectPath] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
+  const [showImport, setShowImport] = useState(false);
+  const [importPath, setImportPath] = useState('');
 
   const filtered = useMemo(() => {
     if (!projects) return [];
@@ -164,6 +166,28 @@ export default function HomePage() {
     });
   };
 
+  const handleImport = async () => {
+    if (!importPath.trim()) return;
+    try {
+      const res = await fetch('/api/projects/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: importPath.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setShowImport(false);
+        setImportPath('');
+        toast.success('导入成功');
+        navigate(`/projects/${data.project.id}`);
+      } else {
+        toast.error(data.error || '导入失败');
+      }
+    } catch {
+      toast.error('导入失败');
+    }
+  };
+
   return (
     <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
       <NavHeader />
@@ -174,6 +198,7 @@ export default function HomePage() {
           <input className={input} placeholder="搜索项目..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         </div>
         <button className={primaryBtn} onClick={() => setShowCreate(true)}>新建项目</button>
+        <button className={primaryBtn} onClick={() => setShowImport(true)} style={{ background: 'var(--haze-color-bg-secondary)', color: 'var(--haze-color-text)' }}>导入项目</button>
       </div>
 
       {showCreate && (
@@ -218,6 +243,30 @@ export default function HomePage() {
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
             <button className={primaryBtn} onClick={handleCreate}>创建</button>
             <button onClick={() => setShowCreate(false)}>取消</button>
+          </div>
+        </div>
+      )}
+
+      {showImport && (
+        <div className={card} style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'grid', gap: '0.75rem' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
+                项目目录（包含 .novel/ 结构）
+              </label>
+              <input
+                className={input}
+                placeholder="/home/user/novels/my-novel"
+                value={importPath}
+                onChange={(e) => setImportPath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleImport()}
+                style={{ width: '100%' }}
+              />
+            </div>
+          </div>
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+            <button className={primaryBtn} onClick={handleImport}>导入</button>
+            <button onClick={() => { setShowImport(false); setImportPath(''); }}>取消</button>
           </div>
         </div>
       )}
