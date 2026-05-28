@@ -11,10 +11,19 @@ export function useProjects() {
   });
 }
 
+export interface CreateProjectInput {
+  title: string;
+  path: string;
+  genre?: string;
+  targetWords?: number;
+  chapterCount?: number;
+  perspective?: string;
+}
+
 export function useCreateProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { title: string; genre?: string }) => {
+    mutationFn: async (body: CreateProjectInput) => {
       const res = await fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       return res.json();
     },
