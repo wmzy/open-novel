@@ -48,11 +48,11 @@ Update `src/db/schema.ts` and `src/db/drizzle.ts` (the `ensureDbReady` DDL).
 **Backend (`POST /api/projects`):**
 
 1. Accept `{ title, genre, targetWords, chapterCount, path }`
-2. Validate `path` exists and is writable
-3. Resolve to absolute path
-4. Create `.novel/` structure (reuse existing `copyTemplates` logic)
+2. Resolve `path` to absolute. If directory doesn't exist, create it
+3. If `.novel/` already exists (e.g., user used opencode-novel-plugin), read existing `config.json` and reuse it
+4. If `.novel/` doesn't exist, create structure (reuse existing `copyTemplates` logic)
 5. `git init` if not already a repo
-6. `git add -A && git commit -m "init: {title}"`
+6. `git add -A && git commit -m "init: {title}"` (skip if no changes)
 7. Insert DB record with `path`
 8. Return project
 
@@ -76,9 +76,14 @@ Affected routes:
 - `GET /api/projects/:id/files` — read file
 - `POST /api/projects/:id/upload` — upload file
 - `GET /api/projects/:id/files/list` — list files
-- `GET /api/projects/:id/events` — SSE file watcher
+- `GET /api/projects/:id/events` — SSE file watcher (watch `{project.path}/.novel/`)
 - `PATCH /api/projects/:id` — update project
 - `DELETE /api/projects/:id` — delete DB record only, not files
+
+Agent file operations (`src/agent/launch.ts`):
+- Pass `{project.path}` as the working directory to the agent
+- Agent writes files directly to `{project.path}/.novel/`
+- After agent finishes, auto `git add -A && git commit`
 
 ### 4. Git Operations
 
@@ -116,10 +121,12 @@ Click handler:
 
 ### 7. Migration
 
-Import existing projects:
-- UI: "导入项目" button on homepage
-- Accepts a local path
-- Backend scans for `.novel/` structure, reads `config.json`, inserts DB record
+Import existing projects (e.g., from opencode-novel-plugin):
+- UI: "导入项目" button on homepage, accepts a local path
+- Backend checks `.novel/` exists, reads `config.json` for title/genre
+- If `.novel/config.json` doesn't exist, returns error
+- Inserts DB record with the provided path
+- If the directory is already registered, returns error
 
 ## Files to Change
 
