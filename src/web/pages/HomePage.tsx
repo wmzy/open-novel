@@ -285,6 +285,11 @@ export default function HomePage() {
                 </button>
                 <h3>{p.title}</h3>
                 <span className={genreBadge}>{genreLabels[p.genre] || p.genre}</span>
+                {p.pathExists === false && (
+                  <span style={{ display: 'inline-block', background: '#fef3c7', color: '#92400e', padding: '0.125rem 0.375rem', borderRadius: '4px', fontSize: '0.7rem', marginLeft: '0.5rem' }}>
+                    路径不存在
+                  </span>
+                )}
                 <p style={{ marginTop: '0.5rem', color: 'var(--haze-color-text-secondary)', fontSize: '0.875rem' }}>
                   {p.chapterCount} 章 · {p.targetWords.toLocaleString()} 字
                 </p>

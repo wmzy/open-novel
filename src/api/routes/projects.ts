@@ -16,7 +16,11 @@ const projectsRouter = new Hono();
 
 projectsRouter.get('/', async (c) => {
   const all = await db.select().from(projects).orderBy(desc(projects.createdAt));
-  return c.json({ projects: all });
+  const enriched = all.map((p) => ({
+    ...p,
+    pathExists: existsSync(p.path),
+  }));
+  return c.json({ projects: enriched });
 });
 
 projectsRouter.post('/', async (c) => {
