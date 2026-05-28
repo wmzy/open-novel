@@ -10,6 +10,7 @@ import { getPlugin } from '../../plugins/registry';
 import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
+import { gitSync } from '../../agent/snapshot';
 
 const projectsRouter = new Hono();
 
@@ -136,6 +137,15 @@ projectsRouter.post('/:id/init', async (c) => {
   }
 
   return c.json({ ok: true });
+});
+
+// Sync project with remote git
+projectsRouter.post('/:id/sync', async (c) => {
+  const projectId = c.req.param('id');
+  const projectDir = await resolveProjectDir(projectId);
+  const result = await gitSync(projectDir);
+  if (!result.success) return c.json({ error: result.message }, 400);
+  return c.json({ ok: true, message: result.message });
 });
 
 function copyTemplates(src: string, dest: string, vars: Record<string, string>) {
