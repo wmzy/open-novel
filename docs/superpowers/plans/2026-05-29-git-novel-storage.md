@@ -866,3 +866,55 @@ pnpm dev
 git add -A
 git commit -m "feat: complete git novel storage refactor"
 ```
+
+---
+
+### Task 12: Add project listing path validation
+
+**Files:**
+- Modify: `src/api/routes/projects.ts`
+
+- [ ] **Step 1: Update `GET /` to check path existence**
+
+```typescript
+import { existsSync } from 'node:fs';
+
+projectsRouter.get('/', async (c) => {
+  const all = await db.select().from(projects).orderBy(desc(projects.createdAt));
+  const enriched = all.map((p) => ({
+    ...p,
+    pathExists: existsSync(p.path),
+  }));
+  return c.json({ projects: enriched });
+});
+```
+
+- [ ] **Step 2: Update HomePage to show warning badge**
+
+In `src/web/pages/HomePage.tsx`, add a warning badge for projects with missing paths:
+
+```tsx
+{!p.pathExists && (
+  <span style={{ display: 'inline-block', background: '#fef3c7', color: '#92400e', padding: '0.125rem 0.375rem', borderRadius: '4px', fontSize: '0.7rem', marginLeft: '0.5rem' }}>
+    路径不存在
+  </span>
+)}
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/api/routes/projects.ts src/web/pages/HomePage.tsx
+git commit -m "feat: show path existence warning in project list"
+```
+
+---
+
+### Task 13: Auto-commit after agent run
+
+**Files:**
+- Modify: `src/api/routes/runs.ts`
+
+This is already handled in the existing `close` handler at line 120 which calls `createSnapshot`. The `createSnapshot` function in `snapshot.ts` does `git add -A && git commit`. No additional work needed — the existing behavior already auto-commits after agent runs.
+
+Verified: `runs.ts:120` calls `createSnapshot(projectDir, ...)` which stages all changes and commits. This satisfies the spec requirement "Agent writes files → auto git add + commit".
