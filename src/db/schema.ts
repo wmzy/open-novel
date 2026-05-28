@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 export const projects = pgTable('projects', {
   id: varchar('id', { length: 25 }).primaryKey(),
   title: varchar('title', { length: 200 }).notNull(),
+  path: varchar('path', { length: 500 }).notNull(),
   genre: varchar('genre', { length: 50 }).notNull().default('general'),
   targetWords: integer('target_words').notNull().default(100000),
   chapterCount: integer('chapter_count').notNull().default(20),

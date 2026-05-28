@@ -38,6 +38,7 @@ export async function ensureDbReady() {
       CREATE TABLE IF NOT EXISTS projects (
         id VARCHAR(25) PRIMARY KEY,
         title VARCHAR(200) NOT NULL,
+        path VARCHAR(500) NOT NULL,
         genre VARCHAR(50) NOT NULL DEFAULT 'general',
         target_words INTEGER NOT NULL DEFAULT 100000,
         chapter_count INTEGER NOT NULL DEFAULT 20,
