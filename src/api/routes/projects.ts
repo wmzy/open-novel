@@ -9,7 +9,7 @@ import { generateId } from '../../utils/id';
 import { getPlugin } from '../../plugins/registry';
 import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
-import { getProjectDir, getNovelDir } from '../../config';
+import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
 
 const projectsRouter = new Hono();
 
@@ -21,11 +21,12 @@ projectsRouter.get('/', async (c) => {
 projectsRouter.post('/', async (c) => {
   const body = await c.req.json();
   const id = generateId('proj_');
-  const projectDir = path.resolve(getProjectDir(id));
+  const userPath = path.resolve(body.path);
+  mkdirSync(userPath, { recursive: true });
   const [project] = await db.insert(projects).values({
     id,
     title: body.title || '未命名项目',
-    path: projectDir,
+    path: userPath,
     genre: body.genre || 'general',
     targetWords: body.targetWords || 100000,
     chapterCount: body.chapterCount || 20,
@@ -36,7 +37,7 @@ projectsRouter.post('/', async (c) => {
   // Auto-initialize workspace
   const plugin = getPlugin(body.skillId || body.genre || 'novel') || getPlugin('novel');
   if (plugin) {
-    const novelDir = path.join(projectDir, '.novel');
+    const novelDir = path.join(userPath, '.novel');
 
     if (!existsSync(novelDir)) {
       mkdirSync(novelDir, { recursive: true });
@@ -104,7 +105,7 @@ projectsRouter.post('/:id/init', async (c) => {
   const plugin = getPlugin(body.skillId || 'novel');
   if (!plugin) return c.json({ error: 'Plugin not found' }, 404);
 
-  const projectDir = path.resolve(getProjectDir(id));
+  const projectDir = project.path;
   const novelDir = path.join(projectDir, '.novel');
 
   if (!existsSync(novelDir)) {
@@ -167,7 +168,7 @@ projectsRouter.get('/:id/conversations', async (c) => {
 // Upload a file to the project
 projectsRouter.post('/:id/upload', async (c) => {
   const projectId = c.req.param('id');
-  const projectDir = path.resolve(getNovelDir(projectId));
+  const projectDir = await resolveNovelDir(projectId);
 
   const body = await c.req.parseBody();
   const file = body['file'];
@@ -207,7 +208,7 @@ projectsRouter.get('/:id/files', async (c) => {
   if (!filePath) return c.json({ error: 'path is required' }, 400);
 
   // Normalize and resolve path
-  const projectDir = path.resolve(getNovelDir(projectId));
+  const projectDir = await resolveNovelDir(projectId);
   const normalizedPath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
   const fullPath = path.resolve(projectDir, normalizedPath);
 
@@ -227,7 +228,7 @@ projectsRouter.get('/:id/files', async (c) => {
 // List files in project directory
 projectsRouter.get('/:id/files/list', async (c) => {
   const projectId = c.req.param('id');
-  const projectDir = path.resolve(getNovelDir(projectId));
+  const projectDir = await resolveNovelDir(projectId);
 
   try {
     const files = listFilesRecursive(projectDir, '');
@@ -256,7 +257,7 @@ function listFilesRecursive(dir: string, prefix: string): string[] {
 // SSE endpoint for real-time file change and project update notifications
 projectsRouter.get('/:id/events', async (c) => {
   const projectId = c.req.param('id');
-  const projectDir = path.resolve(getNovelDir(projectId));
+  const projectDir = await resolveNovelDir(projectId);
 
   return stream(c, async (streamWriter) => {
     c.header('Content-Type', 'text/event-stream');
