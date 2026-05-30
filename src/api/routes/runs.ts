@@ -176,10 +176,8 @@ runsRouter.get('/:id/events', async (c) => {
       run.clients.delete(send);
     });
 
-    // Wait until run finishes
-    while (!['succeeded', 'failed', 'canceled'].includes(run.status)) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
+    // Wait until run finishes (event-driven, no polling)
+    await run.finished;
   });
 });
 

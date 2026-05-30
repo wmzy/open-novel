@@ -48,35 +48,14 @@ projectsRouter.post('/', async (c) => {
   }).returning();
 
   // Auto-initialize workspace
-  const plugin = getPlugin(body.skillId || body.genre || 'novel') || getPlugin('novel');
-  if (plugin) {
-    const novelDir = path.join(userPath, '.novel');
-
-    if (!existsSync(novelDir)) {
-      mkdirSync(novelDir, { recursive: true });
-      mkdirSync(path.join(novelDir, 'characters'), { recursive: true });
-      mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
-
-      const templatesDir = path.join(plugin.path, 'templates');
-      if (existsSync(templatesDir)) {
-        copyTemplates(templatesDir, novelDir, {
-          title: project.title,
-          genre: project.genre,
-          targetWords: String(project.targetWords),
-          chapterCount: String(project.chapterCount),
-        });
-      }
-
-      writeFileSync(path.join(novelDir, 'config.json'), JSON.stringify({
-        title: project.title,
-        genre: project.genre,
-        targetWords: project.targetWords,
-        chapterCount: project.chapterCount,
-        perspective: project.perspective,
-        createdAt: new Date().toISOString(),
-      }, null, 2));
-    }
-  }
+  initWorkspace(userPath, {
+    title: project.title,
+    genre: project.genre,
+    targetWords: project.targetWords,
+    chapterCount: project.chapterCount,
+    perspective: project.perspective,
+    skillId: body.skillId,
+  });
 
   return c.json({ project }, 201);
 });
@@ -175,38 +154,14 @@ projectsRouter.post('/:id/init', async (c) => {
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) return c.json({ error: 'Not found' }, 404);
 
-  const plugin = getPlugin(body.skillId || 'novel');
-  if (!plugin) return c.json({ error: 'Plugin not found' }, 404);
-
-  const projectDir = project.path;
-  const novelDir = path.join(projectDir, '.novel');
-
-  if (!existsSync(novelDir)) {
-    mkdirSync(novelDir, { recursive: true });
-    mkdirSync(path.join(novelDir, 'characters'), { recursive: true });
-    mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
-
-    // Copy templates
-    const templatesDir = path.join(plugin.path, 'templates');
-    if (existsSync(templatesDir)) {
-      copyTemplates(templatesDir, novelDir, {
-        title: project.title,
-        genre: project.genre,
-        targetWords: String(project.targetWords),
-        chapterCount: String(project.chapterCount),
-      });
-    }
-
-    // Write config
-    writeFileSync(path.join(novelDir, 'config.json'), JSON.stringify({
-      title: project.title,
-      genre: project.genre,
-      targetWords: project.targetWords,
-      chapterCount: project.chapterCount,
-      perspective: project.perspective,
-      createdAt: new Date().toISOString(),
-    }, null, 2));
-  }
+  initWorkspace(project.path, {
+    title: project.title,
+    genre: project.genre,
+    targetWords: project.targetWords,
+    chapterCount: project.chapterCount,
+    perspective: project.perspective,
+    skillId: body.skillId,
+  });
 
   return c.json({ ok: true });
 });
@@ -236,6 +191,50 @@ function copyTemplates(src: string, dest: string, vars: Record<string, string>) 
       writeFileSync(destPath, content);
     }
   }
+}
+
+interface WorkspaceOpts {
+  title: string;
+  genre: string;
+  targetWords: number;
+  chapterCount: number;
+  perspective: string;
+  skillId?: string;
+}
+
+/**
+ * Initialize .novel/ workspace in the given directory.
+ * Skips if .novel/ already exists.
+ */
+function initWorkspace(projectDir: string, opts: WorkspaceOpts): void {
+  const plugin = getPlugin(opts.skillId || opts.genre || 'novel') || getPlugin('novel');
+  if (!plugin) return;
+
+  const novelDir = path.join(projectDir, '.novel');
+  if (existsSync(novelDir)) return;
+
+  mkdirSync(novelDir, { recursive: true });
+  mkdirSync(path.join(novelDir, 'characters'), { recursive: true });
+  mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
+
+  const templatesDir = path.join(plugin.path, 'templates');
+  if (existsSync(templatesDir)) {
+    copyTemplates(templatesDir, novelDir, {
+      title: opts.title,
+      genre: opts.genre,
+      targetWords: String(opts.targetWords),
+      chapterCount: String(opts.chapterCount),
+    });
+  }
+
+  writeFileSync(path.join(novelDir, 'config.json'), JSON.stringify({
+    title: opts.title,
+    genre: opts.genre,
+    targetWords: opts.targetWords,
+    chapterCount: opts.chapterCount,
+    perspective: opts.perspective,
+    createdAt: new Date().toISOString(),
+  }, null, 2));
 }
 
 // List conversations for a project

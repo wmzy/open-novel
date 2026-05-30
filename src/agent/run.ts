@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { StreamEvent } from './types';
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
@@ -18,11 +17,16 @@ export interface Run {
   updatedAt: number;
   error: string | null;
   cancelRequested: boolean;
+  finished: Promise<void>;
+  _finishResolve: () => void;
 }
 
 const runs = new Map<string, Run>();
 
 export function createRun(meta: { projectId: string; agentId: string; skillId: string; stage: string }): Run {
+  let finishResolve: () => void;
+  const finished = new Promise<void>((resolve) => { finishResolve = resolve; });
+
   const run: Run = {
     id: randomUUID(),
     projectId: meta.projectId,
@@ -38,6 +42,8 @@ export function createRun(meta: { projectId: string; agentId: string; skillId: s
     updatedAt: Date.now(),
     error: null,
     cancelRequested: false,
+    finished,
+    _finishResolve: finishResolve!,
   };
   runs.set(run.id, run);
   return run;
@@ -61,6 +67,7 @@ export function finishRun(run: Run, status: RunStatus) {
   run.status = status;
   run.updatedAt = Date.now();
   emitEvent(run, 'end', { status });
+  run._finishResolve();
   run.clients.clear();
   setTimeout(() => runs.delete(run.id), 30 * 60 * 1000).unref?.();
 }
