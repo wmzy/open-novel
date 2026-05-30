@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { css } from '@linaria/core';
 import { toast } from 'sonner';
-import { useProjects, useCreateProject, useDeleteProject } from '@/hooks/useProject';
+import { useProjects, useCreateProject, useDeleteProject, type ProjectWithMeta } from '@/hooks/useProject';
 import { pageContainer, pageTitle, card, primaryBtn, input, emptyState } from '@/styles/shared';
 import NavHeader from '@/web/components/NavHeader';
 
@@ -125,7 +125,7 @@ export default function HomePage() {
     if (!projects) return [];
     if (!search.trim()) return projects;
     const q = search.trim().toLowerCase();
-    return projects.filter((p: any) =>
+    return projects.filter((p) =>
       p.title.toLowerCase().includes(q) || (p.genre && p.genre.toLowerCase().includes(q))
     );
   }, [projects, search]);
@@ -278,7 +278,7 @@ export default function HomePage() {
       ) : (
         <>
           <div className={grid}>
-            {paged.map((p: any) => (
+            {paged.map((p) => (
               <div key={p.id} className={`${card} ${projectCard}`} onClick={() => navigate(`/projects/${p.id}`)}>
                 <button className={`delete-btn ${deleteBtn}`} onClick={(e) => handleDelete(e, p.id, p.title)} title="删除项目">
                   &times;

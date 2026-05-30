@@ -102,20 +102,23 @@ export async function gitSync(projectDir: string): Promise<{ success: boolean; m
 
     try {
       await execFileAsync('git', ['pull', '--rebase'], { cwd: projectDir, timeout: 30000 });
-    } catch (err: any) {
-      if (!err.message?.includes('no tracking information')) {
-        return { success: false, message: `拉取失败: ${err.message}` };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes('no tracking information')) {
+        return { success: false, message: `拉取失败: ${message}` };
       }
     }
 
     try {
       await execFileAsync('git', ['push'], { cwd: projectDir, timeout: 30000 });
-    } catch (err: any) {
-      return { success: false, message: `推送失败: ${err.message}` };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { success: false, message: `推送失败: ${message}` };
     }
 
     return { success: true, message: '同步完成' };
-  } catch (err: any) {
-    return { success: false, message: `同步失败: ${err.message}` };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `同步失败: ${message}` };
   }
 }

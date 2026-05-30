@@ -1,7 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { Project } from '@/db/schema';
+
+export interface ProjectWithMeta extends Project {
+  pathExists?: boolean;
+}
 
 export function useProjects() {
-  return useQuery({
+  return useQuery<ProjectWithMeta[]>({
     queryKey: ['projects'],
     queryFn: async () => {
       const res = await fetch('/api/projects');

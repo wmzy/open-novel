@@ -36,18 +36,19 @@ export default function ForeshadowView({ projectId }: Props) {
   const { data, isLoading } = useQuery({
     queryKey: ['novel-file', projectId, 'foreshadow'],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/files/.novel/foreshadow.json`);
+      const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('foreshadow.json')}`);
       if (!res.ok) return null;
-      return res.json();
+      const wrapper = await res.json();
+      try { return JSON.parse(wrapper.content); } catch { return null; }
     },
   });
 
   if (isLoading) return <div>加载中...</div>;
   if (!data) return <div>尚未创建伏笔。在聊天面板中输入 /foreshadow 开始。</div>;
 
-  const pending = data.foreshadows?.filter((f: any) => f.status === 'pending') || [];
-  const planted = data.foreshadows?.filter((f: any) => f.status === 'planted') || [];
-  const resolved = data.foreshadows?.filter((f: any) => f.status === 'resolved') || [];
+  const pending = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'pending') || [];
+  const planted = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'planted') || [];
+  const resolved = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'resolved') || [];
 
   return (
     <div>
@@ -55,19 +56,19 @@ export default function ForeshadowView({ projectId }: Props) {
       <div className={kanban}>
         <div className={column}>
           <div className={columnTitle}>待埋</div>
-          {pending.map((f: any, i: number) => (
+          {pending.map((f: { content: string; status: string }, i: number) => (
             <div key={i} className={item}>{f.content}</div>
           ))}
         </div>
         <div className={column}>
           <div className={columnTitle}>已埋</div>
-          {planted.map((f: any, i: number) => (
+          {planted.map((f: { content: string; status: string }, i: number) => (
             <div key={i} className={item}>{f.content}</div>
           ))}
         </div>
         <div className={column}>
           <div className={columnTitle}>已收</div>
-          {resolved.map((f: any, i: number) => (
+          {resolved.map((f: { content: string; status: string }, i: number) => (
             <div key={i} className={item}>{f.content}</div>
           ))}
         </div>
