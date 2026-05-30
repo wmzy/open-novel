@@ -25,8 +25,16 @@ projectsRouter.get('/', async (c) => {
 
 projectsRouter.post('/', async (c) => {
   const body = await c.req.json();
+  if (!body.path || typeof body.path !== 'string') {
+    return c.json({ error: 'path is required' }, 400);
+  }
   const id = generateId('proj_');
   const userPath = path.resolve(body.path);
+  // Prevent creating directories in sensitive system locations
+  const sensitive = ['/etc', '/proc', '/sys', '/dev', '/boot', '/usr', '/bin', '/sbin', '/lib'];
+  if (sensitive.some((p) => userPath === p || userPath.startsWith(p + '/'))) {
+    return c.json({ error: '不允许在系统目录下创建项目' }, 400);
+  }
   mkdirSync(userPath, { recursive: true });
   const [project] = await db.insert(projects).values({
     id,
@@ -132,8 +140,19 @@ projectsRouter.get('/:id', async (c) => {
 projectsRouter.patch('/:id', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json();
+  // Whitelist allowed fields to prevent mass assignment
+  const allowed: Record<string, unknown> = {};
+  if (body.title !== undefined) allowed.title = body.title;
+  if (body.genre !== undefined) allowed.genre = body.genre;
+  if (body.targetWords !== undefined) allowed.targetWords = body.targetWords;
+  if (body.chapterCount !== undefined) allowed.chapterCount = body.chapterCount;
+  if (body.theme !== undefined) allowed.theme = body.theme;
+  if (body.perspective !== undefined) allowed.perspective = body.perspective;
+  if (body.currentStage !== undefined) allowed.currentStage = body.currentStage;
+  allowed.updatedAt = new Date();
+
   const [updated] = await db.update(projects)
-    .set({ ...body, updatedAt: new Date() })
+    .set(allowed)
     .where(eq(projects.id, id))
     .returning();
   if (!updated) return c.json({ error: 'Not found' }, 404);
