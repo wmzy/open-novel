@@ -4,17 +4,29 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ensureDbReady } from './db/drizzle';
 import { initPlugins } from './plugins/registry';
+import { errorHandler } from './api/middleware/error-handler';
+import { requestLogger } from './api/middleware/logger';
+import { securityHeaders, rateLimit } from './api/middleware/security';
 import projectsRouter from './api/routes/projects';
 import chaptersRouter from './api/routes/chapters';
 import settingsRouter from './api/routes/settings';
 import agentsRouter from './api/routes/agents';
 import runsRouter from './api/routes/runs';
 import pluginsRouter from './api/routes/plugins';
+import conversationsRouter from './api/routes/conversations';
+import searchRouter from './api/routes/search';
+import exportRouter from './api/routes/export';
 
 const app = new Hono();
 
+// Security, logging, and error handler middleware
+app.use('/api/*', securityHeaders);
+app.use('/api/*', rateLimit(1000, 60000)); // Higher limit for E2E tests
+app.use('/api/*', requestLogger);
+app.use('/api/*', errorHandler);
+
 let dbReady = false;
-app.use('/api/*', async (c, next) => {
+app.use('/api/*', async (_c, next) => {
   if (!dbReady) {
     await ensureDbReady();
     initPlugins();
@@ -25,19 +37,66 @@ app.use('/api/*', async (c, next) => {
 
 app.use('/api/*', cors());
 
-app.get('/api/health', (c) => c.json({ status: 'ok' }));
+const startTime = Date.now();
+
+app.get('/api/health', async (c) => {
+  const uptime = Math.floor((Date.now() - startTime) / 1000);
+
+  let dbStatus = 'ok';
+  try {
+    await ensureDbReady();
+  } catch {
+    dbStatus = 'error';
+  }
+
+  let diskFree = 'unknown';
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const df = execFileSync('df', ['-h', '/'], { encoding: 'utf-8' });
+    const lines = df.trim().split('\n');
+    const parts = lines[lines.length - 1]?.split(/\s+/);
+    diskFree = parts?.[3] || 'unknown';
+  } catch { /* ignore */ }
+
+  return c.json({
+    status: dbStatus === 'ok' ? 'ok' : 'degraded',
+    uptime: `${uptime}s`,
+    database: dbStatus,
+    diskFree,
+    version: process.env.npm_package_version || '0.1.0',
+  });
+});
 app.route('/api/projects', projectsRouter);
 app.route('/api/projects/:projectId/chapters', chaptersRouter);
+app.route('/api/projects/:projectId/search', searchRouter);
+app.route('/api/projects/:projectId/export', exportRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);
 app.route('/api/runs', runsRouter);
 app.route('/api/plugins', pluginsRouter);
+app.route('/api/conversations', conversationsRouter);
 
 // File serving endpoint
 app.get('/api/projects/:id/files/*', async (c) => {
   const id = c.req.param('id');
   const filePath = c.req.path.replace(`/api/projects/${id}/files/`, '');
-  const fullPath = path.resolve('./data/projects', id, filePath);
+
+  let projectDir: string;
+  try {
+    const { resolveNovelDir } = await import('./shared/project-dir');
+    projectDir = await resolveNovelDir(id);
+  } catch {
+    return c.json({ error: 'Project not found' }, 404);
+  }
+
+  const normalizedPath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
+  const fullPath = path.resolve(projectDir, normalizedPath);
+
+  // Security: prevent path traversal
+  if (!fullPath.startsWith(projectDir + path.sep) && fullPath !== projectDir) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
   try {
     const content = await readFile(fullPath, 'utf-8');
     return c.text(content);
