@@ -17,7 +17,7 @@ function createDb(): Database {
     return drizzlePglite(pglite, { schema, casing: 'snake_case' });
   }
   const client = postgres(process.env.DATABASE_URL!);
-  return drizzlePostgres(client, { schema, casing: 'snake_case' }) as Database;
+  return drizzlePostgres(client, { schema, casing: 'snake_case' }) as unknown as Database;
 }
 
 const g = globalThis as Record<string, unknown>;
