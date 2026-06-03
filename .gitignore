@@ -6,3 +6,7 @@ data/pglite/
 .env
 .env.local
 .DS_Store
+.playwright-mcp/
+test-results/
+*.png
+/data/
