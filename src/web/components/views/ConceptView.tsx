@@ -10,9 +10,10 @@ export default function ConceptView({ projectId }: Props) {
   const { data, isLoading } = useQuery({
     queryKey: ['novel-file', projectId, 'concept'],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/files/.novel/concept.md`);
+      const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('concept.md')}`);
       if (!res.ok) return null;
-      return res.text();
+      const data = await res.json();
+      return data.content as string;
     },
   });
 

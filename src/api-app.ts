@@ -5,8 +5,9 @@ import path from 'node:path';
 import { ensureDbReady } from './db/drizzle';
 import { initPlugins } from './plugins/registry';
 import { errorHandler } from './api/middleware/error-handler';
+import { config } from './config';
 import { requestLogger } from './api/middleware/logger';
-import { securityHeaders, rateLimit } from './api/middleware/security';
+import { securityHeaders, rateLimit, maxBodySize } from './api/middleware/security';
 import projectsRouter from './api/routes/projects';
 import chaptersRouter from './api/routes/chapters';
 import settingsRouter from './api/routes/settings';
@@ -21,7 +22,8 @@ const app = new Hono();
 
 // Security, logging, and error handler middleware
 app.use('/api/*', securityHeaders);
-app.use('/api/*', rateLimit(1000, 60000)); // Higher limit for E2E tests
+app.use('/api/*', rateLimit(config.rateLimit.max, config.rateLimit.windowMs));
+app.use('/api/*', maxBodySize(25 * 1024 * 1024)); // 25MB: generous for text + image uploads
 app.use('/api/*', requestLogger);
 app.use('/api/*', errorHandler);
 

@@ -10,9 +10,10 @@ export default function WorldView({ projectId }: Props) {
   const { data, isLoading } = useQuery({
     queryKey: ['novel-file', projectId, 'world'],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/files/.novel/world-building.md`);
+      const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('world-building.md')}`);
       if (!res.ok) return null;
-      return res.text();
+      const data = await res.json();
+      return data.content as string;
     },
   });
 

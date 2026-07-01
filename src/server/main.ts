@@ -1,0 +1,69 @@
+import { createServer } from 'node:http';
+import { serveStatic } from '@hono/node-server/serve-static';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { readFile } from 'node:fs/promises';
+import pino from 'pino';
+import app from '../api-app';
+import { ensureDbReady } from '../db/drizzle';
+import { initPlugins } from '../plugins/registry';
+import { config } from '../config';
+import { nodeRequestToFetchRequest, writeFetchResponse } from './request-adapter';
+
+/**
+ * Production server entry.
+ *
+ * Bundled by scripts/build-server.mjs into dist/server/api.js. Resolves the
+ * sibling client build (dist/client) relative to this file so it works
+ * regardless of the process working directory.
+ */
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientRoot = path.resolve(__dirname, '../client');
+const indexHtmlPath = path.join(clientRoot, 'index.html');
+
+// Serve built client assets. serveStatic calls next() on a miss, letting the
+// SPA fallback below handle client-side routes.
+app.use('/*', serveStatic({ root: clientRoot }));
+
+// SPA fallback: any non-API GET that did not match a static file returns the
+// app shell so client-side routing can take over. API paths that land here
+// (no matching route) must 404 rather than leak the SPA shell.
+app.get('/*', async (c) => {
+  if (c.req.path.startsWith('/api')) {
+    return c.text('Not Found', 404);
+  }
+  try {
+    const html = await readFile(indexHtmlPath, 'utf-8');
+    return c.html(html);
+  } catch {
+    return c.text('index.html not found — run `npm run build` first.', 404);
+  }
+});
+
+const logger = pino({ name: 'open-novel', level: config.logLevel });
+
+await ensureDbReady();
+initPlugins();
+
+const server = createServer(async (req, res) => {
+  try {
+    // nodeRequestToFetchRequest injects the trusted `x-internal-remote-addr`
+    // header from req.socket.remoteAddress (dropping any client-supplied
+    // value) so rate limiting keys on the real remote address.
+    const request = await nodeRequestToFetchRequest(req);
+    const response = await app.fetch(request);
+    await writeFetchResponse(res, response);
+  } catch (err) {
+    logger.error({ err }, 'request failed');
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Internal Server Error' }));
+    } else {
+      res.end();
+    }
+  }
+});
+
+server.listen(config.port, config.host, () => {
+  logger.info({ host: config.host, port: config.port }, `open-novel listening on http://${config.host}:${config.port}`);
+});

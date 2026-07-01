@@ -1,9 +1,10 @@
 import { css } from '@linaria/core';
 
 export const pageContainer = css`
-  max-width: 1200px;
+  max-width: 1400px;
   margin: 0 auto;
   padding: 2rem;
+  width: 100%;
 `;
 
 export const pageTitle = css`

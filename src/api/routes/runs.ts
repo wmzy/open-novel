@@ -9,6 +9,7 @@ import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/s
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { createSnapshot, restoreSnapshot, listSnapshots } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
+import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, runs as runsTable } from '../../db/schema';
 import { generateId } from '../../utils/id';
@@ -72,6 +73,11 @@ runsRouter.post('/', async (c) => {
   run.child = child;
   run.status = 'running';
 
+  // Watchdog: cancel the run if the agent subprocess exceeds the configured timeout.
+  // unref() so the timer never keeps the event loop (and process) alive.
+  const timeoutTimer = setTimeout(() => cancelRun(run), config.agent.timeoutMs);
+  timeoutTimer.unref();
+
   // Parse stream
   const onStreamComplete = () => {
     if (child.stdin && !child.stdin.destroyed) {
@@ -86,6 +92,7 @@ runsRouter.post('/', async (c) => {
   child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: chunk.toString() }));
 
   child.on('error', (err) => {
+    clearTimeout(timeoutTimer);
     emitEvent(run, 'agent', { type: 'error', message: err.message });
     handler.flush();
     finishRun(run, 'failed');
@@ -93,6 +100,7 @@ runsRouter.post('/', async (c) => {
   });
 
   child.on('close', async (code) => {
+    clearTimeout(timeoutTimer);
     handler.flush();
 
     // Collect artifacts from run events (filter to agent events only)

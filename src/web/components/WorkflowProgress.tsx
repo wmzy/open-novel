@@ -1,13 +1,5 @@
 import { css } from '@linaria/core';
-
-const stages = [
-  { id: 'concept', label: '概念' },
-  { id: 'world', label: '世界观' },
-  { id: 'characters', label: '角色' },
-  { id: 'outline', label: '大纲' },
-  { id: 'scenes', label: '场景' },
-  { id: 'writing', label: '写作' },
-];
+import { STAGES, getStageIndex } from '@/shared/stages';
 
 const container = css`
   display: flex;
@@ -35,6 +27,7 @@ const labels = css`
   justify-content: space-between;
   font-size: 0.75rem;
   color: var(--haze-color-text-secondary);
+  gap: 0.25rem;
 `;
 
 interface Props {
@@ -43,16 +36,16 @@ interface Props {
 }
 
 export default function WorkflowProgress({ currentStage, onStageClick }: Props) {
-  const currentIdx = stages.findIndex((s) => s.id === currentStage);
+  const currentIdx = getStageIndex(currentStage);
   return (
-    <div>
+    <div data-testid="workflow-progress">
       <div className={container}>
-        {stages.map((s, i) => (
-          <div key={s.id} className={`${step} ${i < currentIdx ? stepCompleted : i === currentIdx ? stepActive : ''}`} onClick={() => onStageClick(s.id)} style={{ cursor: 'pointer' }} />
+        {STAGES.map((s, i) => (
+          <div key={s.id} className={`${step} ${i < currentIdx ? stepCompleted : i === currentIdx ? stepActive : ''}`} onClick={() => onStageClick(s.viewId)} style={{ cursor: 'pointer' }} />
         ))}
       </div>
       <div className={labels}>
-        {stages.map((s) => <span key={s.id}>{s.label}</span>)}
+        {STAGES.map((s) => <span key={s.id}>{s.label}</span>)}
       </div>
     </div>
   );

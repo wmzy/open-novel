@@ -10,9 +10,10 @@ export default function OutlineView({ projectId }: Props) {
   const { data, isLoading } = useQuery({
     queryKey: ['novel-file', projectId, 'outline'],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/files/.novel/outline-detailed.md`);
+      const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('outline-detailed.md')}`);
       if (!res.ok) return null;
-      return res.text();
+      const data = await res.json();
+      return data.content as string;
     },
   });
 

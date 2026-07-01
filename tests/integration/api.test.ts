@@ -1,24 +1,31 @@
-import { describe, it, expect } from 'vitest';
-
-const BASE = 'http://localhost:3006/api';
+import { describe, it, expect, beforeAll } from 'vitest';
+import app from '../../src/api-app';
+import { ensureDbReady } from '../../src/db/drizzle';
+import { initPlugins } from '../../src/plugins/registry';
 
 describe('API Integration', () => {
-  it('GET /health returns ok', async () => {
-    const res = await fetch(`${BASE}/health`);
+  beforeAll(async () => {
+    await ensureDbReady();
+    initPlugins();
+  });
+
+  it('GET /api/health returns ok', async () => {
+    const res = await app.request('/api/health');
+    expect(res.ok).toBe(true);
     const data = await res.json();
     expect(data.status).toBe('ok');
   });
 
-  it('GET /projects returns array', async () => {
-    const res = await fetch(`${BASE}/projects`);
+  it('GET /api/projects returns array', async () => {
+    const res = await app.request('/api/projects');
     expect(res.ok).toBe(true);
     const data = await res.json();
     expect(Array.isArray(data.projects)).toBe(true);
   });
 
-  it('POST /projects creates a project', async () => {
+  it('POST /api/projects creates a project', async () => {
     const testDir = `/tmp/open-novel-test-${Date.now()}`;
-    const res = await fetch(`${BASE}/projects`, {
+    const res = await app.request('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Test Novel', genre: 'fantasy', path: testDir }),
@@ -29,25 +36,25 @@ describe('API Integration', () => {
     expect(data.project.title).toBe('Test Novel');
   });
 
-  it('GET /agents returns detected agents', async () => {
-    const res = await fetch(`${BASE}/agents`);
+  it('GET /api/agents returns detected agents', async () => {
+    const res = await app.request('/api/agents');
     expect(res.ok).toBe(true);
     const data = await res.json();
     expect(Array.isArray(data.agents)).toBe(true);
   });
 
-  it('GET /plugins returns loaded plugins', async () => {
-    const res = await fetch(`${BASE}/plugins`);
+  it('GET /api/plugins returns loaded plugins', async () => {
+    const res = await app.request('/api/plugins');
     expect(res.ok).toBe(true);
     const data = await res.json();
     expect(Array.isArray(data.plugins)).toBe(true);
   });
 
-  it('GET / returns HTML', async () => {
-    const res = await fetch('http://localhost:3006/');
-    expect(res.ok).toBe(true);
-    const html = await res.text();
-    expect(html).toContain('<div id="root">');
-    expect(html).toContain('Open Novel');
+  it('GET /api/unknown returns 404', async () => {
+    // The API app does not serve a root '/' route (the HTML shell is delivered
+    // by Vite/static hosting). Verify the API routing contract instead: an
+    // unmatched /api path yields a 404 rather than a false 200.
+    const res = await app.request('/api/this-route-does-not-exist');
+    expect(res.status).toBe(404);
   });
 });

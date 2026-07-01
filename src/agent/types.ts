@@ -26,7 +26,23 @@ export type DetectedAgent = Omit<RuntimeAgentDef, 'buildArgs' | 'fallbackModels'
   version?: string | null;
 };
 
-export type StreamEvent = {
-  type: 'status' | 'text_delta' | 'thinking_delta' | 'tool_use' | 'tool_result' | 'usage' | 'error' | 'raw';
-  [key: string]: unknown;
-};
+/** Events emitted by the stream parser */
+export type StreamEvent =
+  | { type: 'status'; label: string; model?: string | null; detail?: string }
+  | { type: 'text_delta'; delta: string }
+  | { type: 'thinking_delta'; delta: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
+  | { type: 'usage'; usage?: unknown; costUsd?: number | null }
+  | { type: 'error'; message: string }
+  | { type: 'raw'; line: string };
+
+/** Persisted agent events on messages (used by frontend) */
+export type AgentEvent =
+  | { kind: 'status'; label: string; detail?: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'thinking'; text: string }
+  | { kind: 'tool_use'; id: string; name: string; input: unknown }
+  | { kind: 'tool_result'; toolUseId: string; content: string; isError: boolean }
+  | { kind: 'usage'; inputTokens?: number; outputTokens?: number; costUsd?: number }
+  | { kind: 'raw'; line: string };

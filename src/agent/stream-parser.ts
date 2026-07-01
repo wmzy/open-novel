@@ -1,13 +1,17 @@
 import type { StreamEvent } from './types';
 
 type EventSink = (event: StreamEvent) => void;
-type BlockState = { type?: unknown; name?: unknown; id?: unknown; input: string };
+type BlockState = { type?: string; name?: string; id?: string; input: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-export function createClaudeStreamHandler(onEvent: EventSink) {
+function str(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+export function createClaudeStreamHandler(onEvent: EventSink, onComplete?: () => void) {
   let buffer = '';
   const blocks = new Map<string, BlockState>();
   const streamedToolUseIds = new Set<string>();
@@ -42,11 +46,11 @@ export function createClaudeStreamHandler(onEvent: EventSink) {
     if (!isRecord(obj)) return;
 
     if (obj.type === 'system' && obj.subtype === 'init') {
-      onEvent({ type: 'status', label: 'initializing', model: obj.model ?? null });
+      onEvent({ type: 'status', label: 'initializing', model: typeof obj.model === 'string' ? obj.model : null });
       return;
     }
     if (obj.type === 'system' && obj.subtype === 'status') {
-      onEvent({ type: 'status', label: obj.status ?? 'working' });
+      onEvent({ type: 'status', label: str(obj.status) || 'working' });
       return;
     }
     if (obj.type === 'stream_event' && isRecord(obj.event)) {
@@ -60,11 +64,12 @@ export function createClaudeStreamHandler(onEvent: EventSink) {
       for (const block of obj.message.content) {
         if (!isRecord(block)) continue;
         if (block.type === 'tool_use') {
-          if (typeof block.id === 'string' && streamedToolUseIds.has(block.id)) {
-            streamedToolUseIds.delete(block.id);
+          const id = str(block.id);
+          if (id && streamedToolUseIds.has(id)) {
+            streamedToolUseIds.delete(id);
             continue;
           }
-          onEvent({ type: 'tool_use', id: block.id, name: block.name, input: block.input ?? null });
+          onEvent({ type: 'tool_use', id, name: str(block.name), input: block.input ?? null });
         } else if (!alreadyStreamed && block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
           onEvent({ type: 'text_delta', delta: block.text });
         } else if (!alreadyStreamed && block.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.length > 0) {
@@ -73,8 +78,25 @@ export function createClaudeStreamHandler(onEvent: EventSink) {
       }
       return;
     }
+    // Handle user messages containing tool_result blocks
+    if (obj.type === 'user' && isRecord(obj.message) && Array.isArray(obj.message.content)) {
+      for (const block of obj.message.content) {
+        if (!isRecord(block)) continue;
+        if (block.type === 'tool_result') {
+          onEvent({
+            type: 'tool_result',
+            toolUseId: str(block.tool_use_id),
+            content: typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? ''),
+            isError: block.is_error === true,
+          });
+        }
+      }
+      return;
+    }
     if (obj.type === 'result') {
-      onEvent({ type: 'usage', usage: obj.usage ?? null, costUsd: obj.total_cost_usd ?? null });
+      const cost = typeof obj.total_cost_usd === 'number' ? obj.total_cost_usd : null;
+      onEvent({ type: 'usage', usage: obj.usage ?? null, costUsd: cost });
+      onComplete?.();
       return;
     }
   }
@@ -85,7 +107,12 @@ export function createClaudeStreamHandler(onEvent: EventSink) {
       return;
     }
     if (ev.type === 'content_block_start' && isRecord(ev.content_block)) {
-      blocks.set(blockKey(ev.index), { type: ev.content_block.type, name: ev.content_block.name, id: ev.content_block.id, input: '' });
+      blocks.set(blockKey(ev.index), {
+        type: str(ev.content_block.type),
+        name: str(ev.content_block.name),
+        id: str(ev.content_block.id),
+        input: '',
+      });
       return;
     }
     if (ev.type === 'content_block_delta' && isRecord(ev.delta)) {
@@ -109,9 +136,9 @@ export function createClaudeStreamHandler(onEvent: EventSink) {
     if (ev.type === 'content_block_stop') {
       const key = blockKey(ev.index);
       const state = blocks.get(key);
-      if (state && state.type === 'tool_use' && typeof state.id === 'string' && state.input.trim()) {
+      if (state && state.type === 'tool_use' && state.id && state.input.trim()) {
         try {
-          onEvent({ type: 'tool_use', id: state.id, name: state.name, input: JSON.parse(state.input) });
+          onEvent({ type: 'tool_use', id: state.id, name: state.name ?? '', input: JSON.parse(state.input) });
           streamedToolUseIds.add(state.id);
         } catch { /* malformed JSON, skip */ }
       }

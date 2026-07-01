@@ -4,7 +4,7 @@ import wyw from '@wyw-in-js/vite';
 import path from 'node:path';
 
 export default defineConfig({
-  plugins: [react(), wyw()],
+  plugins: [react(), wyw({ evaluate: false })],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -14,5 +14,6 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],
+    include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
   },
 });

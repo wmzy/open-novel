@@ -18,13 +18,17 @@ export const config = {
     url: process.env.DATABASE_URL,
   },
 
+  // Rate limiting (requests per window per client IP)
+  rateLimit: {
+    max: parseInt(process.env.RATE_LIMIT_MAX || '200', 10),
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+  },
+
+  // Agent subprocess timeout (ms). Default 30 minutes; overridable via AGENT_TIMEOUT_MS.
+  agent: {
+    timeoutMs: parseInt(process.env.AGENT_TIMEOUT_MS || '1800000', 10),
+  },
+
   // Logging
   logLevel: process.env.LOG_LEVEL || 'info',
-
-  // Features
-  features: {
-    autoSave: process.env.FEATURE_AUTO_SAVE !== 'false',
-    snapshots: process.env.FEATURE_SNAPSHOTS !== 'false',
-    fileWatching: process.env.FILE_WATCHING !== 'false',
-  },
 } as const;

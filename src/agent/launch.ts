@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { RuntimeAgentDef } from './types';
 import { resolveAgentExecutable } from './executables';
@@ -21,9 +22,11 @@ export function launchAgent(
   const args = def.buildArgs(prompt, extraDirs, { model });
   const env = { ...process.env };
   const binDir = path.dirname(bin);
-  env.PATH = `${binDir}:${env.PATH}`;
+  env.PATH = [binDir, env.PATH].filter(Boolean).join(path.delimiter);
 
-  const child = spawn(args[0], args.slice(1), {
+  mkdirSync(cwd, { recursive: true });
+
+  const child = spawn(bin, args, {
     cwd,
     env,
     stdio: [def.promptViaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],

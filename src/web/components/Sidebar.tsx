@@ -1,4 +1,5 @@
 import { css } from '@linaria/core';
+import { ALL_VIEWS } from '@/shared/stages';
 
 const sidebar = css`
   width: 240px;
@@ -6,6 +7,17 @@ const sidebar = css`
   padding: 1rem;
   overflow-y: auto;
   height: 100%;
+  @media (max-width: 768px) {
+    width: 100%;
+    height: auto;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid var(--haze-color-border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.5rem;
+  }
 `;
 
 const navItem = css`
@@ -38,31 +50,26 @@ interface Props {
 }
 
 export default function Sidebar({ activeView, onViewChange, chapters }: Props) {
-  const views = [
-    { id: 'dashboard', label: '总览' },
-    { id: 'concept', label: '故事概念' },
-    { id: 'world', label: '世界观' },
-    { id: 'characters', label: '角色' },
-    { id: 'outline', label: '大纲' },
-    { id: 'scenes', label: '场景' },
-    { id: 'foreshadow', label: '伏笔' },
-    { id: 'wuxia', label: '武侠' },
-  ];
+  const views = ALL_VIEWS;
 
   return (
-    <div className={sidebar}>
+    <div className={sidebar} data-testid="sidebar">
       <div className={sectionTitle}>文档</div>
       {views.map((v) => (
         <a key={v.id} className={`${navItem} ${activeView === v.id ? navItemActive : ''}`} onClick={() => onViewChange(v.id)}>
           {v.label}
         </a>
       ))}
-      <div className={sectionTitle}>章节</div>
-      {chapters.map((ch) => (
-        <a key={ch.number} className={`${navItem} ${activeView === `chapter-${ch.number}` ? navItemActive : ''}`} onClick={() => onViewChange(`chapter-${ch.number}`)}>
-          第{ch.number}章 {ch.title || ''}
-        </a>
-      ))}
+      {chapters.length > 0 && (
+        <>
+          <div className={sectionTitle}>章节</div>
+          {chapters.map((ch) => (
+            <a key={ch.number} className={`${navItem} ${activeView === `chapter-${ch.number}` ? navItemActive : ''}`} onClick={() => onViewChange(`chapter-${ch.number}`)}>
+              第{ch.number}章 {ch.title || ''}
+            </a>
+          ))}
+        </>
+      )}
     </div>
   );
 }

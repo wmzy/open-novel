@@ -9,7 +9,7 @@ export async function securityHeaders(c: Context, next: Next) {
   // Content Security Policy
   c.header('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
@@ -39,9 +39,29 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000);
 
+/**
+ * Trusted internal header injected by the server entry points
+ * (`src/server/request-adapter.ts`) from `req.socket.remoteAddress`. Unlike
+ * client-controllable headers (`x-forwarded-for`, `x-real-ip`) it cannot be
+ * forged, which makes it safe to use as a rate-limit key.
+ */
+const REMOTE_ADDR_HEADER = 'x-internal-remote-addr';
+
+/**
+ * Resolve the real client IP for rate limiting.
+ *
+ * Reads only the server-injected internal header. When absent (e.g. in-process
+ * integration tests that call `app.request` directly with no real socket) it
+ * falls back to `'unknown'` so a single shared bucket is used instead of
+ * erroring.
+ */
+function getClientIp(c: Context): string {
+  return c.req.header(REMOTE_ADDR_HEADER) || 'unknown';
+}
+
 export function rateLimit(maxRequests = 100, windowMs = 60000) {
   return async (c: Context, next: Next) => {
-    const ip = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
+    const ip = getClientIp(c);
     const now = Date.now();
     const key = `${ip}`;
 
