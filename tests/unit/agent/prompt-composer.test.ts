@@ -24,17 +24,17 @@ vi.mock('../../../src/plugins/registry', () => ({
 // Import AFTER mocks are registered.
 const { composePrompt } = await import('../../../src/agent/prompt-composer');
 
-// Feature text identifying each stage instruction (first clause of STAGE_INSTRUCTIONS).
+// 用于识别各阶段指令的特征文本（STAGE_INSTRUCTIONS 的首句片段）。
 const STAGE_FEATURES: Record<string, string> = {
-  concept: 'brainstorming the core concept',
-  world: 'Build the story world',
-  characters: 'Develop detailed character profiles',
-  outline: 'Create a detailed story outline',
-  scenes: 'Break down the outline into detailed scenes',
-  writing: 'Write actual prose for the novel',
-  drafting: 'Write actual prose for the novel',
-  revision: 'Review and improve existing content',
-  polish: 'Final editing pass',
+  concept: '聚焦于构思核心概念',
+  world: '构建故事世界',
+  characters: '撰写详细的角色档案',
+  outline: '创建详细的故事大纲',
+  scenes: '将大纲拆解为详细场景',
+  writing: '为小说撰写真正的散文正文',
+  drafting: '为小说撰写真正的散文正文',
+  revision: '审阅和改进已有内容',
+  polish: '最终润色',
 };
 
 function makeProject(overrides: Record<string, unknown> = {}) {
@@ -96,7 +96,7 @@ describe('composePrompt', () => {
         projectDir: tempDir,
       });
       expect(prompt).toContain('## Current Stage: custom');
-      expect(prompt).toContain('Work on the "custom" stage');
+      expect(prompt).toContain('着手推进小说项目的「custom」阶段');
     });
 
     it('defaults to concept stage when stage is undefined', async () => {
@@ -267,7 +267,7 @@ describe('composePrompt', () => {
       history: [{ role: 'user', content: 'prev' }],
     });
     const idx = (s: string) => prompt.indexOf(s);
-    expect(idx('## File Access Rules')).toBeLessThan(idx('## Project Context'));
+    expect(idx('## 文件访问规则')).toBeLessThan(idx('## Project Context'));
     expect(idx('## Project Context')).toBeLessThan(idx('## Current Stage:'));
     expect(idx('## Current Stage:')).toBeLessThan(idx('## Project Files'));
     expect(idx('## Project Files')).toBeLessThan(idx('## Available Tools'));

@@ -37,7 +37,8 @@ chaptersRouter.get('/', async (c) => {
 
 chaptersRouter.get('/:num', async (c) => {
   const projectId = c.req.param('projectId')!;
-  const num = parseInt(c.req.param('num'));
+  const num = parseInt(c.req.param('num'), 10);
+  if (Number.isNaN(num)) return c.json({ error: 'Invalid chapter number' }, 400);
   const [chapter] = await db.select().from(chapters)
     .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
     .limit(1);
@@ -80,7 +81,8 @@ chaptersRouter.post('/', async (c) => {
 
 chaptersRouter.patch('/:num', async (c) => {
   const projectId = c.req.param('projectId')!;
-  const num = parseInt(c.req.param('num'));
+  const num = parseInt(c.req.param('num'), 10);
+  if (Number.isNaN(num)) return c.json({ error: 'Invalid chapter number' }, 400);
   const body = await c.req.json();
 
   // 正文落盘到 .novel/chapters/chapter-{N}.md（DB 不存正文列）
@@ -123,7 +125,8 @@ chaptersRouter.patch('/:num', async (c) => {
 
 chaptersRouter.delete('/:num', async (c) => {
   const projectId = c.req.param('projectId')!;
-  const num = parseInt(c.req.param('num'));
+  const num = parseInt(c.req.param('num'), 10);
+  if (Number.isNaN(num)) return c.json({ error: 'Invalid chapter number' }, 400);
 
   const [deleted] = await db.delete(chapters)
     .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))

@@ -16,33 +16,35 @@ export interface ComposePromptOptions {
 }
 
 const STAGE_INSTRUCTIONS: Record<string, string> = {
-  concept: `Focus on brainstorming the core concept, premise, and high-level story idea. Help the user refine their vision into a clear, compelling concept.
-When the concept is complete (clear premise, core conflict, and main characters defined), save the result to .novel/concept.md and update the project stage to "world" by calling: PATCH /api/projects/{projectId} with { "currentStage": "world" }`,
+  concept: `聚焦于构思核心概念、前提和高层故事创意。帮助用户将愿景精炼成清晰、有吸引力的概念。
+概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
 
-  world: `Build the story world - setting, rules, history, culture, and atmosphere. Create rich, consistent world-building that supports the narrative.
-When world-building is complete, save to .novel/world-building.md and update stage to "characters" by calling: PATCH /api/projects/{projectId} with { "currentStage": "characters" }`,
+  world: `构建故事世界——设定、规则、历史、文化与氛围。创造丰富、自洽、能支撑叙事的世界观。
+世界观完成后，保存到 .novel/world-building.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
 
-  characters: `Develop detailed character profiles - protagonists, antagonists, and key supporting characters. Include motivations, backstories, relationships, and character arcs.
-When characters are complete, save to .novel/characters/profiles.md and update stage to "outline" by calling: PATCH /api/projects/{projectId} with { "currentStage": "outline" }`,
+  characters: `撰写详细的角色档案——主角、反派与关键配角。涵盖动机、背景、关系与角色弧光。
+角色档案完成后，保存到 .novel/characters/profiles.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "outline" }）将项目阶段更新为 "outline"。`,
 
-  outline: `Create a detailed story outline including major plot points, character arcs, and chapter structure. Break the story into manageable sections.
+  outline: `创建详细的故事大纲，包括主要剧情节点、角色弧光与章节结构。将故事拆解成可驾驭的段落。
 
-**Scaffolding hint**: You can ask the user to call (or call yourself via Bash/curl) the endpoint POST /api/projects/{projectId}/generate-templates to auto-generate a chapter-by-chapter scaffold matching the project's chapterCount (acts, beats, word allocation). Preview without writing via GET /api/projects/{projectId}/templates/outline-detailed or templates/outline-brief. Use the generated scaffold as a starting point and refine it.
-When the outline is complete, save to .novel/outline.md and update stage to "scenes" by calling: PATCH /api/projects/{projectId} with { "currentStage": "scenes" }`,
+**脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-detailed 或 templates/outline-brief。以生成的脚手架为起点并加以打磨。
+大纲完成后，保存到 .novel/outline.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
 
-  scenes: `Break down the outline into detailed scenes with beats, emotional arcs, and pacing. Plan each scene's purpose and key moments.
+  scenes: `将大纲拆解为详细场景，包含节拍、情感弧光与节奏。规划每个场景的目的与关键时刻。
 
-**Scaffolding hint**: You can ask the user to call (or call yourself via Bash/curl) the endpoint POST /api/projects/{projectId}/generate-templates to auto-generate a per-chapter scene scaffold (active Scene / passive Sequel pairs) matching the project's chapterCount. Preview without writing via GET /api/projects/{projectId}/templates/scenes. Use it as a starting point and refine it.
-When scenes are complete, save to .novel/scenes.md and update stage to "writing" by calling: PATCH /api/projects/{projectId} with { "currentStage": "writing" }`,
+**脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章场景脚手架（主动 Scene / 被动 Sequel 配对）。不落盘预览可用 GET /api/projects/{projectId}/templates/scenes。以生成的脚手架为起点并加以打磨。
+场景表完成后，保存到 .novel/scenes.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
 
-  writing: `Write actual prose for the novel. Focus on narrative flow, dialogue, description, and pacing. Produce polished draft text. Save chapters to .novel/chapters/ directory.
+  writing: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。将章节保存到 .novel/chapters/ 目录。
 
-After finishing EACH chapter you MUST do both of the following to keep later chapters consistent:
-(1) Write a ~200-character compressed summary of the chapter to .novel/chapters/第N章.summary.md (replace N with the chapter number, e.g. 第3章.summary.md).
-(2) Update .novel/state.json — refresh each present character's location, emotion, newly learned information (knows), and relationship changes; advance the timeline and lastUpdatedChapter; set updatedAt.`,
-  drafting: `Write actual prose for the novel. Focus on narrative flow, dialogue, description, and pacing. Produce polished draft text.`,
-  revision: `Review and improve existing content. Focus on consistency, plot holes, character development, prose quality, and structural improvements.`,
-  polish: `Final editing pass. Focus on line-level prose quality, grammar, word choice, and ensuring the manuscript reads smoothly.`,
+每写完一章后，你必须完成以下两件事以保持后续章节的一致性：
+(1) 为该章生成约 200 字的压缩摘要，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。
+(2) 更新 .novel/state.json——刷新每个在场角色的位置、情绪、新获知的信息（knows）与关系变化；推进时间线和 lastUpdatedChapter；设置 updatedAt。
+
+写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。`,
+  drafting: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。`,
+  revision: `审阅和改进已有内容。重点检查：(1) 剧情连贯性和逻辑漏洞；(2) 伏笔是否被遗忘（POST /api/projects/{projectId}/check/foreshadows）；(3) 人物行为是否偏离设定（POST /api/projects/{projectId}/check/ooc，body: {chapterNum: N}）；(4) 文笔AI味（POST /api/projects/{projectId}/check/ai-patterns，body: {chapterNum: N}）。根据检查报告逐章修订。`,
+  polish: `最终润色。聚焦行文质量——用词精准度、句式节奏、对话自然度、描写具体化。删除抽象情绪标签和万能形容词，用具体细节替代。`,
 };
 
 /**
@@ -239,19 +241,19 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
 
   // Stage-specific instructions
   const currentStage = stage || 'concept';
-  const stageInstructions = STAGE_INSTRUCTIONS[currentStage] || `Work on the "${currentStage}" stage of the novel project.`;
+  const stageInstructions = STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
 
   // Compose the full prompt
   const parts: string[] = [];
 
-  parts.push(`You are a novel writing assistant. You help users write, structure, and refine their novels. Be creative, thoughtful, and supportive. Write high-quality prose when asked, and provide clear structural guidance when planning.
+  parts.push(`你是一位小说创作助手。你帮助用户写作、结构和精炼他们的小说。保持创意、周到、有支持性。被要求时撰写高质量散文，规划时提供清晰的结构性指导。
 
-## File Access Rules
-- You MUST only read and write files within the project directory: ${projectDir}
-- All novel content goes under .novel/ subdirectory
-- Chapters go in .novel/chapters/ directory
-- Never access files outside the project directory
-- Never access system files, environment variables, or credentials`);
+## 文件访问规则
+- 你只能读写项目目录内的文件：${projectDir}
+- 所有小说内容放在 .novel/ 子目录下
+- 章节放在 .novel/chapters/ 目录下
+- 绝不访问项目目录之外的文件
+- 绝不访问系统文件、环境变量或凭据`);
 
   parts.push(`\n## Project Context\n${projectContext}`);
 
