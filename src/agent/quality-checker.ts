@@ -367,20 +367,46 @@ export function analyzeForeshadows(
 
 // ===== 伏笔遗忘检测：文件 IO =====
 
+/** 从对象中按候选键名取首个数值字段，均无效返回 null。容错 agent 产出的字段名变体。 */
+function pickNumField(o: Record<string, unknown>, keys: string[]): number | null {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      const parsed = parseInt(v, 10);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
 function normalizeForeshadows(input: unknown): Foreshadow[] {
   if (!input || typeof input !== 'object') return [];
   const arr = (input as { foreshadows?: unknown }).foreshadows;
   if (!Array.isArray(arr)) return [];
   return arr
-    .map((f): Foreshadow | null => {
+    .map((f, idx): Foreshadow | null => {
       if (!f || typeof f !== 'object') return null;
       const o = f as Record<string, unknown>;
-      if (typeof o.id !== 'number' || typeof o.content !== 'string') return null;
+      // 内容字段容错：content / description / text
+      const content = typeof o.content === 'string' ? o.content
+        : typeof o.description === 'string' ? o.description
+          : typeof o.text === 'string' ? o.text : null;
+      if (content === null) return null;
+      // id 容错：number 优先；string 尝试 parse，失败用序号
+      let id: number;
+      if (typeof o.id === 'number') id = o.id;
+      else if (typeof o.id === 'string') {
+        const parsed = parseInt(o.id, 10);
+        id = Number.isNaN(parsed) ? idx + 1 : parsed;
+      } else id = idx + 1;
       return {
-        id: o.id, content: o.content,
+        id,
+        content,
         status: typeof o.status === 'string' ? o.status : 'pending',
-        plantedIn: typeof o.plantedIn === 'number' ? o.plantedIn : null,
-        resolvedIn: typeof o.resolvedIn === 'number' ? o.resolvedIn : null,
+        // 章节字段容错：多种常见命名变体
+        plantedIn: pickNumField(o, ['plantedIn', 'plantedChapter', 'planted_chapter', 'planted']),
+        resolvedIn: pickNumField(o, ['resolvedIn', 'resolvedChapter', 'expectedPayoffChapter', 'expected_payoff_chapter', 'payoffChapter']),
       };
     })
     .filter((f): f is Foreshadow => f !== null);
@@ -450,15 +476,16 @@ const CONTRADICTION_RULES: Array<{
 
 // ===== 人物 OOC 检测：纯分析逻辑 =====
 
-/** 从 profiles.md 解析角色档案（姓名 + 性格）。 */
+/** 从 profiles.md 解析角色档案（姓名 + 性格）。支持两种格式：标准字段列表与标题式档案。 */
 export function parseCharacterProfiles(profilesText: string): CharacterProfile[] {
+  const profiles: CharacterProfile[] = [];
+  // 主路径：从「- 姓名：/- 性格：」字段列表解析
   const fieldRe = /^[-*]\s*(姓名|性格)\s*[:：]\s*(.+?)\s*$/gm;
   const fields: Array<{ field: string; value: string }> = [];
   let m: RegExpExecArray | null;
   while ((m = fieldRe.exec(profilesText)) !== null) {
     fields.push({ field: m[1], value: m[2].trim() });
   }
-  const profiles: CharacterProfile[] = [];
   for (let i = 0; i < fields.length; i++) {
     if (fields[i].field !== '姓名') continue;
     const name = fields[i].value;
@@ -472,6 +499,29 @@ export function parseCharacterProfiles(profilesText: string): CharacterProfile[]
       }
     }
     profiles.push({ name, personality });
+  }
+  // 容错路径：无「姓名：」字段时，从「## 角色名（注释）」标题提取姓名，
+  // 并在标题后的内容块里搜性格字段。覆盖 agent 产出的标题式档案格式。
+  if (profiles.length === 0) {
+    const headingRe = /^##\s+(.+?)\s*$/gm;
+    const personalityRe = /(?:性格|性情|脾气|为人|特质)\s*[:：]\s*(.+)$/;
+    const lines = profilesText.split('\n');
+    const seen = new Set<string>();
+    let hm: RegExpExecArray | null;
+    while ((hm = headingRe.exec(profilesText)) !== null) {
+      // 去掉标题中的括号注释，如「林冲（主角）」→「林冲」
+      const name = hm[1].replace(/[（(].*$/, '').trim();
+      if (!name || seen.has(name)) continue;
+      const startLine = profilesText.slice(0, hm.index).split('\n').length - 1;
+      let personality = '';
+      for (let li = startLine + 1; li < lines.length; li++) {
+        if (/^##\s/.test(lines[li])) break; // 下一个角色
+        const pm = lines[li].match(personalityRe);
+        if (pm) { personality = pm[1].trim(); break; }
+      }
+      seen.add(name);
+      profiles.push({ name, personality });
+    }
   }
   return profiles;
 }

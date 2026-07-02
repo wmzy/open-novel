@@ -226,6 +226,27 @@ describe('checkForeshadows (IO)', () => {
     const report = await checkForeshadows(dir);
     expect(report.forgotten).toHaveLength(0);
   });
+
+  it('容忍非标准字段名（description/plantedChapter/string id）', async () => {
+    const novel = path.join(dir, '.novel', 'chapters');
+    await fs.mkdir(novel, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, '.novel', 'foreshadow.json'),
+      JSON.stringify({
+        foreshadows: [
+          // 非标准：id 为字符串、字段名 description / plantedChapter
+          { id: 'fs1', description: '神秘信件', status: 'open', plantedChapter: 1, expectedPayoffChapter: 5 },
+        ],
+      }),
+    );
+    await fs.writeFile(path.join(novel, 'chapter-1.md'), '林青发现神秘信件。');
+    await fs.writeFile(path.join(novel, 'chapter-2.md'), '无关内容。');
+    const report = await checkForeshadows(dir, 5);
+    // 应被归一化解析，而非静默丢弃；间隔 < 阈值 → healthy
+    expect(report.healthy).toHaveLength(1);
+    expect(report.healthy[0].content).toBe('神秘信件');
+    expect(report.healthy[0].lastSeenChapter).toBe(1);
+  });
 });
 
 // ===== 人物 OOC 检测：档案解析 =====
@@ -248,6 +269,21 @@ describe('parseCharacterProfiles', () => {
 
   it('空文本返回空数组', () => {
     expect(parseCharacterProfiles('')).toEqual([]);
+  });
+
+  it('无“姓名：”字段时从标题提取（标题式档案容错）', () => {
+    // agent 产出的标题式档案：## 林冲（主角） + - 性格：...
+    const text = `## 林冲（主角）
+- 身份：铸剑谷弟子
+- 性格：克制、隐忍、执拗
+
+## 无相
+- 性格：阴沉、偏执`;
+    const profiles = parseCharacterProfiles(text);
+    expect(profiles).toHaveLength(2);
+    expect(profiles[0].name).toBe('林冲'); // 去掉括号注释
+    expect(profiles[0].personality).toBe('克制、隐忍、执拗');
+    expect(profiles[1].name).toBe('无相');
   });
 });
 
