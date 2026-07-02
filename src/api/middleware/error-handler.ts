@@ -1,4 +1,4 @@
-import type { Context, Next } from 'hono';
+import type { Context } from 'hono';
 
 /**
  * Structured HTTP error. Carries a semantic status + code so the global
@@ -82,24 +82,22 @@ export function apiError(c: Context, status: number, code: string, message: stri
 }
 
 /**
- * Global error handler middleware for Hono.
+ * Global Hono error handler (registered via `app.onError`).
+ *
+ * Hono's middleware `try { await next() } catch` form does NOT catch throws
+ * from route handlers — Hono's `compose` routes them to `app.onError` instead
+ * (verified against hono@4.12.23 dist/compose.js). So the global handler MUST
+ * be wired as `app.onError`, not as a middleware.
  *
  * Dispatches on `instanceof HttpError` rather than inspecting message text.
  */
-export async function errorHandler(c: Context, next: Next) {
-  try {
-    await next();
-  } catch (err) {
-    if (err instanceof HttpError) {
-      return apiError(c, err.status, err.code, err.message, err.details);
-    }
-
-    console.error('Unhandled error:', err);
-
-    if (err instanceof Error) {
-      return apiError(c, 500, 'INTERNAL_ERROR', err.message);
-    }
-
-    return apiError(c, 500, 'INTERNAL_ERROR', 'An unexpected error occurred');
+export function onError(err: Error, c: Context): Response {
+  if (err instanceof HttpError) {
+    return apiError(c, err.status, err.code, err.message, err.details);
   }
+
+  console.error('Unhandled error:', err);
+
+  const message = err instanceof Error ? err.message : 'An unexpected error occurred';
+  return apiError(c, 500, 'INTERNAL_ERROR', message);
 }

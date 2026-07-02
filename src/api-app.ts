@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ensureDbReady } from './db/drizzle';
 import { initPlugins } from './plugins/registry';
-import { errorHandler } from './api/middleware/error-handler';
+import { onError } from './api/middleware/error-handler';
 import { config } from './config';
 import { requestLogger } from './api/middleware/logger';
 import { securityHeaders, rateLimit, maxBodySize } from './api/middleware/security';
@@ -20,12 +20,15 @@ import exportRouter from './api/routes/export';
 
 const app = new Hono();
 
-// Security, logging, and error handler middleware
+// Security, logging middleware
 app.use('/api/*', securityHeaders);
 app.use('/api/*', rateLimit(config.rateLimit.max, config.rateLimit.windowMs));
 app.use('/api/*', maxBodySize(25 * 1024 * 1024)); // 25MB: generous for text + image uploads
 app.use('/api/*', requestLogger);
-app.use('/api/*', errorHandler);
+
+// Global error handler. Hono's middleware `try/catch` form does NOT catch
+// route-handler throws, so this MUST be wired via `app.onError`.
+app.onError(onError);
 
 let dbReady = false;
 app.use('/api/*', async (_c, next) => {

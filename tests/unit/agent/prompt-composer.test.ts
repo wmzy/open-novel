@@ -1,0 +1,279 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+
+// vi.hoisted keeps mock refs available inside hoisted vi.mock factories.
+const { mockLimit, mockGetPlugin } = vi.hoisted(() => ({
+  mockLimit: vi.fn(),
+  mockGetPlugin: vi.fn(),
+}));
+
+// Mock db: composePrompt does db.select().from(projects).where(eq(...)).limit(1)
+// returning Promise<project[]>. Only limit()'s resolved value matters.
+vi.mock('../../../src/db/drizzle', () => ({
+  db: {
+    select: () => ({ from: () => ({ where: () => ({ limit: mockLimit }) }) }),
+  },
+}));
+
+vi.mock('../../../src/plugins/registry', () => ({
+  getPlugin: mockGetPlugin,
+}));
+
+// Import AFTER mocks are registered.
+const { composePrompt } = await import('../../../src/agent/prompt-composer');
+
+// Feature text identifying each stage instruction (first clause of STAGE_INSTRUCTIONS).
+const STAGE_FEATURES: Record<string, string> = {
+  concept: 'brainstorming the core concept',
+  world: 'Build the story world',
+  characters: 'Develop detailed character profiles',
+  outline: 'Create a detailed story outline',
+  scenes: 'Break down the outline into detailed scenes',
+  writing: 'Write actual prose for the novel',
+  drafting: 'Write actual prose for the novel',
+  revision: 'Review and improve existing content',
+  polish: 'Final editing pass',
+};
+
+function makeProject(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'proj_test',
+    title: 'Test Novel',
+    path: '/tmp/test',
+    genre: 'fantasy',
+    targetWords: 80000,
+    chapterCount: 15,
+    theme: 'redemption',
+    perspective: 'first-person',
+    currentStage: 'concept',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+async function seedProjectFiles(dir: string) {
+  await fs.mkdir(path.join(dir, '.novel', 'chapters'), { recursive: true });
+  await fs.writeFile(path.join(dir, '.novel', 'concept.md'), '# Concept');
+  await fs.writeFile(path.join(dir, '.novel', 'chapters', 'ch1.md'), 'chapter 1');
+  await fs.writeFile(path.join(dir, '.novel', 'config.json'), '{}');
+}
+
+describe('composePrompt', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'on-prompt-'));
+    mockLimit.mockResolvedValue([]);
+    mockGetPlugin.mockReturnValue(null);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  describe('stage instruction injection', () => {
+    for (const [stage, feature] of Object.entries(STAGE_FEATURES)) {
+      it(`injects ${stage} stage instructions`, async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage,
+          projectDir: tempDir,
+        });
+        expect(prompt).toContain(`## Current Stage: ${stage}`);
+        expect(prompt).toContain(feature);
+      });
+    }
+
+    it('falls back for an unknown stage', async () => {
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        stage: 'custom',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## Current Stage: custom');
+      expect(prompt).toContain('Work on the "custom" stage');
+    });
+
+    it('defaults to concept stage when stage is undefined', async () => {
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## Current Stage: concept');
+      expect(prompt).toContain(STAGE_FEATURES.concept);
+    });
+  });
+
+  describe('project context', () => {
+    it('injects formatted project metadata', async () => {
+      const project = makeProject({
+        title: 'My Epic',
+        genre: 'scifi',
+        theme: 'AI awakening',
+        perspective: 'second-person',
+        targetWords: 123456,
+        chapterCount: 42,
+        currentStage: 'writing',
+      });
+      mockLimit.mockResolvedValue([project]);
+
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('Project: My Epic');
+      expect(prompt).toContain('Genre: scifi');
+      expect(prompt).toContain('Theme: AI awakening');
+      expect(prompt).toContain('Perspective: second-person');
+      expect(prompt).toContain('Target word count: 123456');
+      expect(prompt).toContain('Chapter count: 42');
+      expect(prompt).toContain('Current stage: writing');
+    });
+
+    it('uses blank context when DB returns empty (not an error)', async () => {
+      mockLimit.mockResolvedValue([]);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      // Empty result is not an error: context stays blank — no fallback message, no metadata.
+      expect(prompt).not.toContain('Project metadata unavailable.');
+      expect(prompt).not.toContain('Project: ');
+    });
+
+    it('falls back without crashing when DB rejects', async () => {
+      mockLimit.mockRejectedValue(new Error('connection lost'));
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('Project metadata unavailable.');
+    });
+  });
+
+  describe('project files', () => {
+    it('lists existing .md/.json files under .novel/', async () => {
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## Project Files');
+      expect(prompt).toContain('.novel/concept.md');
+      expect(prompt).toContain('.novel/chapters/ch1.md');
+      expect(prompt).toContain('.novel/config.json');
+    });
+
+    it('omits the files section when directory has no .novel/', async () => {
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## Project Files');
+    });
+  });
+
+  describe('skill content', () => {
+    it('injects skill instructions when plugin exists', async () => {
+      mockGetPlugin.mockReturnValue({ skillContent: 'Always write in present tense.' });
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'wuxia',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## Skill Instructions');
+      expect(prompt).toContain('Always write in present tense.');
+    });
+
+    it('omits skill section when no skillId given', async () => {
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## Skill Instructions');
+    });
+
+    it('omits skill section when plugin not found', async () => {
+      mockGetPlugin.mockReturnValue(null);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'missing',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## Skill Instructions');
+    });
+  });
+
+  describe('conversation history', () => {
+    it('injects user/assistant turns with labels', async () => {
+      const prompt = await composePrompt({
+        message: 'continue',
+        projectId: 'p',
+        projectDir: tempDir,
+        history: [
+          { role: 'user', content: 'first question' },
+          { role: 'assistant', content: 'first answer' },
+        ],
+      });
+      expect(prompt).toContain('## Conversation History');
+      expect(prompt).toContain('### User');
+      expect(prompt).toContain('first question');
+      expect(prompt).toContain('### Assistant');
+      expect(prompt).toContain('first answer');
+    });
+
+    it('omits history section when empty', async () => {
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        projectDir: tempDir,
+        history: [],
+      });
+      expect(prompt).not.toContain('## Conversation History');
+    });
+  });
+
+  it('ends with the user request', async () => {
+    const prompt = await composePrompt({
+      message: 'write chapter 2',
+      projectId: 'p',
+      projectDir: tempDir,
+    });
+    expect(prompt).toContain('## User Request\nwrite chapter 2');
+  });
+
+  it('orders sections consistently', async () => {
+    await seedProjectFiles(tempDir);
+    mockGetPlugin.mockReturnValue({ skillContent: 'SKILL_BODY' });
+    const prompt = await composePrompt({
+      message: 'go',
+      projectId: 'p',
+      skillId: 'wuxia',
+      projectDir: tempDir,
+      history: [{ role: 'user', content: 'prev' }],
+    });
+    const idx = (s: string) => prompt.indexOf(s);
+    expect(idx('## File Access Rules')).toBeLessThan(idx('## Project Context'));
+    expect(idx('## Project Context')).toBeLessThan(idx('## Current Stage:'));
+    expect(idx('## Current Stage:')).toBeLessThan(idx('## Project Files'));
+    expect(idx('## Project Files')).toBeLessThan(idx('## Available Tools'));
+    expect(idx('## Available Tools')).toBeLessThan(idx('## Output Format'));
+    expect(idx('## Output Format')).toBeLessThan(idx('## Skill Instructions'));
+    expect(idx('## Skill Instructions')).toBeLessThan(idx('## Conversation History'));
+    expect(idx('## Conversation History')).toBeLessThan(idx('## User Request'));
+  });
+});

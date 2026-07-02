@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { eventStore } from './event-store';
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
@@ -22,6 +23,9 @@ export interface Run {
 }
 
 const runs = new Map<string, Run>();
+
+/** 每个运行中 run 保留在内存的滑动窗口大小（条）。超出部分由 EventStore 落盘后从窗口滑出。 */
+const WINDOW_SIZE = 200;
 
 export function createRun(meta: { projectId: string; agentId: string; skillId: string; stage: string }): Run {
   let finishResolve: () => void;
@@ -57,9 +61,10 @@ export function emitEvent(run: Run, event: string, data: unknown) {
   const id = run.nextEventId++;
   const record = { id, event, data, timestamp: Date.now() };
   run.events.push(record);
-  if (run.events.length > 2000) run.events.splice(0, run.events.length - 2000);
+  if (run.events.length > WINDOW_SIZE) run.events.splice(0, run.events.length - WINDOW_SIZE);
   run.updatedAt = Date.now();
   for (const send of run.clients) send(event, data, id);
+  eventStore.append(run.id, id, event, data);
 }
 
 export function finishRun(run: Run, status: RunStatus) {
@@ -69,6 +74,8 @@ export function finishRun(run: Run, status: RunStatus) {
   emitEvent(run, 'end', { status });
   run._finishResolve();
   run.clients.clear();
+  // 落盘剩余缓冲事件（含 'end'）后释放内存窗口；DB 成为事实来源。
+  eventStore.release(run.id).then(() => { run.events = []; }).catch(() => {});
   setTimeout(() => runs.delete(run.id), 30 * 60 * 1000).unref?.();
 }
 

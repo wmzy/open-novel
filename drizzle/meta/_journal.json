@@ -8,6 +8,13 @@
       "when": 1782944930044,
       "tag": "0000_silent_terror",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782963534495,
+      "tag": "0001_gifted_mister_fear",
+      "breakpoints": true
     }
   ]
 }

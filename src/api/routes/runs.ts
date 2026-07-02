@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun } from '../../agent/run';
+import { eventStore } from '../../agent/event-store';
 import { composePrompt } from '../../agent/prompt-composer';
 import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
@@ -153,11 +154,10 @@ runsRouter.get('/:id/events', async (c) => {
 
     const lastEventId = Number(c.req.header('Last-Event-ID') || 0);
 
-    // Replay missed events
-    for (const record of run.events) {
-      if (record.id > lastEventId) {
-        await streamWriter.write(`id: ${record.id}\nevent: ${record.event}\ndata: ${JSON.stringify(record.data)}\n\n`);
-      }
+    // Replay missed events (DB history + in-memory window, merged & deduped by seq)
+    const missed = await eventStore.replay(run.id, lastEventId, run.events);
+    for (const record of missed) {
+      await streamWriter.write(`id: ${record.id}\nevent: ${record.event}\ndata: ${JSON.stringify(record.data)}\n\n`);
     }
 
     // If already finished, close

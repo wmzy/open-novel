@@ -1,4 +1,4 @@
-import { pgTable, varchar, integer, timestamp, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, integer, timestamp, index, uniqueIndex, jsonb } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const projects = pgTable('projects', {
@@ -56,6 +56,17 @@ export const runs = pgTable('runs', {
   createdAt: timestamp('created_at', { withTimezone: true }).default(sql`now()`).notNull(),
 });
 
+export const runEvents = pgTable('run_events', {
+  id: varchar('id', { length: 25 }).primaryKey(),
+  runId: varchar('run_id', { length: 50 }).notNull().references(() => runs.id, { onDelete: 'cascade' }),
+  seq: integer('seq').notNull(),
+  type: varchar('type', { length: 50 }).notNull(),
+  data: jsonb('data').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).default(sql`now()`).notNull(),
+}, (table) => [
+  uniqueIndex('run_events_run_seq_idx').on(table.runId, table.seq),
+]);
+
 export const userSettings = pgTable('user_settings', {
   id: varchar('id', { length: 25 }).primaryKey(),
   key: varchar('key', { length: 100 }).notNull(),
@@ -71,4 +82,5 @@ export type NewChapter = typeof chapters.$inferInsert;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Run = typeof runs.$inferSelect;
+export type RunEvent = typeof runEvents.$inferSelect;
 export type UserSetting = typeof userSettings.$inferSelect;
