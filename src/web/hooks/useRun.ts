@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { AgentEvent } from '@/agent/types';
+import { consumeSseStream, MAX_RECONNECT_ATTEMPTS } from './sse-stream';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -12,53 +13,7 @@ export interface ChatMessage {
   artifacts?: { count: number; paths: string[] };
 }
 
-const MAX_RECONNECT_ATTEMPTS = 3;
 
-/** Parse a single SSE frame into its constituent fields. */
-function parseSseFrame(frame: string) {
-  const lines = frame.split('\n');
-  let event = 'message';
-  let id: string | undefined;
-  const dataLines: string[] = [];
-  for (const rawLine of lines) {
-    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
-    if (line.startsWith(':')) continue; // comment
-    if (line.startsWith('event: ')) event = line.slice(7).trim();
-    else if (line.startsWith('id: ')) id = line.slice(4).trim();
-    else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
-  }
-  if (dataLines.length === 0) return null;
-  return { event, data: JSON.parse(dataLines.join('\n')), id };
-}
-
-/** Consume an SSE response body, yielding parsed frames. */
-async function* consumeSseStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal: AbortSignal,
-) {
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  while (!signal.aborted) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop()!; // keep incomplete tail
-    for (const part of parts) {
-      if (!part.trim()) continue;
-      const frame = parseSseFrame(part);
-      if (frame) yield frame;
-    }
-  }
-
-  // Flush any remaining buffer
-  if (buffer.trim()) {
-    const frame = parseSseFrame(buffer);
-    if (frame) yield frame;
-  }
-}
 
 export function useRun(conversationId?: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -183,10 +138,11 @@ export function useRun(conversationId?: string) {
           for await (const frame of consumeSseStream(reader, controller.signal)) {
             receivedEvents = true;
             lastEventId = frame.id;
+            const data = frame.data as Record<string, unknown>;
 
             switch (frame.event) {
               case 'agent':
-                handleAgentEvent(frame.data);
+                handleAgentEvent(data);
                 break;
               case 'artifacts':
                 setMessages((prev) => {
@@ -194,8 +150,8 @@ export function useRun(conversationId?: string) {
                   const last = updated[updated.length - 1];
                   if (last?.role === 'assistant') {
                     last.artifacts = {
-                      count: Number(frame.data.count || 0),
-                      paths: Array.isArray(frame.data.paths) ? frame.data.paths : [],
+                      count: Number(data.count || 0),
+                      paths: Array.isArray(data.paths) ? data.paths : [],
                     };
                   }
                   return updated;
@@ -215,7 +171,7 @@ export function useRun(conversationId?: string) {
                   const updated = [...prev];
                   const last = updated[updated.length - 1];
                   if (last?.role === 'assistant') {
-                    last.events = [...(last.events || []), { kind: 'raw', line: frame.data.text || '' }];
+                    last.events = [...(last.events || []), { kind: 'raw', line: String(data.text || '') }];
                   }
                   return updated;
                 });

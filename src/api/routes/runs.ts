@@ -16,6 +16,22 @@ import { conversations, messages, runs as runsTable } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { eq } from 'drizzle-orm';
 
+/** 从 agent 子进程 stderr 中脱敏常见凭证模式，避免泄露到前端。 */
+const SECRET_PATTERNS: Array<[RegExp, string]> = [
+  [/[sS][kK]-[A-Za-z0-9_-]{20,}/g, 'sk-[REDACTED]'], // OpenAI/Anthropic API key
+  [/[Bb]earer\s+[A-Za-z0-9._-]{8,}/g, 'Bearer [REDACTED]'], // Bearer token
+  [
+    /((?:api[_-]?key|token|secret|password|authorization)["'\s]*[:=]\s*["']?)[A-Za-z0-9._\/+=-]{8,}/gi,
+    '$1[REDACTED]',
+  ], // key=value / key: value 形式
+];
+
+export function sanitizeStderr(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of SECRET_PATTERNS) result = result.replace(pattern, replacement);
+  return result;
+}
+
 const runsRouter = new Hono();
 
 runsRouter.post('/', async (c) => {
@@ -90,7 +106,7 @@ runsRouter.post('/', async (c) => {
     : createJsonEventHandler((event) => emitEvent(run, 'agent', event));
 
   child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
-  child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: chunk.toString() }));
+  child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
 
   child.on('error', (err) => {
     clearTimeout(timeoutTimer);

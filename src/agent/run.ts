@@ -3,7 +3,7 @@ import { eventStore } from './event-store';
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
-export interface Run {
+export interface RunSession {
   id: string;
   projectId: string;
   agentId: string;
@@ -22,16 +22,16 @@ export interface Run {
   _finishResolve: () => void;
 }
 
-const runs = new Map<string, Run>();
+const runs = new Map<string, RunSession>();
 
 /** 每个运行中 run 保留在内存的滑动窗口大小（条）。超出部分由 EventStore 落盘后从窗口滑出。 */
 const WINDOW_SIZE = 200;
 
-export function createRun(meta: { projectId: string; agentId: string; skillId: string; stage: string }): Run {
+export function createRun(meta: { projectId: string; agentId: string; skillId: string; stage: string }): RunSession {
   let finishResolve: () => void;
   const finished = new Promise<void>((resolve) => { finishResolve = resolve; });
 
-  const run: Run = {
+  const run: RunSession = {
     id: randomUUID(),
     projectId: meta.projectId,
     agentId: meta.agentId,
@@ -53,11 +53,11 @@ export function createRun(meta: { projectId: string; agentId: string; skillId: s
   return run;
 }
 
-export function getRun(id: string): Run | null {
+export function getRun(id: string): RunSession | null {
   return runs.get(id) ?? null;
 }
 
-export function emitEvent(run: Run, event: string, data: unknown) {
+export function emitEvent(run: RunSession, event: string, data: unknown) {
   const id = run.nextEventId++;
   const record = { id, event, data, timestamp: Date.now() };
   run.events.push(record);
@@ -67,7 +67,7 @@ export function emitEvent(run: Run, event: string, data: unknown) {
   eventStore.append(run.id, id, event, data);
 }
 
-export function finishRun(run: Run, status: RunStatus) {
+export function finishRun(run: RunSession, status: RunStatus) {
   if (['succeeded', 'failed', 'canceled'].includes(run.status)) return;
   run.status = status;
   run.updatedAt = Date.now();
@@ -79,7 +79,7 @@ export function finishRun(run: Run, status: RunStatus) {
   setTimeout(() => runs.delete(run.id), 30 * 60 * 1000).unref?.();
 }
 
-export function cancelRun(run: Run) {
+export function cancelRun(run: RunSession) {
   if (['succeeded', 'failed', 'canceled'].includes(run.status)) return;
   run.cancelRequested = true;
   if (run.child && !run.child.killed) {
@@ -89,6 +89,6 @@ export function cancelRun(run: Run) {
   }
 }
 
-export function subscribeRun(run: Run, send: (event: string, data: unknown, id: number) => void) {
+export function subscribeRun(run: RunSession, send: (event: string, data: unknown, id: number) => void) {
   run.clients.add(send);
 }

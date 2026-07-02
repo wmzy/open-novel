@@ -7,7 +7,7 @@ import {
   cancelRun,
   subscribeRun,
 } from '../../../src/agent/run';
-import type { Run } from '../../../src/agent/run';
+import type { RunSession } from '../../../src/agent/run';
 
 // Mock EventStore so run.ts unit tests stay focused on the state machine
 // and never touch the DB layer.
@@ -23,9 +23,9 @@ vi.mock('../../../src/agent/event-store', () => ({
 const META = { projectId: 'p1', agentId: 'a1', skillId: 's1', stage: 'draft' };
 
 /** Attach a minimal stub child onto a run, returning the kill spy. */
-function stubChild(run: Run, killed: boolean) {
+function stubChild(run: RunSession, killed: boolean) {
   const kill = vi.fn();
-  run.child = { killed, kill } as unknown as NonNullable<Run['child']>;
+  run.child = { killed, kill } as unknown as NonNullable<RunSession['child']>;
   return kill;
 }
 
