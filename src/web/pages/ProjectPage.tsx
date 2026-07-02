@@ -7,6 +7,8 @@ import Sidebar from '@/web/components/Sidebar';
 import WorkflowProgress from '@/web/components/WorkflowProgress';
 import ChatPanel from '@/web/components/ChatPanel';
 import EditorPanel from '@/web/components/EditorPanel';
+import RewritePanel from '@/web/components/RewritePanel';
+import QualityCheckPanel from '@/web/components/QualityCheckPanel';
 import FilePreview from '@/web/components/FilePreview';
 import { useFilePreview } from '@/web/hooks/useFilePreview';
 import DashboardView from '@/web/components/views/DashboardView';
@@ -95,6 +97,24 @@ const previewToggle = css`
   &:hover { background: var(--haze-color-bg-secondary); }
 `;
 
+const rewriteDetails = css`
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  overflow: hidden;
+  &[open] > summary { border-bottom: 1px solid var(--haze-color-border); }
+`;
+
+const rewriteSummary = css`
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--haze-color-text-secondary);
+  user-select: none;
+  &:hover { color: var(--haze-color-text); }
+`;
+
 function ViewRouter({ activeView, projectId }: { activeView: string; projectId: string }) {
   if (activeView === 'dashboard') return <DashboardView projectId={projectId} />;
   if (activeView === 'concept') return <ConceptView projectId={projectId} />;
@@ -106,7 +126,21 @@ function ViewRouter({ activeView, projectId }: { activeView: string; projectId: 
   if (activeView === 'wuxia') return <WuxiaView projectId={projectId} />;
   if (activeView.startsWith('chapter-')) {
     const num = parseInt(activeView.replace('chapter-', ''), 10);
-    return <EditorPanel projectId={projectId} chapterNum={num} />;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <EditorPanel projectId={projectId} chapterNum={num} />
+        </div>
+        <details className={rewriteDetails}>
+          <summary className={rewriteSummary}>✍️ 局部重写工作台</summary>
+          <RewritePanel projectId={projectId} chapterNum={num} />
+        </details>
+        <details className={rewriteDetails}>
+          <summary className={rewriteSummary}>🔍 质量检查面板</summary>
+          <QualityCheckPanel projectId={projectId} chapterNum={num} />
+        </details>
+      </div>
+    );
   }
   return <div>未知视图: {activeView}</div>;
 }

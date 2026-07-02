@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
-import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync } from 'node:fs';
 import path from 'node:path';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
@@ -11,6 +11,11 @@ import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
 import { gitSync } from '../../agent/snapshot';
+import {
+  TEMPLATE_GENERATORS,
+  TEMPLATE_FILE_PATHS,
+  type TemplateGenOptions,
+} from '../../shared/template-generator';
 
 const projectsRouter = new Hono();
 
@@ -372,6 +377,79 @@ projectsRouter.get('/:id/events', async (c) => {
     await new Promise<void>((resolve) => {
       streamWriter.onAbort(() => resolve());
     });
+  });
+});
+
+/**
+ * 从 project 行构造模板生成所需的元数据。
+ * theme 在 schema 中可空，这里转为可选字段。
+ */
+function toTemplateOptions(p: typeof projects.$inferSelect): TemplateGenOptions {
+  return {
+    chapterCount: p.chapterCount,
+    targetWords: p.targetWords,
+    title: p.title,
+    genre: p.genre,
+    perspective: p.perspective,
+    theme: p.theme ?? undefined,
+  };
+}
+
+// 按项目元数据动态生成模板脚手架并写入 .novel/ 目录；已存在文件备份为 .bak
+projectsRouter.post('/:id/generate-templates', async (c) => {
+  const id = c.req.param('id');
+  const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+  if (!project) return c.json({ error: 'Not found' }, 404);
+
+  const novelDir = path.join(project.path, '.novel');
+  mkdirSync(novelDir, { recursive: true });
+
+  // 可选：请求体传入 { templates: [...] } 限定生成范围；默认生成全部
+  let requested = Object.keys(TEMPLATE_FILE_PATHS);
+  try {
+    const body = await c.req.json();
+    if (Array.isArray(body.templates) && body.templates.length > 0) {
+      requested = body.templates;
+    }
+  } catch { /* 无请求体或非 JSON，使用默认全集 */ }
+
+  const opts = toTemplateOptions(project);
+  const written: { name: string; path: string; backedUp: boolean }[] = [];
+
+  for (const name of requested) {
+    const generator = TEMPLATE_GENERATORS[name];
+    const relPath = TEMPLATE_FILE_PATHS[name];
+    if (!generator || !relPath) continue; // 跳过未知模板名
+
+    const fullPath = path.join(novelDir, relPath);
+    mkdirSync(path.dirname(fullPath), { recursive: true });
+    // 已存在则备份（覆盖旧 .bak），再加 .bak 后缀
+    const backedUp = existsSync(fullPath);
+    if (backedUp) copyFileSync(fullPath, `${fullPath}.bak`);
+    writeFileSync(fullPath, generator(opts), 'utf-8');
+    written.push({ name, path: relPath, backedUp });
+  }
+
+  return c.json({ ok: true, written });
+});
+
+// 预览（不写文件）：返回指定模板的生成内容
+projectsRouter.get('/:id/templates/:templateName', async (c) => {
+  const id = c.req.param('id');
+  const templateName = c.req.param('templateName');
+  const generator = TEMPLATE_GENERATORS[templateName];
+  if (!generator) {
+    return c.json({ error: `未知模板：${templateName}` }, 400);
+  }
+
+  const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+  if (!project) return c.json({ error: 'Not found' }, 404);
+
+  const content = generator(toTemplateOptions(project));
+  return c.json({
+    name: templateName,
+    path: TEMPLATE_FILE_PATHS[templateName],
+    content,
   });
 });
 

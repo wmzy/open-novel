@@ -8,6 +8,7 @@ import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
+import { ensureContextArtifacts } from '../../agent/context-manager';
 import { createSnapshot, restoreSnapshot, listSnapshots } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
 import { config } from '../../config';
@@ -140,6 +141,11 @@ runsRouter.post('/', async (c) => {
     const projectDir = await resolveProjectDir(projectId);
     if (writtenPaths.size > 0) {
       await syncFilesToDb(projectId, writtenPaths, projectDir).catch(() => {});
+    }
+
+    // 兜底：补全缺失的章节摘要与状态表（仅写作成功时）
+    if (code === 0 && writtenPaths.size > 0) {
+      await ensureContextArtifacts(projectDir, writtenPaths).catch(() => {});
     }
 
     // Create git snapshot

@@ -276,4 +276,83 @@ describe('composePrompt', () => {
     expect(idx('## Skill Instructions')).toBeLessThan(idx('## Conversation History'));
     expect(idx('## Conversation History')).toBeLessThan(idx('## User Request'));
   });
+
+  describe('writing-stage context layers', () => {
+    async function seedWritingProject(d: string) {
+      const novel = path.join(d, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'concept.md'), '# 故事概念\n核心冲突');
+      await fs.writeFile(path.join(novel, 'world-building.md'), '# 世界观\n魔法体系');
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({
+          characters: [
+            { name: '林青', location: '客栈', emotion: '警觉', knows: ['密道'], relationships: { 苏晚: '盟友' }, lastAppearance: 1 },
+          ],
+          timeline: '第一夜',
+          activeForeshadows: [1],
+          lastUpdatedChapter: 1,
+          updatedAt: '2026-01-01',
+        }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          foreshadows: [
+            { id: 1, content: '神秘信件', status: 'pending', plantedIn: 1 },
+            { id: 2, content: '已回收的伏笔', status: 'resolved', plantedIn: 1 },
+          ],
+        }),
+      );
+      await fs.writeFile(path.join(novel, 'chapters', '第1章.summary.md'), '林青抵达客栈，发现密信。');
+    }
+
+    it('injects all context layers in writing stage', async () => {
+      await seedWritingProject(tempDir);
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## Novel Context Layers');
+      expect(prompt).toContain('### 核心设定层（恒定）');
+      expect(prompt).toContain('核心冲突');
+      expect(prompt).toContain('魔法体系');
+      expect(prompt).toContain('### 状态层');
+      expect(prompt).toContain('林青');
+      expect(prompt).toContain('### 滚动摘要层');
+      expect(prompt).toContain('林青抵达客栈');
+      expect(prompt).toContain('### 活跃伏笔层（待回收）');
+      expect(prompt).toContain('神秘信件');
+      // 已回收伏笔不应出现
+      expect(prompt).not.toContain('已回收的伏笔');
+    });
+
+    it('does not inject layers in concept stage (unchanged behavior)', async () => {
+      await seedWritingProject(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        stage: 'concept',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## Novel Context Layers');
+      // 仍保留文件名列表行为
+      expect(prompt).toContain('## Project Files');
+    });
+
+    it('keeps layered context between Project Files and Available Tools', async () => {
+      await seedWritingProject(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      const idx = (s: string) => prompt.indexOf(s);
+      expect(idx('## Project Files')).toBeLessThan(idx('## Novel Context Layers'));
+      expect(idx('## Novel Context Layers')).toBeLessThan(idx('## Available Tools'));
+    });
+  });
 });

@@ -3,6 +3,7 @@ import { css } from '@linaria/core';
 import { useQuery } from '@tanstack/react-query';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import RewritePanel from './RewritePanel';
 
 const editorContainer = css`
   display: flex;
@@ -93,11 +94,14 @@ const wordCount = css`
 interface Props {
   projectId: string;
   chapterNum: number;
+  agentId?: string;
+  skillId?: string;
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+type EditorMode = 'edit' | 'preview' | 'rewrite';
 
-export default function EditorPanel({ projectId, chapterNum }: Props) {
+export default function EditorPanel({ projectId, chapterNum, agentId = 'claude', skillId = 'novel' }: Props) {
   const { data: chapter } = useQuery({
     queryKey: ['chapter-content', projectId, chapterNum],
     queryFn: async () => {
@@ -111,7 +115,7 @@ export default function EditorPanel({ projectId, chapterNum }: Props) {
   const [content, setContent] = useState('');
   const [charCount, setCharCount] = useState(0);
   const [saveStatusState, setSaveStatus] = useState<SaveStatus>('idle');
-  const [showPreview, setShowPreview] = useState(false);
+  const [mode, setMode] = useState<EditorMode>('edit');
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -200,17 +204,33 @@ export default function EditorPanel({ projectId, chapterNum }: Props) {
           <span className={wordCount}>{charCount} 字</span>
           <button
             className={toggleBtn}
-            data-active={showPreview}
-            onClick={() => setShowPreview(!showPreview)}
+            data-active={mode === 'edit'}
+            onClick={() => setMode('edit')}
           >
-            {showPreview ? 'Edit' : 'Preview'}
+            编辑
+          </button>
+          <button
+            className={toggleBtn}
+            data-active={mode === 'preview'}
+            onClick={() => setMode('preview')}
+          >
+            预览
+          </button>
+          <button
+            className={toggleBtn}
+            data-active={mode === 'rewrite'}
+            onClick={() => setMode('rewrite')}
+          >
+            局部重写
           </button>
         </div>
       </div>
-      {showPreview ? (
+      {mode === 'preview' ? (
         <div className={preview}>
           <Markdown remarkPlugins={[remarkGfm]}>{content || '*No content*'}</Markdown>
         </div>
+      ) : mode === 'rewrite' ? (
+        <RewritePanel projectId={projectId} chapterNum={chapterNum} agentId={agentId} skillId={skillId} />
       ) : (
         <textarea
           className={textarea}

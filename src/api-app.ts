@@ -17,6 +17,8 @@ import pluginsRouter from './api/routes/plugins';
 import conversationsRouter from './api/routes/conversations';
 import searchRouter from './api/routes/search';
 import exportRouter from './api/routes/export';
+import checkRouter from './api/routes/check';
+import rewriteRouter from './api/routes/rewrite';
 
 const app = new Hono();
 
@@ -75,6 +77,8 @@ app.route('/api/projects', projectsRouter);
 app.route('/api/projects/:projectId/chapters', chaptersRouter);
 app.route('/api/projects/:projectId/search', searchRouter);
 app.route('/api/projects/:projectId/export', exportRouter);
+app.route('/api/projects/:projectId/check', checkRouter);
+app.route('/api/projects/:projectId/rewrite', rewriteRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);
 app.route('/api/runs', runsRouter);

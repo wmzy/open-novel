@@ -4,5 +4,5 @@
   "description": "完整的小说创作工作流，包含6个阶段",
   "version": "1.0.0",
   "stages": ["concept", "world", "characters", "outline", "scenes", "writing"],
-  "templates": ["concept.md", "world-building.md", "characters/", "outline-brief.md", "outline-detailed.md", "scenes.md", "summary.md", "foreshadow.json"]
+  "templates": ["concept.md", "world-building.md", "characters/", "outline-brief.md", "outline-detailed.md", "scenes.md", "summary.md", "foreshadow.json", "state.json"]
 }

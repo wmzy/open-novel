@@ -145,6 +145,8 @@ export async function syncFilesToDb(projectId: string, paths: Set<string>, proje
     // Only process .md files that look like chapters
     if (!filePath.endsWith('.md')) continue;
     const basename = path.basename(filePath, '.md');
+    // 跳过章节摘要文件（第N章.summary.md），避免把摘要误当作章节正文同步
+    if (basename.endsWith('.summary')) continue;
     const match = basename.match(CHAPTER_PATTERN);
     if (!match) continue;
 

@@ -1,29 +1,158 @@
-import { useQuery } from '@tanstack/react-query';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
+import { css } from '@linaria/core';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, renderBlock } from './viewShared';
+import { parseSections } from './parseSections';
+import type { MdSection } from './parseSections';
 
 interface Props {
   projectId: string;
 }
 
-export default function OutlineView({ projectId }: Props) {
-  const { data, isLoading } = useQuery({
-    queryKey: ['novel-file', projectId, 'outline'],
-    queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('outline-detailed.md')}`);
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.content as string;
-    },
-  });
+/** 章节卡片列表（垂直堆叠）。 */
+const chapterList = css`
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+`;
 
-  if (isLoading) return <div>加载中...</div>;
-  if (!data) return <div>尚未创建大纲。在聊天面板中输入 /outline 开始。</div>;
+/** 单个章节卡片。 */
+const chapterCard = css`
+  background: var(--haze-color-bg);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 10px;
+  overflow: hidden;
+`;
+
+/** 可点击的章节头部。 */
+const chapterHeader = css`
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 0.95rem;
+  color: var(--haze-color-text);
+  &:hover { background: var(--haze-color-bg-secondary); }
+`;
+
+/** 折叠箭头。 */
+const chevron = css`
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+  color: var(--haze-color-text-secondary);
+  transition: transform 0.15s;
+`;
+
+/** 章节号徽标。 */
+const chapterBadge = css`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: white;
+  background: var(--haze-color-primary);
+`;
+
+/** 章节标题文本。 */
+const chapterTitle = css`
+  font-weight: 500;
+`;
+
+/** 章节正文。 */
+const chapterBody = css`
+  padding: 0.5rem 1rem 1rem;
+  border-top: 1px solid var(--haze-color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+`;
+
+/** 从"第N章[场景]"中提取章节号。 */
+function chapterNumber(title: string): string | null {
+  const m = title.match(/第\s*(\d+)\s*章/);
+  return m ? m[1] : null;
+}
+
+/** 章节字段强调色：冲突=警告，结果=成功，目标=主色。 */
+function fieldEmphasis(key: string): CSSProperties | undefined {
+  if (key === '冲突') return { color: 'var(--haze-color-error, #ef4444)', fontWeight: 500 };
+  if (key === '结果') return { color: 'var(--haze-color-success, #22c55e)', fontWeight: 500 };
+  if (key === '目标') return { color: 'var(--haze-color-primary)', fontWeight: 500 };
+  return undefined;
+}
+
+export default function OutlineView({ projectId }: Props) {
+  const { data, isLoading } = useNovelFile(projectId, 'outline', 'outline-detailed.md');
+
+  const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
+
+  // 跟踪“已折叠”的章节：默认空集 = 全部展开。这样在数据加载完成后新出现的章节也默认展开，
+  // 不依赖 useState 初始化时机。
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
+
+  const toggle = (i: number) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  };
+
+  if (isLoading) return <div className={loadingWrap}>加载中...</div>;
+  if (!data) return <EmptyState message="尚未创建大纲。" command="/outline" />;
+  if (sections.length === 0) {
+    return (
+      <div>
+        <h3 className={pageHeading}>大纲</h3>
+        <EmptyState message="大纲暂无结构化内容。" command="/outline" />
+      </div>
+    );
+  }
+
+  const renderChapter = (s: MdSection, i: number) => {
+    const num = chapterNumber(s.title);
+    const titleField = s.fields.find((f) => f.key === '标题')?.value;
+    const isOpen = !collapsed.has(i);
+    return (
+      <div key={i} className={chapterCard}>
+        <button type="button" className={chapterHeader} onClick={() => toggle(i)} aria-expanded={isOpen}>
+          <span className={chevron}>{isOpen ? '▾' : '▸'}</span>
+          {num !== null && <span className={chapterBadge}>第 {num} 章</span>}
+          <span className={chapterTitle}>{titleField || s.title}</span>
+        </button>
+        {isOpen && (
+          <div className={chapterBody}>
+            {renderBlock(
+              {
+                // 头部已展示"标题"，正文不再重复
+                fields: s.fields.filter((f) => f.key !== '标题'),
+                items: s.items,
+                ordered: s.ordered,
+                body: s.body,
+              },
+              fieldEmphasis,
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div>
-      <h3>大纲</h3>
-      <Markdown remarkPlugins={[remarkGfm]}>{data}</Markdown>
+      <h3 className={pageHeading}>大纲</h3>
+      <div className={chapterList}>{sections.map(renderChapter)}</div>
     </div>
   );
 }
