@@ -30,12 +30,29 @@ interface ActPlan {
   act3Start: number;
 }
 
+/**
+ * 生成大纲元数据：三幕分界 + 每章视点占位。
+ * agent 在大纲阶段填充 pov，写作阶段按需修正。
+ */
+export function generateOutlineMeta(options: TemplateGenOptions): string {
+  const n = Math.max(1, options.chapterCount);
+  const plan = planActs(n);
+  return JSON.stringify({
+    actBreaks: [plan.act1Count, plan.act3Start - 1],
+    chapters: Array.from({ length: n }, (_, i) => ({
+      chapter: i + 1,
+      pov: '',
+    })),
+  }, null, 2);
+}
+
 /** 生成器名称 → 生成函数，供 API 路由统一调度。 */
 export const TEMPLATE_GENERATORS: Record<string, (o: TemplateGenOptions) => string> = {
   'outline-detailed': generateOutlineDetailed,
   'outline-brief': generateOutlineBrief,
   scenes: generateScenes,
   'character-profiles': generateCharacterProfiles,
+  'outline-meta': generateOutlineMeta,
 };
 
 /** 生成器名称 → 写入 .novel/ 下的相对路径，供 API 路由统一落盘。 */
@@ -44,6 +61,7 @@ export const TEMPLATE_FILE_PATHS: Record<string, string> = {
   'outline-brief': 'outline-brief.md',
   scenes: 'scenes.md',
   'character-profiles': 'characters/profiles.md',
+  'outline-meta': 'outline-meta.json',
 };
 
 /** 视角标识 → 中文标签，未知值原样返回。 */

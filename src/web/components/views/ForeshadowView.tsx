@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { css } from '@linaria/core';
+import { CollapsibleDiagram } from '../MermaidDiagram';
+import { buildForeshadowGantt } from '../../../shared/diagram-builders';
 
 const kanban = css`
   display: grid;
@@ -50,9 +52,12 @@ export default function ForeshadowView({ projectId }: Props) {
   const planted = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'planted') || [];
   const resolved = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'resolved') || [];
 
+  const gantt = buildForeshadowGantt(data.foreshadows || []);
+
   return (
     <div>
       <h3>伏笔</h3>
+      <CollapsibleDiagram chart={gantt} title="埋设→回收周期" />
       <div className={kanban}>
         <div className={column}>
           <div className={columnTitle}>待埋</div>

@@ -165,7 +165,7 @@ describe('template-generator', () => {
       for (const [name, gen] of Object.entries(TEMPLATE_GENERATORS)) {
         const out = gen(base);
         expect(out.length, `${name} 应非空`).toBeGreaterThan(0);
-        expect(TEMPLATE_FILE_PATHS[name]).toMatch(/\.md$/);
+        expect(TEMPLATE_FILE_PATHS[name]).toMatch(/\.(md|json)$/);
       }
     });
   });

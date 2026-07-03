@@ -5,6 +5,10 @@ import { css } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
+import { useQuery } from '@tanstack/react-query';
+import { CollapsibleDiagram } from '../MermaidDiagram';
+import { buildArcDiagram, buildPovTimeline } from '../../../shared/diagram-builders';
+import { parseOutlineMeta } from '../../../shared/outline-meta';
 
 interface Props {
   projectId: string;
@@ -102,6 +106,20 @@ export default function OutlineView({ projectId }: Props) {
   // 不依赖 useState 初始化时机。
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
 
+  // 额外读取 outline-meta.json 获取三幕分界与视点数据
+  const { data: metaData } = useQuery({
+    queryKey: ['novel-file', projectId, 'outline-meta'],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('outline-meta.json')}`);
+      if (!res.ok) return null;
+      const wrapper = await res.json();
+      try { return JSON.parse(wrapper.content); } catch { return null; }
+    },
+  });
+  const meta = parseOutlineMeta(metaData);
+  const arcDiagram = meta ? buildArcDiagram(meta) : null;
+  const povTimeline = meta ? buildPovTimeline(meta) : null;
+
   const toggle = (i: number) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -148,6 +166,8 @@ export default function OutlineView({ projectId }: Props) {
         <h3 className={pageHeading}>大纲</h3>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      <CollapsibleDiagram chart={arcDiagram} title="三幕节奏" />
+      <CollapsibleDiagram chart={povTimeline} title="视点轮换" />
       <div className={chapterList}>{sections.map(renderChapter)}</div>
     </div>
   );

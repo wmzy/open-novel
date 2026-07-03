@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseOutlineMeta, defaultOutlineMeta } from '../shared/outline-meta';
 
 /**
  * 章节滚动摘要 + 状态追踪表管理。
@@ -449,6 +450,43 @@ export async function ensureContextArtifacts(
 
   // 4. P3: 清理异常文件（.degraded.md、过大正文移入 _discarded/）
   await cleanupAbnormalFiles(projectDir).catch(() => {});
+
+  // 5. outline-meta.json 兜底：缺失或格式错误时按已知章节数初始化
+  await ensureOutlineMeta(projectDir).catch(() => {});
+}
+
+const OUTLINE_META_FILE = 'outline-meta.json';
+
+/**
+ * outline-meta.json 兜底：缺失或格式错误时按已知章节数初始化。
+ * pov 全部留空（agent 在大纲/写作阶段填充）。
+ */
+async function ensureOutlineMeta(projectDir: string): Promise<void> {
+  const metaPath = path.join(projectDir, NOVEL_DIR, OUTLINE_META_FILE);
+
+  // 已存在且格式有效则不动
+  try {
+    const raw = await fs.readFile(metaPath, 'utf-8');
+    if (parseOutlineMeta(JSON.parse(raw))) return;
+  } catch {
+    // 文件不存在，继续初始化
+  }
+
+  // 推断章节数：从 chapters 目录数文件
+  let chapterCount = 20;
+  try {
+    const chaptersPath = path.join(projectDir, NOVEL_DIR, CHAPTERS_DIR);
+    const entries = await fs.readdir(chaptersPath);
+    const nums = entries
+      .map((f) => parseInt(f.match(/第(\d+)章\.md$/)?.[1] ?? '0', 10))
+      .filter((n) => n > 0);
+    if (nums.length > 0) chapterCount = Math.max(...nums, nums.length);
+  } catch {
+    // chapters 目录不存在，用默认 20
+  }
+
+  const meta = defaultOutlineMeta(chapterCount);
+  await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
 }
 
 /**

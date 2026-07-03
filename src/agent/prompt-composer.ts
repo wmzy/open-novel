@@ -28,7 +28,17 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
   outline: `创建详细的故事大纲，包括主要剧情节点、角色弧光与章节结构。将故事拆解成可驾驭的段落。
 
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-detailed 或 templates/outline-brief。以生成的脚手架为起点并加以打磨。
-大纲完成后，保存到 .novel/outline.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
+大纲完成后，保存到 .novel/outline.md。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
+\`\`\`json
+{
+  "actBreaks": [5, 15],
+  "chapters": [
+    { "chapter": 1, "pov": "林冲" },
+    { "chapter": 2, "pov": "林冲" }
+  ]
+}
+\`\`\`
+actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视点角色名。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
 
   scenes: `将大纲拆解为详细场景，包含节拍、情感弧光与节奏。规划每个场景的目的与关键时刻。
 
@@ -41,7 +51,7 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
 
 每写完一章后，你必须完成以下三件事以保持后续章节的一致性：
 (1) 为该章生成约 200 字的**语义摘要**，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。摘要必须包含：本章情节推进、角色状态变化（位置/情绪/获知新信息）、伏笔兑现或新增。**严禁复制正文原文段落**——摘要必须是你的概括重述，不是截取。
-(2) 更新 .novel/state.json——刷新每个在场角色的位置、情绪、新获知的信息（knows）与关系变化；推进时间线和 lastUpdatedChapter；设置 updatedAt。
+(2) 更新 .novel/state.json——刷新每个在场角色的位置（location）、情绪（emotion）、新获知的信息（knows）；**角色间关系变化必须写入 relationships 字段**（键=对方角色名，值=关系描述，如 \"孙二娘\": \"脆弱的盟友\"），不能留空——这是人物关系图的唯一数据源；推进时间线和 lastUpdatedChapter；设置 updatedAt。
 (3) 更新 .novel/foreshadow.json 的伏笔状态：本章埋设了某条伏笔（首次在正文中植入线索），将该伏笔的 status 从 "pending" 改为 "planted"；本章回收了某条伏笔（伏笔线索得到兑现/揭晓），将 status 改为 "resolved" 并填写 resolvedIn 为当前章号。同时同步 state.json 的 activeForeshadows 字段——收集所有 status 为 "planted" 的伏笔 ID 列表。
 
 写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。`,

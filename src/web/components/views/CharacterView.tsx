@@ -2,6 +2,9 @@ import { useMemo } from 'react';
 import { css } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
 import { parseSections } from './parseSections';
+import { useQuery } from '@tanstack/react-query';
+import { CollapsibleDiagram } from '../MermaidDiagram';
+import { buildRelationshipGraph } from '../../../shared/diagram-builders';
 import type { CSSProperties } from 'react';
 
 interface Props {
@@ -84,6 +87,18 @@ function detectRole(title: string): RoleStyle {
 
 export default function CharacterView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'characters', 'characters/profiles.md');
+
+  // 额外读取 state.json 获取角色关系数据
+  const { data: stateData } = useQuery({
+    queryKey: ['novel-file', projectId, 'state-json'],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('state.json')}`);
+      if (!res.ok) return null;
+      const wrapper = await res.json();
+      try { return JSON.parse(wrapper.content); } catch { return null; }
+    },
+  });
+  const relGraph = stateData?.characters ? buildRelationshipGraph(stateData.characters) : null;
   const [viewMode, setViewMode] = useViewMode();
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
@@ -105,6 +120,7 @@ export default function CharacterView({ projectId }: Props) {
         <h3 className={pageHeading}>角色</h3>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      <CollapsibleDiagram chart={relGraph} title="人物关系" />
       <div className={charGrid}>
         {sections.map((s, i) => {
           const role = detectRole(s.title);

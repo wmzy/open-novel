@@ -118,7 +118,7 @@ describe('API Integration', () => {
       });
       expect(res.ok).toBe(true);
       const data = await res.json();
-      expect(data.written.length).toBe(4);
+      expect(data.written.length).toBe(5);
       expect(fs.existsSync(path.join(novelDir, 'outline-detailed.md'))).toBe(true);
       expect(fs.existsSync(path.join(novelDir, 'scenes.md'))).toBe(true);
       expect(fs.existsSync(path.join(novelDir, 'characters', 'profiles.md'))).toBe(true);
