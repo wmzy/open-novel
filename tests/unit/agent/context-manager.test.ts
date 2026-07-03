@@ -235,5 +235,29 @@ describe('context-manager', () => {
       expect(summaries[0].summary.endsWith('…')).toBe(true);
       expect(summaries[0].summary.length).toBe(6 + 1 + 200 + 1);
     });
+
+    it('state.json 损坏（键含冒号）时自动修复', async () => {
+      const stateDir = path.join(dir, '.novel');
+      await fs.mkdir(stateDir, { recursive: true });
+      // 写入损坏的 JSON：relationships 键含冒号
+      const broken = `{\n  "characters": [],\n  "timeline": "test",\n  "activeForeshadows": [],\n  "lastUpdatedChapter": 5,\n  "updatedAt": "2026-07-03T00:00:00Z"\n}`;
+      await fs.writeFile(path.join(stateDir, 'state.json'), broken);
+      await ensureContextArtifacts(dir, new Set<string>());
+      const s = await getStateTable(dir);
+      expect(s.lastUpdatedChapter).toBe(5);
+      expect(s.timeline).toBe('test');
+    });
+
+    it('state.json 损坏（时间戳拆分）时自动修复', async () => {
+      const stateDir = path.join(dir, '.novel');
+      await fs.mkdir(stateDir, { recursive: true });
+      // 写入损坏的 JSON：时间戳被拆成 key:value 对
+      const broken = `{\n  "characters": [],\n  "timeline": "test",\n  "activeForeshadows": [],\n  "lastUpdatedChapter": 3,\n  "updatedAt": "2026-07-03T18": "00:00Z"\n}`;
+      await fs.writeFile(path.join(stateDir, 'state.json'), broken);
+      await ensureContextArtifacts(dir, new Set<string>());
+      const s = await getStateTable(dir);
+      expect(s.lastUpdatedChapter).toBe(3);
+      expect(s.updatedAt).toContain('2026-07-03');
+    });
   });
 });

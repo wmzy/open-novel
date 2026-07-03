@@ -361,6 +361,58 @@ export async function ensureContextArtifacts(
     }
   }
 
-  // 3. state.json 缺失时初始化
-  await initStateTable(projectDir).catch(() => {});
+  // 3. state.json 校验：损坏时尝试修复，无法修复则初始化
+  await repairOrInitState(projectDir).catch(() => {});
+}
+
+/**
+ * 校验 state.json：若 JSON 解析失败，尝试常见修复（键中冒号未转义、时间戳格式错误等）；
+ * 修复后仍无法解析则用已有角色档案重新初始化。
+ */
+async function repairOrInitState(projectDir: string): Promise<void> {
+  const statePath = path.join(projectDir, NOVEL_DIR, STATE_FILE);
+  let raw: string;
+  try {
+    raw = await fs.readFile(statePath, 'utf-8');
+  } catch {
+    await initStateTable(projectDir);
+    return;
+  }
+
+  // JSON 有效则无需处理
+  try {
+    JSON.parse(raw);
+    return;
+  } catch {
+    // 继续修复
+  }
+
+  let fixed = raw;
+  // 修复1：键值对中键含冒号 —— "林冲:text" → "林冲": "text"
+  // 约束：键不含引号/数字串（避免跨引号边界误匹配），值不含引号
+  fixed = fixed.replace(
+    /"([^"\n\d:]+?):([^"\n]+?)"(?=,|\s*\n|\s*})/g,
+    '"$1": "$2"',
+  );
+  // 修复2：时间戳被拆成 key:value 对（两种变体）
+  // "2026-07-03T00:00": "00Z" → "2026-07-03T00:00:00Z"
+  fixed = fixed.replace(
+    /"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})"\s*:\s*"(\d{2}Z)"/g,
+    '"$1:$2"',
+  );
+  // "2026-07-03T18": "00:00Z" → "2026-07-03T18:00:00Z"
+  fixed = fixed.replace(
+    /"(\d{4}-\d{2}-\d{2}T\d{2})"\s*:\s*"(\d{2}:\d{2}Z)"/g,
+    '"$1:$2"',
+  );
+
+  try {
+    const parsed = JSON.parse(fixed);
+    await fs.writeFile(statePath, JSON.stringify(parsed, null, 2), 'utf-8');
+    return;
+  } catch {
+    // 修复失败，用角色档案重新初始化
+  }
+
+  await initStateTable(projectDir);
 }
