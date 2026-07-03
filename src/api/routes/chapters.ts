@@ -13,17 +13,33 @@ export type ChapterStatus = (typeof CHAPTER_STATUSES)[number];
 
 const chaptersRouter = new Hono();
 
-/** 计算章节正文文件的绝对路径：{novelDir}/chapters/chapter-{N}.md */
+/**
+ * 计算章节正文文件的绝对路径。
+ * 主命名：第{N}章.md（SKILL 指导 agent 写的中文命名）。
+ * 兼容旧数据：chapter-{N}.md（早期英文约定）。
+ */
 function chapterFilePath(novelDir: string, num: number): string {
+  return path.join(novelDir, 'chapters', `第${num}章.md`);
+}
+
+/** 英文命名 fallback 路径（兼容旧数据）。 */
+function legacyChapterFilePath(novelDir: string, num: number): string {
   return path.join(novelDir, 'chapters', `chapter-${num}.md`);
 }
 
-/** 读取章节正文，文件不存在返回空串。 */
+/**
+ * 读取章节正文，文件不存在返回空串。
+ * 先尝试中文命名（agent 写的），再 fallback 英文命名（旧约定）。
+ */
 async function readChapterContent(novelDir: string, num: number): Promise<string> {
   try {
     return await fs.readFile(chapterFilePath(novelDir, num), 'utf-8');
   } catch {
-    return '';
+    try {
+      return await fs.readFile(legacyChapterFilePath(novelDir, num), 'utf-8');
+    } catch {
+      return '';
+    }
   }
 }
 
@@ -85,7 +101,7 @@ chaptersRouter.patch('/:num', async (c) => {
   if (Number.isNaN(num)) return c.json({ error: 'Invalid chapter number' }, 400);
   const body = await c.req.json();
 
-  // 正文落盘到 .novel/chapters/chapter-{N}.md（DB 不存正文列）
+  // 正文落盘到 .novel/chapters/第{N}章.md（DB 不存正文列）
   if (typeof body.content === 'string') {
     try {
       const novelDir = await resolveNovelDir(projectId);

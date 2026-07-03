@@ -243,7 +243,7 @@ runsRouter.get('/conversations/:id/messages', async (c) => {
     .where(eq(messages.conversationId, convId))
     .orderBy(messages.createdAt);
 
-  return c.json(msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.createdAt })));
+  return c.json(msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, events: m.events, artifacts: m.artifacts, createdAt: m.createdAt })));
 });
 
 // Retry a failed run

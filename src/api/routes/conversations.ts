@@ -62,13 +62,17 @@ conversationsRouter.post('/:id/messages', async (c) => {
   const existing = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
   if (existing.length === 0) return c.json({ error: 'Conversation not found' }, 404);
 
-  const { role, content } = body;
+  const { role, content, events, artifacts } = body;
   if (!role || typeof content !== 'string') {
     return c.json({ error: 'role and content are required' }, 400);
   }
 
   const msgId = generateId('msg_');
-  await db.insert(messages).values({ id: msgId, conversationId: convId, role, content });
+  await db.insert(messages).values({
+    id: msgId, conversationId: convId, role, content,
+    events: events ?? null,
+    artifacts: artifacts ?? null,
+  });
   return c.json({ id: msgId }, 201);
 });
 
@@ -82,7 +86,7 @@ conversationsRouter.get('/:id/messages', async (c) => {
     .where(eq(messages.conversationId, convId))
     .orderBy(messages.createdAt);
 
-  return c.json({ messages: msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, createdAt: m.createdAt })) });
+  return c.json({ messages: msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, events: m.events, artifacts: m.artifacts, createdAt: m.createdAt })) });
 });
 
 export default conversationsRouter;

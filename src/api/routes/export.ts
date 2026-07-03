@@ -6,6 +6,16 @@ import { db } from '../../db/drizzle';
 import { projects, chapters } from '../../db/schema';
 import { resolveNovelDir } from '../../shared/project-dir';
 
+/** 读取章节正文，优先中文命名（agent 写），fallback 英文命名（旧约定）。 */
+async function readChapterFile(novelDir: string, num: number): Promise<string> {
+  for (const name of [`第${num}章.md`, `chapter-${num}.md`]) {
+    try {
+      return await fs.readFile(path.join(novelDir, 'chapters', name), 'utf-8');
+    } catch { /* try next */ }
+  }
+  throw new Error(`chapter ${num} not found`);
+}
+
 const exportRouter = new Hono();
 
 // Export all chapters as a single markdown file
@@ -55,7 +65,7 @@ exportRouter.get('/markdown', async (c) => {
   // Chapters
   for (const ch of allChapters) {
     try {
-      const content = await fs.readFile(path.join(projectDir, 'chapters', `chapter-${ch.number}.md`), 'utf-8');
+      const content = await readChapterFile(projectDir, ch.number);
       parts.push(`## 第 ${ch.number} 章 ${ch.title || ''}\n\n${content}\n`);
     } catch { /* skip empty chapters */ }
   }
@@ -91,7 +101,7 @@ exportRouter.get('/text', async (c) => {
 
   for (const ch of allChapters) {
     try {
-      const content = await fs.readFile(path.join(projectDir, 'chapters', `chapter-${ch.number}.md`), 'utf-8');
+      const content = await readChapterFile(projectDir, ch.number);
       parts.push(`第 ${ch.number} 章 ${ch.title || ''}`);
       parts.push('-'.repeat(20));
       parts.push(content);

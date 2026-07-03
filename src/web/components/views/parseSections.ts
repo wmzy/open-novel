@@ -72,6 +72,16 @@ export function parseField(content: string): MdField | null {
   return { key, value };
 }
 
+/** 模板占位符检测：`{...}`、`未填写`、`{世界的物理环境描述}` 这类初始模板内容应视为未填写。 */
+const PLACEHOLDER_RE = /^\{[^}]*\}$/;
+export function isPlaceholder(value: string): boolean {
+  const v = value.trim();
+  if (!v) return true;
+  if (PLACEHOLDER_RE.test(v)) return true;
+  if (v === '未填写') return true;
+  return false;
+}
+
 /** 规整标题：去掉行尾的 ATX 闭合 `#`。 */
 function cleanTitle(raw: string): string {
   return raw.replace(/\s*#+\s*$/, '').trim();

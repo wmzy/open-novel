@@ -151,11 +151,19 @@ export async function syncFilesToDb(projectId: string, paths: Set<string>, proje
     if (!match) continue;
 
     const chapterNum = parseInt(match[1], 10);
-    const fullPath = path.join(projectDir, filePath);
+    // Agent (e.g. claude code) writes with absolute paths since its cwd is the
+    // project dir; path.join would double the prefix. Use the path as-is when absolute.
+    const fullPath = path.isAbsolute(filePath) ? filePath : path.join(projectDir, filePath);
 
     try {
       const content = await fs.readFile(fullPath, 'utf-8');
-      const wordCount = content.split(/\s+/).filter(Boolean).length;
+      // 中文小说按字符计数（剔除空白与 markdown 标记），
+      // 英文 fallback 仍按空格分词。
+      const stripped = content.replace(/^[#*>\-\[\]()!|]+\s*/gm, '').trim();
+      const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+      const wordCount = cjk > 0
+        ? cjk
+        : stripped.split(/\s+/).filter(Boolean).length;
 
       const existing = await db.select().from(chapters)
         .where(and(eq(chapters.projectId, projectId), eq(chapters.number, chapterNum)))

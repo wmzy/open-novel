@@ -43,6 +43,8 @@ export const messages = pgTable('messages', {
   conversationId: varchar('conversation_id', { length: 25 }).notNull().references(() => conversations.id, { onDelete: 'cascade' }),
   role: varchar('role', { length: 20 }).notNull(),
   content: varchar('content', { length: 100000 }).notNull(),
+  events: jsonb('events'),
+  artifacts: jsonb('artifacts'),
   createdAt: timestamp('created_at', { withTimezone: true }).default(sql`now()`).notNull(),
 });
 

@@ -15,6 +15,13 @@
       "when": 1782963534495,
       "tag": "0001_gifted_mister_fear",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783041828667,
+      "tag": "0002_eminent_big_bertha",
+      "breakpoints": true
     }
   ]
 }

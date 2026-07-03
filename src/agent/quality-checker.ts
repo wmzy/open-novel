@@ -651,8 +651,8 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
 /** 读取指定章节正文（依次尝试 chapter-N.md / 第N章.md），失败返回空串。导出供路由复用。 */
 export async function readChapter(projectDir: string, chapterNum: number): Promise<string> {
   const candidates = [
-    path.join(CHAPTERS_DIR, `chapter-${chapterNum}.md`),
     path.join(CHAPTERS_DIR, `第${chapterNum}章.md`),
+    path.join(CHAPTERS_DIR, `chapter-${chapterNum}.md`),
   ];
   for (const rel of candidates) {
     const content = await readNovelFile(projectDir, rel);

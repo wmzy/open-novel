@@ -50,7 +50,7 @@ describe('Rewrite & Chapter content API', () => {
 
     // 验证确实写入磁盘
     const onDisk = await fs.readFile(
-      path.join(projectDir, '.novel', 'chapters', 'chapter-1.md'),
+      path.join(projectDir, '.novel', 'chapters', '第1章.md'),
       'utf-8',
     );
     expect(onDisk).toBe(content);

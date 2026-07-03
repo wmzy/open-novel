@@ -1,10 +1,13 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { css } from '@linaria/core';
+import { isPlaceholder, parseSections } from './parseSections';
 import type { MdField, MdSection } from './parseSections';
 
 // 重新导出类型，方便视图统一引用
 export type { MdField, MdSection, MdSubsection, ParsedDoc } from './parseSections';
+// isPlaceholder 也重新导出，供各视图判断字段是否为模板占位符
+export { isPlaceholder } from './parseSections';
 
 /** 通用：拉取某个 .novel 文件原文。queryKey 保持 `['novel-file', projectId, fileKey]`，与 SSE 失效逻辑一致。 */
 export function useNovelFile(projectId: string, fileKey: string, path: string) {
@@ -134,7 +137,7 @@ export function renderBlock(block: BlockLike, emphasize?: (key: string) => CSSPr
       {block.fields.map((f, i) => (
         <div key={`f${i}`} className={fieldInline}>
           <span className={fieldKey}>{f.key}：</span>
-          {f.value ? (
+          {!isPlaceholder(f.value) ? (
             <span style={emphasize?.(f.key)}>{f.value}</span>
           ) : (
             <span className={fieldValEmpty}>未填写</span>
@@ -170,15 +173,17 @@ export function RawFallback({ text }: { text: string }) {
   );
 }
 
-/** 判断分组是否完全为空（无任何可渲染内容）。 */
+/** 判断分组是否完全为空（无任何可渲染内容，或内容全是模板占位符）。 */
 export function isSectionEmpty(s: MdSection): boolean {
   const subEmpty = (sub: MdSection['subsections'][number]) =>
-    sub.fields.length === 0 && sub.items.length === 0 && sub.ordered.length === 0 && sub.body.length === 0;
-  return (
-    s.fields.length === 0 &&
-    s.items.length === 0 &&
-    s.ordered.length === 0 &&
-    s.body.length === 0 &&
-    s.subsections.every(subEmpty)
-  );
+    isEmptyBlock(sub);
+  return isEmptyBlock(s) && s.subsections.every(subEmpty);
+}
+
+function isEmptyBlock(b: { fields: MdField[]; items: string[]; ordered: string[]; body: string[] }): boolean {
+  const fieldsEmpty = b.fields.length === 0 || b.fields.every((f) => isPlaceholder(f.value));
+  const itemsEmpty = b.items.length === 0 || b.items.every((it) => isPlaceholder(it));
+  const orderedEmpty = b.ordered.length === 0 || b.ordered.every((o) => isPlaceholder(o));
+  const bodyEmpty = b.body.length === 0 || b.body.every((p) => isPlaceholder(p));
+  return fieldsEmpty && itemsEmpty && orderedEmpty && bodyEmpty;
 }

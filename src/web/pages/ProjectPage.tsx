@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useState, useEffect, useCallback } from 'react';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { css } from '@linaria/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,6 +19,7 @@ import OutlineView from '@/web/components/views/OutlineView';
 import SceneView from '@/web/components/views/SceneView';
 import ForeshadowView from '@/web/components/views/ForeshadowView';
 import WuxiaView from '@/web/components/views/WuxiaView';
+import WritingView from '@/web/components/views/WritingView';
 
 const layout = css`
   display: flex;
@@ -115,7 +116,7 @@ const rewriteSummary = css`
   &:hover { color: var(--haze-color-text); }
 `;
 
-function ViewRouter({ activeView, projectId }: { activeView: string; projectId: string }) {
+function ViewRouter({ activeView, projectId, onViewChange }: { activeView: string; projectId: string; onViewChange: (view: string) => void }) {
   if (activeView === 'dashboard') return <DashboardView projectId={projectId} />;
   if (activeView === 'concept') return <ConceptView projectId={projectId} />;
   if (activeView === 'world') return <WorldView projectId={projectId} />;
@@ -124,6 +125,7 @@ function ViewRouter({ activeView, projectId }: { activeView: string; projectId: 
   if (activeView === 'scenes') return <SceneView projectId={projectId} />;
   if (activeView === 'foreshadow') return <ForeshadowView projectId={projectId} />;
   if (activeView === 'wuxia') return <WuxiaView projectId={projectId} />;
+  if (activeView === 'writing') return <WritingView projectId={projectId} onViewChange={onViewChange} />;
   if (activeView.startsWith('chapter-')) {
     const num = parseInt(activeView.replace('chapter-', ''), 10);
     return (
@@ -147,7 +149,12 @@ function ViewRouter({ activeView, projectId }: { activeView: string; projectId: 
 
 export default function ProjectPage() {
   const { id } = useParams<{ id: string }>();
-  const [activeView, setActiveView] = useState('dashboard');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeView = searchParams.get('view') || 'dashboard';
+  const setActiveView = useCallback((view: string) => {
+    // dashboard 是默认视图，不写入 URL 保持地址干净
+    setSearchParams(view === 'dashboard' ? {} : { view }, { replace: true });
+  }, [setSearchParams]);
   const [showPreview, setShowPreview] = useState(false);
   const [previewFile, setPreviewFile] = useState<string | null>(null);
   const { readFile, loading: previewLoading } = useFilePreview(id!);
@@ -341,7 +348,7 @@ export default function ProjectPage() {
           </div>
         </div>
         <div className={content}>
-          <ViewRouter activeView={activeView} projectId={id!} />
+          <ViewRouter activeView={activeView} projectId={id!} onViewChange={handleViewChange} />
         </div>
       </div>
       {showPreview && (
