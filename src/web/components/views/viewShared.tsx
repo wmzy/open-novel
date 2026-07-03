@@ -1,6 +1,9 @@
 import type { CSSProperties, ReactNode } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { css } from '@linaria/core';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { isPlaceholder, parseSections } from './parseSections';
 import type { MdField, MdSection } from './parseSections';
 
@@ -102,6 +105,136 @@ export const bodyText = css`
   &:last-child { margin-bottom: 0; }
 `;
 
+// ── Markdown 渲染 / 源码切换 ──────────────────────────────────────────
+
+/** 视图模式：'md' 渲染 Markdown，'source' 显示源码。 */
+export type ViewMode = 'md' | 'source';
+
+/** 视图头部行：标题 + 模式切换按钮。 */
+export const viewHeaderRow = css`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 1.25rem;
+`;
+
+/** 模式切换按钮组。 */
+export const modeToggle = css`
+  display: inline-flex;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 7px;
+  overflow: hidden;
+  flex-shrink: 0;
+`;
+
+/** 单个模式按钮。 */
+export const modeBtn = css`
+  padding: 0.28rem 0.7rem;
+  font-size: 0.78rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--haze-color-text-secondary);
+  transition: background 0.12s, color 0.12s;
+  &:hover { background: var(--haze-color-bg-secondary); }
+`;
+
+/** 激活态模式按钮。 */
+export const modeBtnActive = css`
+  background: var(--haze-color-primary);
+  color: white;
+  &:hover { background: var(--haze-color-primary); }
+`;
+
+/** 卡片内 Markdown 渲染区。 */
+export const markdownBody = css`
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--haze-color-text);
+
+  & > *:first-child { margin-top: 0; }
+  & > *:last-child { margin-bottom: 0; }
+
+  & p { margin: 0 0 0.5rem; }
+  & ul, & ol { margin: 0.25rem 0 0.5rem; padding-left: 1.3rem; }
+  & li { margin-bottom: 0.2rem; }
+  & h1, & h2, & h3, & h4, & h5, & h6 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin: 0.6rem 0 0.3rem;
+    color: var(--haze-color-text);
+  }
+  & h1 { font-size: 1rem; }
+  & h2 { font-size: 0.95rem; }
+  & blockquote {
+    margin: 0.4rem 0;
+    padding: 0.3rem 0.7rem;
+    border-left: 3px solid var(--haze-color-border);
+    color: var(--haze-color-text-secondary);
+    background: var(--haze-color-bg-secondary);
+    border-radius: 0 4px 4px 0;
+  }
+  & code {
+    font-family: var(--haze-font-mono, monospace);
+    font-size: 0.82rem;
+    background: var(--haze-color-bg-secondary);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+  }
+  & pre {
+    margin: 0.4rem 0;
+    padding: 0.6rem;
+    background: var(--haze-color-bg-secondary);
+    border-radius: 6px;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    & code { background: none; padding: 0; }
+  }
+  & table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.4rem 0;
+    font-size: 0.82rem;
+    & th, & td {
+      border: 1px solid var(--haze-color-border);
+      padding: 0.35rem 0.5rem;
+      text-align: left;
+    }
+    & th { background: var(--haze-color-bg-secondary); font-weight: 600; }
+  }
+  & hr {
+    border: none;
+    border-top: 1px solid var(--haze-color-border);
+    margin: 0.6rem 0;
+  }
+  & strong { font-weight: 600; }
+  & a { color: var(--haze-color-primary); text-decoration: none; }
+`;
+
+/** 卡片内源码显示区。 */
+export const sourcePre = css`
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  background: var(--haze-color-bg-secondary);
+  border-radius: 6px;
+  font-family: var(--haze-font-mono, monospace);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  color: var(--haze-color-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+`;
+
+/** 卡片内空内容内联占位。 */
+export const emptyInline = css`
+  font-size: 0.8rem;
+  color: var(--haze-color-text-secondary);
+  opacity: 0.6;
+  font-style: italic;
+`;
+
 interface EmptyStateProps {
   /** 提示语，例如"尚未创建角色"。 */
   message: string;
@@ -170,6 +303,60 @@ export function RawFallback({ text }: { text: string }) {
         {text.trim()}
       </pre>
     </div>
+  );
+}
+
+/**
+ * 模式切换工具栏。
+ * 放在视图标题右侧，点击在 Markdown 渲染和源码之间切换。
+ */
+export function ViewToolbar({
+  mode,
+  onChange,
+}: {
+  mode: ViewMode;
+  onChange: (mode: ViewMode) => void;
+}) {
+  return (
+    <div className={modeToggle}>
+      <button
+        type="button"
+        className={mode === 'md' ? modeBtn + ' ' + modeBtnActive : modeBtn}
+        onClick={() => onChange('md')}
+      >
+        预览
+      </button>
+      <button
+        type="button"
+        className={mode === 'source' ? modeBtn + ' ' + modeBtnActive : modeBtn}
+        onClick={() => onChange('source')}
+      >
+        源码
+      </button>
+    </div>
+  );
+}
+
+/** useViewMode：默认 'md'，返回 [mode, setMode]。 */
+export function useViewMode(): [ViewMode, (m: ViewMode) => void] {
+  return useState<ViewMode>('md');
+}
+
+/**
+ * 卡片内容：根据 mode 渲染 Markdown 或源码。
+ * `rawMd` 为空时显示占位提示。
+ */
+export function CardContent({ rawMd, mode }: { rawMd: string; mode: ViewMode }) {
+  if (!rawMd || !rawMd.trim()) {
+    return <span className={emptyInline}>暂无内容</span>;
+  }
+  if (mode === 'source') {
+    return <pre className={sourcePre}>{rawMd}</pre>;
+  }
+  return (
+    <Markdown remarkPlugins={[remarkGfm]} className={markdownBody}>
+      {rawMd}
+    </Markdown>
   );
 }
 

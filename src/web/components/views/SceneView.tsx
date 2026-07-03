@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, renderBlock } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
+import type { ViewMode } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection, MdSubsection } from './parseSections';
 
@@ -75,7 +76,7 @@ function stripScenePrefix(title: string): string {
   return (m ? m[1] : title).trim();
 }
 
-function renderSceneCard(sub: MdSubsection, keyPrefix: string, index: number) {
+function renderSceneCard(sub: MdSubsection, keyPrefix: string, index: number, viewMode: ViewMode) {
   const active = isActive(sub.title);
   const color = active ? ACTIVE_COLOR : PASSIVE_COLOR;
   const cardStyle: CSSProperties = { borderLeft: `3px solid ${color}` };
@@ -87,13 +88,14 @@ function renderSceneCard(sub: MdSubsection, keyPrefix: string, index: number) {
         </span>
         <span className={sceneTitle}>{stripScenePrefix(sub.title)}</span>
       </div>
-      {renderBlock(sub)}
+      <CardContent rawMd={sub.rawMd} mode={viewMode} />
     </div>
   );
 }
 
 export default function SceneView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'scenes', 'scenes.md');
+  const [viewMode, setViewMode] = useViewMode();
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -113,12 +115,12 @@ export default function SceneView({ projectId }: Props) {
       <div className={chapterGroupTitle}>{s.title}</div>
       {s.subsections.length > 0 ? (
         <div className={sceneGrid}>
-          {s.subsections.map((sub, j) => renderSceneCard(sub, `sub-${i}`, j))}
+          {s.subsections.map((sub, j) => renderSceneCard(sub, `sub-${i}`, j, viewMode))}
         </div>
       ) : (
-        // 没有子场景时，直接渲染分组字段，避免内容丢失
+        // 没有子场景时，直接渲染分组全部内容
         <div className={sceneGrid}>
-          <div className={card}>{renderBlock(s)}</div>
+          <div className={card}><CardContent rawMd={s.fullRawMd} mode={viewMode} /></div>
         </div>
       )}
     </div>
@@ -126,7 +128,10 @@ export default function SceneView({ projectId }: Props) {
 
   return (
     <div>
-      <h3 className={pageHeading}>场景</h3>
+      <div className={viewHeaderRow}>
+        <h3 className={pageHeading}>场景</h3>
+        <ViewToolbar mode={viewMode} onChange={setViewMode} />
+      </div>
       <div className={chapterGroupList}>{sections.map(renderChapter)}</div>
     </div>
   );

@@ -14,7 +14,8 @@
  *   ### 子分组标题        ← 场景文件用到的子卡片
  *   - 字段：值
  *
- * 这里把它们解析成结构化数据，供各视图渲染为卡片。仅升级展示层，
+ * 这里把它们解析成结构化数据，供各视图渲染为卡片。同时保留每段的原始 Markdown
+ * （`rawMd` / `fullRawMd`），供 Markdown 渲染模式使用。仅升级展示层，
  * 不改变磁盘上的 Markdown 存储格式。
  */
 
@@ -34,6 +35,8 @@ interface ContentBlock {
   items: string[];
   /** 有序列表（`1.` / `1)` / `1、`）项。 */
   ordered: string[];
+  /** 本块直接内容的原始 Markdown（不含标题行，不含子分组）。 */
+  rawMd: string;
 }
 
 /** 子分组：`### 标题` 块（场景文件中的单个场景）。 */
@@ -45,6 +48,8 @@ export interface MdSubsection extends ContentBlock {
 export interface MdSection extends ContentBlock {
   title: string;
   subsections: MdSubsection[];
+  /** 完整 Markdown（含子分组标题与内容），供整段渲染使用。 */
+  fullRawMd: string;
 }
 
 /** 解析后的文档：标题 + 一组分组。 */
@@ -87,10 +92,6 @@ function cleanTitle(raw: string): string {
   return raw.replace(/\s*#+\s*$/, '').trim();
 }
 
-function newBlock<T extends ContentBlock>(base: T): T {
-  return base;
-}
-
 /**
  * 把 Markdown 文本解析成分组结构。
  *
@@ -98,26 +99,55 @@ function newBlock<T extends ContentBlock>(base: T): T {
  * - `##` 开启一个新分组；其下的列表/段落归入该分组。
  * - `###`（及更深）作为子分组归入当前分组；其下的内容归入子分组。
  * - 空行分隔段落；连续的纯文本行合并为同一段。
+ * - `rawMd` 保留每块直接内容的原始 Markdown；`fullRawMd` 含子分组完整内容。
  */
 export function parseSections(md: string): ParsedDoc {
   const lines = md.replace(/\r\n/g, '\n').split('\n');
   const sections: MdSection[] = [];
-  // 在出现任何 `##` 之前的内容会被丢弃，用一个空块兜底避免 null 检查。
-  const sink: ContentBlock = newBlock({ body: [], fields: [], items: [], ordered: [] });
 
   let docTitle = '';
   let current: MdSection | null = null;
   let currentSub: MdSubsection | null = null;
   let para: string[] = [];
 
-  /** 当前内容归入的目标：优先子分组，其次分组，否则丢弃。 */
-  const target = (): ContentBlock => currentSub ?? current ?? sink;
+  // 原始 Markdown 行追踪
+  let sectionRaw: string[] = [];
+  let subRaw: string[] = [];
+
+  /** 当前内容归入的目标：优先子分组，其次分组。 */
+  const target = (): ContentBlock | null => currentSub ?? current;
 
   const flushPara = () => {
     if (para.length === 0) return;
     const text = para.join(' ').trim();
     para = [];
-    if (text) target().body.push(text);
+    if (text) target()?.body.push(text);
+  };
+
+  /** 把当前子分组的 subRaw 存入其 rawMd。 */
+  const finalizeSub = () => {
+    if (currentSub) {
+      currentSub.rawMd = subRaw.join('\n').trim();
+    }
+    subRaw = [];
+  };
+
+  /** 把当前分组的 sectionRaw 存入其 rawMd 和 fullRawMd。 */
+  const finalizeSection = () => {
+    finalizeSub();
+    if (current) {
+      const direct = sectionRaw.join('\n').trim();
+      current.rawMd = direct;
+      const parts: string[] = [];
+      if (direct) parts.push(direct);
+      for (const sub of current.subsections) {
+        const subContent = sub.rawMd.trim();
+        if (subContent) parts.push(`### ${sub.title}\n${subContent}`);
+        else parts.push(`### ${sub.title}`);
+      }
+      current.fullRawMd = parts.join('\n\n');
+    }
+    sectionRaw = [];
   };
 
   for (const raw of lines) {
@@ -126,6 +156,9 @@ export function parseSections(md: string): ParsedDoc {
 
     if (trimmed === '') {
       flushPara();
+      // 空行保留到原始 Markdown（段落分隔用）
+      if (currentSub) subRaw.push('');
+      else if (current) sectionRaw.push('');
       continue;
     }
 
@@ -137,34 +170,51 @@ export function parseSections(md: string): ParsedDoc {
       if (level === 1) {
         if (!docTitle) docTitle = title;
       } else if (level === 2) {
+        finalizeSection();
         currentSub = null;
-        current = newBlock({
+        current = {
           title,
           body: [],
           fields: [],
           items: [],
           ordered: [],
           subsections: [],
-        });
+          rawMd: '',
+          fullRawMd: '',
+        };
         sections.push(current);
       } else {
         // level >= 3：作为子分组。若尚无分组则隐式建一个。
+        finalizeSub();
         if (!current) {
-          current = newBlock({
+          current = {
             title: '',
             body: [],
             fields: [],
             items: [],
             ordered: [],
             subsections: [],
-          });
+            rawMd: '',
+            fullRawMd: '',
+          };
           sections.push(current);
         }
-        currentSub = newBlock({ title, body: [], fields: [], items: [], ordered: [] });
+        currentSub = {
+          title,
+          body: [],
+          fields: [],
+          items: [],
+          ordered: [],
+          rawMd: '',
+        };
         current.subsections.push(currentSub);
       }
       continue;
     }
+
+    // 非标题内容行：先记录到原始 Markdown 缓冲
+    if (currentSub) subRaw.push(line);
+    else if (current) sectionRaw.push(line);
 
     const bullet = line.match(BULLET_RE);
     if (bullet) {
@@ -172,15 +222,17 @@ export function parseSections(md: string): ParsedDoc {
       const content = bullet[1].trim();
       const field = parseField(content);
       const t = target();
-      if (field) t.fields.push(field);
-      else t.items.push(content);
+      if (t) {
+        if (field) t.fields.push(field);
+        else t.items.push(content);
+      }
       continue;
     }
 
     const ordered = line.match(ORDERED_RE);
     if (ordered) {
       flushPara();
-      target().ordered.push(ordered[1].trim());
+      target()?.ordered.push(ordered[1].trim());
       continue;
     }
 
@@ -188,6 +240,7 @@ export function parseSections(md: string): ParsedDoc {
     para.push(trimmed);
   }
   flushPara();
+  finalizeSection();
 
   return { title: docTitle, sections };
 }

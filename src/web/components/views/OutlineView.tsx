@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
+import type { ViewMode } from './viewShared';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, renderBlock } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 
@@ -93,6 +94,7 @@ function fieldEmphasis(key: string): CSSProperties | undefined {
 
 export default function OutlineView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'outline', 'outline-detailed.md');
+  const [viewMode, setViewMode] = useViewMode();
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -133,16 +135,7 @@ export default function OutlineView({ projectId }: Props) {
         </button>
         {isOpen && (
           <div className={chapterBody}>
-            {renderBlock(
-              {
-                // 头部已展示"标题"，正文不再重复
-                fields: s.fields.filter((f) => f.key !== '标题'),
-                items: s.items,
-                ordered: s.ordered,
-                body: s.body,
-              },
-              fieldEmphasis,
-            )}
+            <CardContent rawMd={s.fullRawMd} mode={viewMode} />
           </div>
         )}
       </div>
@@ -151,7 +144,10 @@ export default function OutlineView({ projectId }: Props) {
 
   return (
     <div>
-      <h3 className={pageHeading}>大纲</h3>
+      <div className={viewHeaderRow}>
+        <h3 className={pageHeading}>大纲</h3>
+        <ViewToolbar mode={viewMode} onChange={setViewMode} />
+      </div>
       <div className={chapterList}>{sections.map(renderChapter)}</div>
     </div>
   );

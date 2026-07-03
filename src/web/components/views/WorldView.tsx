@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, renderBlock, isSectionEmpty } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 
@@ -46,6 +46,7 @@ function colorFor(title: string, fallbackIndex: number): string {
 
 export default function WorldView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'world', 'world-building.md');
+  const [viewMode, setViewMode] = useViewMode();
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -70,7 +71,7 @@ export default function WorldView({ projectId }: Props) {
         {empty ? (
           <div className={emptyValue}>暂无内容，在聊天面板补充 /world</div>
         ) : (
-          renderBlock(s)
+          <CardContent rawMd={s.fullRawMd} mode={viewMode} />
         )}
       </div>
     );
@@ -78,7 +79,10 @@ export default function WorldView({ projectId }: Props) {
 
   return (
     <div>
-      <h3 className={pageHeading}>世界观</h3>
+      <div className={viewHeaderRow}>
+        <h3 className={pageHeading}>世界观</h3>
+        <ViewToolbar mode={viewMode} onChange={setViewMode} />
+      </div>
       <div className={worldGrid}>{sections.map(renderCategory)}</div>
     </div>
   );

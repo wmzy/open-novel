@@ -1,14 +1,6 @@
 import { useMemo } from 'react';
 import { css } from '@linaria/core';
-import {
-  useNovelFile,
-  EmptyState,
-  loadingWrap,
-  pageHeading,
-  card,
-  cardTitle,
-  renderBlock,
-} from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 
@@ -88,6 +80,7 @@ function isHighlight(title: string): boolean {
 
 export default function ConceptView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'concept', 'concept.md');
+  const [viewMode, setViewMode] = useViewMode();
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -127,7 +120,7 @@ export default function ConceptView({ projectId }: Props) {
             <p className={loglineText} style={{ opacity: 0.55, fontWeight: 400 }}>暂未填写</p>
           )
         ) : (
-          renderBlock(s)
+          <CardContent rawMd={s.fullRawMd} mode={viewMode} />
         )}
       </div>
     );
@@ -135,7 +128,10 @@ export default function ConceptView({ projectId }: Props) {
 
   return (
     <div>
-      <h3 className={pageHeading}>故事概念</h3>
+      <div className={viewHeaderRow}>
+        <h3 className={pageHeading}>故事概念</h3>
+        <ViewToolbar mode={viewMode} onChange={setViewMode} />
+      </div>
       <div className={conceptGrid}>{sections.map(renderElement)}</div>
     </div>
   );

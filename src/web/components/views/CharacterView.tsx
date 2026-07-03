@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, renderBlock } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
 import { parseSections } from './parseSections';
 import type { CSSProperties } from 'react';
 
@@ -61,8 +61,7 @@ const subTitle = css`
   border-bottom: 1px dashed var(--haze-color-border);
 `;
 
-/** 需要强调的关键字段（性格等核心特征 + 驱动冲突的动机类字段）。 */
-const EMPHASIZED_KEYS = new Set(['性格', '目标', '冲突', '动机', '弱点', '后果']);
+/** 需要强调的关键字段已移除：markdown 渲染模式下不再做逐字段着色。 */
 
 type RoleKind = 'hero' | 'villain' | 'support';
 
@@ -85,6 +84,7 @@ function detectRole(title: string): RoleStyle {
 
 export default function CharacterView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'characters', 'characters/profiles.md');
+  const [viewMode, setViewMode] = useViewMode();
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -101,26 +101,19 @@ export default function CharacterView({ projectId }: Props) {
 
   return (
     <div>
-      <h3 className={pageHeading}>角色</h3>
+      <div className={viewHeaderRow}>
+        <h3 className={pageHeading}>角色</h3>
+        <ViewToolbar mode={viewMode} onChange={setViewMode} />
+      </div>
       <div className={charGrid}>
         {sections.map((s, i) => {
           const role = detectRole(s.title);
           // 从标题提取角色名："一、林冲（主角）" → "林冲"
           const titleName = s.title.replace(/^[一二三四五六七八九十\d]+[、.)\s]+/, '').replace(/[（(].*$/, '').trim();
           const name = s.fields.find((f) => f.key === '姓名')?.value || titleName;
-          // 头部展示姓名，因此字段区不再重复"姓名"
-          const rest = {
-            fields: s.fields.filter((f) => f.key !== '姓名'),
-            items: s.items,
-            ordered: s.ordered,
-            body: s.body,
-          };
           const cardStyle: CSSProperties = { borderLeft: `3px solid ${role.color}` };
-          // 关键字段用对应角色色高亮
-          const emphasize = (key: string): CSSProperties | undefined =>
-            EMPHASIZED_KEYS.has(key) ? { color: role.color, fontWeight: 500 } : undefined;
 
-          const hasDirect = rest.fields.length > 0 || rest.items.length > 0 || rest.body.length > 0 || rest.ordered.length > 0;
+          const hasDirect = !!s.rawMd.trim();
           const hasSubs = s.subsections.length > 0;
 
           return (
@@ -132,11 +125,11 @@ export default function CharacterView({ projectId }: Props) {
               <div className={charFields}>
                 {hasDirect || hasSubs ? (
                   <>
-                    {renderBlock(rest, emphasize)}
+                    {hasDirect && <CardContent rawMd={s.rawMd} mode={viewMode} />}
                     {s.subsections.map((sub, j) => (
                       <div key={`sub${j}`}>
                         <div className={subTitle}>{sub.title}</div>
-                        {renderBlock(sub, emphasize)}
+                        <CardContent rawMd={sub.rawMd} mode={viewMode} />
                       </div>
                     ))}
                   </>
