@@ -8,8 +8,11 @@ import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
-import type { AgentEvent } from '../../agent/types';
+import { detectAiPatterns, detectDegradation } from '../../agent/quality-checker';
+import type { AgentEvent, StreamEvent } from '../../agent/types';
 import { ensureContextArtifacts } from '../../agent/context-manager';
+import { readFile, rename } from 'node:fs/promises';
+import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
 import { config } from '../../config';
@@ -17,6 +20,96 @@ import { db } from '../../db/drizzle';
 import { conversations, messages, runs as runsTable } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { eq } from 'drizzle-orm';
+
+// ===== 流层 watchdog 配置 =====
+/** 滑动窗口大小（字符数）。窗口内统计 2-gram 重复率。 */
+const WATCHDOG_WINDOW_SIZE = 2000;
+
+// ===== 写后质检门禁阈值 =====
+const QUALITY_REJECT_SCORE = 60;
+const QUALITY_WARN_SCORE = 30;
+
+// ===== 字数校验配置 =====
+const TARGET_WORDS = 3500;
+const WORD_DEVIATION_THRESHOLD = 0.5;
+
+/** 章节正文文件名（中英文命名，排除摘要/退化文件）。返回章节号或 null。 */
+function isChapterBody(p: string): number | null {
+  const basename = path.basename(p);
+  if (basename.includes('.summary.') || basename.includes('.degraded.')) return null;
+  const cn = basename.match(/^第(\d+)章\.md$/);
+  if (cn) return parseInt(cn[1], 10);
+  const en = basename.match(/^chapter-(\d+)\.md$/i);
+  if (en) return parseInt(en[1], 10);
+  return null;
+}
+
+/** 将 writtenPath 解析为绝对路径。 */
+function resolveWrittenPath(projectDir: string, p: string): string {
+  return path.isAbsolute(p) ? p : path.join(projectDir, p);
+}
+
+/** 写后质检门禁：对新章节正文跑 detectAiPatterns，退化分高时归档并通知前端。 */
+async function qualityGateCheck(
+  run: ReturnType<typeof createRun>,
+  projectDir: string,
+  writtenPaths: Set<string>,
+): Promise<void> {
+  for (const p of writtenPaths) {
+    const chapterNum = isChapterBody(p);
+    if (chapterNum === null) continue;
+
+    const fullPath = resolveWrittenPath(projectDir, p);
+    let content: string;
+    try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
+
+    const report = detectAiPatterns(content);
+    if (report.score >= QUALITY_REJECT_SCORE) {
+      // 退化严重：归档为 .degraded.md，通知前端
+      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch {}
+      emitEvent(run, 'agent', {
+        type: 'quality-rejected',
+        chapter: chapterNum,
+        score: report.score,
+        topIssues: report.issues.slice(0, 3).map((i) => i.suggestion),
+      });
+    } else if (report.score >= QUALITY_WARN_SCORE) {
+      emitEvent(run, 'agent', {
+        type: 'quality-warning',
+        chapter: chapterNum,
+        score: report.score,
+      });
+    }
+  }
+}
+
+/** 字数校验：对新章节统计 CJK 字数，偏差超阈值时通知前端。 */
+async function wordCountCheck(
+  run: ReturnType<typeof createRun>,
+  projectDir: string,
+  writtenPaths: Set<string>,
+): Promise<void> {
+  for (const p of writtenPaths) {
+    const chapterNum = isChapterBody(p);
+    if (chapterNum === null) continue;
+
+    const fullPath = resolveWrittenPath(projectDir, p);
+    let content: string;
+    try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
+
+    const cjkCount = [...content].filter((c) => c >= '\u4e00' && c <= '\u9fff').length;
+    const deviation = Math.abs(cjkCount - TARGET_WORDS) / TARGET_WORDS;
+    if (deviation > WORD_DEVIATION_THRESHOLD) {
+      emitEvent(run, 'agent', {
+        type: 'word-count-warning',
+        chapter: chapterNum,
+        wordCount: cjkCount,
+        target: TARGET_WORDS,
+        deviation: Math.round(deviation * 100),
+      });
+    }
+  }
+}
 
 /** 从 agent 子进程 stderr 中脱敏常见凭证模式，避免泄露到前端。 */
 const SECRET_PATTERNS: Array<[RegExp, string]> = [
@@ -158,9 +251,34 @@ runsRouter.post('/', async (c) => {
       child.stdin.end();
     }
   };
+  // P1-a: 流层 watchdog — 累积 text_delta 做重复率检测，退化时自动 kill
+  let watchdogBuffer = '';
+  let watchdogTriggered = false;
+  const emitWithWatchdog = (event: StreamEvent) => {
+    if (event.type === 'text_delta' && typeof event.delta === 'string') {
+      if (watchdogTriggered) return;
+      watchdogBuffer = (watchdogBuffer + event.delta).slice(-WATCHDOG_WINDOW_SIZE);
+      if (watchdogBuffer.length >= WATCHDOG_WINDOW_SIZE) {
+        const result = detectDegradation(watchdogBuffer);
+        if (result.detected) {
+          watchdogTriggered = true;
+          emitEvent(run, 'agent', {
+            type: 'degradation',
+            phrase: result.repeatedPhrase,
+            count: result.count,
+            ratio: Math.round(result.ratio * 100),
+          });
+          cancelRun(run);
+          return;
+        }
+      }
+    }
+    emitEvent(run, 'agent', event);
+  };
+
   const handler = def.streamFormat === 'claude-stream-json'
-    ? createClaudeStreamHandler((event) => emitEvent(run, 'agent', event), onStreamComplete)
-    : createJsonEventHandler((event) => emitEvent(run, 'agent', event));
+    ? createClaudeStreamHandler(emitWithWatchdog, onStreamComplete)
+    : createJsonEventHandler(emitWithWatchdog);
 
   child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
   child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
@@ -183,7 +301,7 @@ runsRouter.post('/', async (c) => {
       .map((e) => e.data as Record<string, unknown>);
     const writtenPaths = collectWrittenPaths(agentEvents);
 
-    // Emit artifact summary event BEFORE finishRun (which clears clients)
+    // Emit artifact summary event
     if (writtenPaths.size > 0) {
       emitEvent(run, 'artifacts', {
         count: writtenPaths.size,
@@ -191,7 +309,7 @@ runsRouter.post('/', async (c) => {
       });
     }
 
-    finishRun(run, code === 0 ? 'succeeded' : 'failed');
+    // P0: 以下所有收尾操作完成后再 finishRun — 'end' 事件 = 管道完全收尾
 
     // Persist assistant message (authoritative — frontend no longer persists).
     // Even if the SSE client disconnected, the message is durably stored here.
@@ -209,10 +327,20 @@ runsRouter.post('/', async (c) => {
       }
     }
 
-    // Sync file changes back to DB and create snapshot
+    // Sync file changes back to DB
     const projectDir = await resolveProjectDir(projectId);
     if (writtenPaths.size > 0) {
       await syncFilesToDb(projectId, writtenPaths, projectDir).catch(() => {});
+    }
+
+    // P1-b: 写后质检门禁 — 退化分高的章节自动归档为 .degraded.md
+    if (code === 0 && writtenPaths.size > 0) {
+      await qualityGateCheck(run, projectDir, writtenPaths).catch(() => {});
+    }
+
+    // P2: 字数校验 — 偏差超阈值的章节通知前端
+    if (code === 0 && writtenPaths.size > 0) {
+      await wordCountCheck(run, projectDir, writtenPaths).catch(() => {});
     }
 
     // 兜底：补全缺失的章节摘要与状态表（仅写作成功时）
@@ -225,9 +353,12 @@ runsRouter.post('/', async (c) => {
 
     // Update run record
     await db.update(runsTable).set({
-      status: run.status,
+      status: code === 0 ? 'succeeded' : 'failed',
       finishedAt: new Date(),
     }).where(eq(runsTable.id, run.id)).execute();
+
+    // P0: 最后才 finishRun — 'end' 事件表示管道完全收尾
+    finishRun(run, code === 0 ? 'succeeded' : 'failed');
   });
 
   return c.json({ runId: run.id, conversationId: convId }, 201);

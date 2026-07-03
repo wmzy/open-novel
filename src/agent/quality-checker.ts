@@ -687,3 +687,59 @@ async function readAllChapters(projectDir: string): Promise<ChapterContent[]> {
   chapters.sort((a, b) => a.chapter - b.chapter);
   return chapters;
 }
+
+// ===== 流层退化检测（watchdog） =====
+
+export interface DegradationResult {
+  detected: boolean;
+  repeatedPhrase: string;
+  count: number;
+  totalGrams: number;
+  ratio: number;
+}
+
+/**
+ * 流层退化检测：在滑动窗口内统计 CJK 2-gram 频率。
+ *
+ * 最高频 2-gram 占比超过 threshold 时判定退化。
+ * 依据：正常中文文本最高频 2-gram（如「是一」「的一」）占比约 1-3%；
+ * 退化文本（如「今日今日今日…」）中「今日」占比可达 10%+。
+ * 5% 是安全分界线，同时要求绝对出现次数 ≥ minCount 避免短文本误报。
+ */
+export function detectDegradation(
+  text: string,
+  options?: { threshold?: number; minCount?: number },
+): DegradationResult {
+  const threshold = options?.threshold ?? 0.05;
+  const minCount = options?.minCount ?? 5;
+
+  const cjkChars = [...text].filter((c) => c >= '\u4e00' && c <= '\u9fff');
+  const totalGrams = Math.max(0, cjkChars.length - 1);
+  if (totalGrams < Math.max(minCount, 4)) {
+    return { detected: false, repeatedPhrase: '', count: 0, totalGrams, ratio: 0 };
+  }
+
+  const grams = new Map<string, number>();
+  for (let i = 0; i < cjkChars.length - 1; i++) {
+    const gram = cjkChars[i]! + cjkChars[i + 1]!;
+    grams.set(gram, (grams.get(gram) ?? 0) + 1);
+  }
+
+  let maxGram = '';
+  let maxCount = 0;
+  for (const [gram, count] of grams) {
+    if (count > maxCount) {
+      maxGram = gram;
+      maxCount = count;
+    }
+  }
+
+  const ratio = maxCount / totalGrams;
+  return {
+    detected: ratio >= threshold && maxCount >= minCount,
+    repeatedPhrase: maxGram,
+    count: maxCount,
+    totalGrams,
+    ratio,
+  };
+}

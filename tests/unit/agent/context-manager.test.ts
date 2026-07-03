@@ -259,5 +259,73 @@ describe('context-manager', () => {
       expect(s.lastUpdatedChapter).toBe(3);
       expect(s.updatedAt).toContain('2026-07-03');
     });
+
+    it('state.json 含未转义控制字符时自动修复', async () => {
+      const stateDir = path.join(dir, '.novel');
+      await fs.mkdir(stateDir, { recursive: true });
+      // 字符串值内含裸换行符
+      const broken = '{\n  "characters": [],\n  "timeline": "第一行\\n第二行",\n  "activeForeshadows": [],\n  "lastUpdatedChapter": 1,\n  "updatedAt": "2026-07-03T00:00:00Z"\n}';
+      await fs.writeFile(path.join(stateDir, 'state.json'), broken);
+      await ensureContextArtifacts(dir, new Set<string>());
+      const s = await getStateTable(dir);
+      expect(s.lastUpdatedChapter).toBe(1);
+      expect(s.timeline).toContain('第一行');
+    });
+
+    it('state.json 严重损坏时备份为 .corrupted.bak 并重新初始化', async () => {
+      const stateDir = path.join(dir, '.novel');
+      await fs.mkdir(stateDir, { recursive: true });
+      await seedProfiles(dir, ['林青']); // 提供 profiles 供 initStateTable 读取
+      // 严重损坏：单引号闭合 JSON 字符串值
+      const broken = `{ "timeline": '错误闭合', broken }`;
+      await fs.writeFile(path.join(stateDir, 'state.json'), broken);
+      await ensureContextArtifacts(dir, new Set<string>());
+      // 损坏文件被备份
+      const bak = await fs.readFile(path.join(stateDir, 'state.json.corrupted.bak'), 'utf-8');
+      expect(bak).toContain('错误闭合');
+      // state.json 被重新初始化为有效 JSON
+      const s = await getStateTable(dir);
+      expect(s.characters.map((c) => c.name)).toEqual(['林青']);
+    });
+
+    it('.degraded.md 文件被归档到 _discarded/', async () => {
+      const chaptersDir = path.join(dir, '.novel', 'chapters');
+      await fs.mkdir(chaptersDir, { recursive: true });
+      await fs.writeFile(path.join(chaptersDir, '第12章.degraded.md'), '退化内容');
+      await fs.writeFile(path.join(chaptersDir, '第12章.summary.md'), '摘要');
+      await ensureContextArtifacts(dir, new Set<string>());
+      // .degraded.md 被移走
+      await expect(fs.access(path.join(chaptersDir, '第12章.degraded.md'))).rejects.toThrow();
+      // 移入 _discarded/
+      const discarded = path.join(chaptersDir, '_discarded', '第12章.degraded.md');
+      const content = await fs.readFile(discarded, 'utf-8');
+      expect(content).toBe('退化内容');
+      // 正常摘要文件不受影响
+      const sum = await fs.readFile(path.join(chaptersDir, '第12章.summary.md'), 'utf-8');
+      expect(sum).toBe('摘要');
+    });
+
+    it('过大的正文文件被归档到 _discarded/', async () => {
+      const chaptersDir = path.join(dir, '.novel', 'chapters');
+      await fs.mkdir(chaptersDir, { recursive: true });
+      // 35KB 正文（超过 30KB 上限）
+      const big = '正文'.repeat(18000);
+      await fs.writeFile(path.join(chaptersDir, '第14章.md'), big);
+      await ensureContextArtifacts(dir, new Set<string>());
+      // 过大文件被移走
+      await expect(fs.access(path.join(chaptersDir, '第14章.md'))).rejects.toThrow();
+      // 移入 _discarded/ 并标记 .oversized
+      await expect(fs.access(path.join(chaptersDir, '_discarded', '第14章.md.oversized'))).resolves.toBeUndefined();
+    });
+
+    it('正常大小的正文文件不受清理影响', async () => {
+      const chaptersDir = path.join(dir, '.novel', 'chapters');
+      await fs.mkdir(chaptersDir, { recursive: true });
+      await fs.writeFile(path.join(chaptersDir, '第1章.md'), '正常正文内容');
+      await ensureContextArtifacts(dir, new Set<string>());
+      // 文件仍在原位
+      const content = await fs.readFile(path.join(chaptersDir, '第1章.md'), 'utf-8');
+      expect(content).toBe('正常正文内容');
+    });
   });
 });

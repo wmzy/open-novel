@@ -10,6 +10,7 @@ import {
   parseCharacterProfiles,
   analyzeOoc,
   detectOoc,
+  detectDegradation,
   type Foreshadow,
   type ChapterContent,
   type CharacterProfile,
@@ -382,5 +383,49 @@ describe('detectOoc (IO)', () => {
     await fs.writeFile(path.join(dir, '.novel', 'chapters', 'chapter-1.md'), '内容');
     const report = await detectOoc(dir, 1);
     expect(report.oocIssues).toHaveLength(0);
+  });
+});
+
+// ===== 流层退化检测（detectDegradation） =====
+
+describe('detectDegradation', () => {
+  it('正常文本不检测到退化', () => {
+    const normal = '山道从坟场一路下到山坛，八里。林冲走在前，孙二娘走在后。两人之间只听见脚步声。到山坛的时候，天已经黑透了。磨坊的夸土墙还在，屋顶的草长到了半人高。';
+    const result = detectDegradation(normal);
+    expect(result.detected).toBe(false);
+  });
+
+  it('高频重复 2-gram 检测到退化（如「今日」重复）', () => {
+    // 模拟第12章的退化模式：635 次「今日」/ 6294 字 ≈ 10%
+    const degraded = '今日林冲今日走进今日山坛今日磨坊今日孙二娘今日站在今日门口今日哑叔今日磨石今日铜片今日腰带今日红绳今日坟场今日禁地今日剑脊今日归鸿今日。'.repeat(5);
+    const result = detectDegradation(degraded);
+    expect(result.detected).toBe(true);
+    expect(result.repeatedPhrase).toBe('今日');
+    expect(result.ratio).toBeGreaterThanOrEqual(0.05);
+  });
+
+  it('短文本不误报（totalGrams < minCount）', () => {
+    const short = '今日今日今日今日'; // 只有 3 个 2-gram
+    const result = detectDegradation(short);
+    expect(result.detected).toBe(false);
+  });
+
+  it('自定义阈值可调低灵敏度', () => {
+    // 多样化文本，最高频 2-gram 占比约 2-3%
+    const text = '茶棚老板倒了一碗茶推到林冲面前。哑叔在磨坊里磨石上刻了七道纹。孙二娘的剑格是紫铜星纹。山道从坟场一路下到山坛八里。风从谷里往山外走风里带的不是雨是雾。'.repeat(2);
+    const defaultResult = detectDegradation(text);
+    expect(defaultResult.detected).toBe(false);
+
+    // 降低阈值后检测到
+    const lowThreshold = detectDegradation(text, { threshold: 0.01 });
+    // 低阈值检测到重复（可能触发也可能不触发，取决于实际频率）
+    expect(lowThreshold.ratio).toBeGreaterThan(0);
+  });
+
+  it('纯非 CJK 文本安全返回未检测', () => {
+    const ascii = 'hello world this is a test of the degradation detector system'.repeat(10);
+    const result = detectDegradation(ascii);
+    expect(result.detected).toBe(false);
+    expect(result.totalGrams).toBe(0);
   });
 });

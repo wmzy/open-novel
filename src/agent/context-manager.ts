@@ -363,6 +363,47 @@ export async function ensureContextArtifacts(
 
   // 3. state.json 校验：损坏时尝试修复，无法修复则初始化
   await repairOrInitState(projectDir).catch(() => {});
+
+  // 4. P3: 清理异常文件（.degraded.md、过大正文移入 _discarded/）
+  await cleanupAbnormalFiles(projectDir).catch(() => {});
+}
+
+/**
+ * 转义 JSON 字符串值内的原始控制字符。
+ * LLM 常将多行文本直接嵌入 JSON 字符串值中（含裸换行符/制表符），
+ * 导致 JSON.parse 失败。本函数逐字符遍历，跟踪是否在字符串内部，
+ * 将字符串值内的裸控制字符（U+0000–U+001F，排除已正确转义的）转为 \n / \t 等。
+ */
+function escapeRawControlChars(text: string): string {
+  let result = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '\\' && inString) {
+      // 反斜杠转义：连同下一个字符一并保留
+      result += ch + (text[i + 1] ?? '');
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      result += ch;
+      continue;
+    }
+    if (inString && ch !== undefined) {
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) {
+        // 裸控制字符在字符串值内部 → 转义
+        if (code === 0x0a) result += '\\n';
+        else if (code === 0x0d) result += '\\r';
+        else if (code === 0x09) result += '\\t';
+        else result += `\\u${code.toString(16).padStart(4, '0')}`;
+        continue;
+      }
+    }
+    result += ch ?? '';
+  }
+  return result;
 }
 
 /**
@@ -405,14 +446,78 @@ async function repairOrInitState(projectDir: string): Promise<void> {
     /"(\d{4}-\d{2}-\d{2}T\d{2})"\s*:\s*"(\d{2}:\d{2}Z)"/g,
     '"$1:$2"',
   );
+  // 修复3：JSON 字符串值内的原始控制字符（换行符、制表符等）未转义
+  // LLM 常将多行文本直接嵌入 JSON 字符串值，导致解析失败。
+  // 策略：逐字符遍历，在字符串值内部将裸控制字符转义。
+  fixed = escapeRawControlChars(fixed);
 
   try {
     const parsed = JSON.parse(fixed);
     await fs.writeFile(statePath, JSON.stringify(parsed, null, 2), 'utf-8');
     return;
   } catch {
-    // 修复失败，用角色档案重新初始化
+    // 修复失败，备份损坏文件后重新初始化
   }
 
+  // 兜底：将损坏的 state.json 备份为 .corrupted.bak，再强制重新初始化。
+  // initStateTable 本身“不覆盖已有文件”，所以需要先移走损坏文件。
+  try {
+    const bakPath = `${statePath}.corrupted.bak`;
+    await fs.rename(statePath, bakPath);
+  } catch {
+    // 重命名也失败（权限/磁盘），尝试直接删除
+    try { await fs.unlink(statePath); } catch {}
+  }
   await initStateTable(projectDir);
+}
+
+/** 单章正文文件大小上限（30KB）。超过此值的视为异常输出。 */
+const MAX_CHAPTER_FILE_SIZE = 30 * 1024;
+/** 异常文件归档子目录名。 */
+const DISCARDED_DIR = '_discarded';
+
+/**
+ * 清理异常文件：将 .degraded.md（质检门禁拒收的退化输出）
+ * 和过大的正文文件移入 `chapters/_discarded/` 子目录。
+ * 正常文件和摘要文件不受影响。
+ */
+async function cleanupAbnormalFiles(projectDir: string): Promise<void> {
+  const chaptersDir = path.join(projectDir, NOVEL_DIR, CHAPTERS_DIR);
+  let files: string[];
+  try {
+    files = await fs.readdir(chaptersDir);
+  } catch {
+    return;
+  }
+
+  const discardedDir = path.join(chaptersDir, DISCARDED_DIR);
+
+  for (const file of files) {
+    // .degraded.md 文件直接归档
+    if (file.endsWith('.degraded.md')) {
+      try {
+        await fs.mkdir(discardedDir, { recursive: true });
+        await fs.rename(path.join(chaptersDir, file), path.join(discardedDir, file));
+      } catch {
+        // 单文件失败不影响其他文件
+      }
+      continue;
+    }
+
+    // 过大的正文文件归档（排除摘要文件）
+    if (file.endsWith('.md') && !file.endsWith('.summary.md')) {
+      try {
+        const stat = await fs.stat(path.join(chaptersDir, file));
+        if (stat.size > MAX_CHAPTER_FILE_SIZE) {
+          await fs.mkdir(discardedDir, { recursive: true });
+          await fs.rename(
+            path.join(chaptersDir, file),
+            path.join(discardedDir, `${file}.oversized`),
+          );
+        }
+      } catch {
+        // 单文件失败不影响其他文件
+      }
+    }
+  }
 }
