@@ -299,8 +299,12 @@ describe('composePrompt', () => {
         path.join(novel, 'foreshadow.json'),
         JSON.stringify({
           foreshadows: [
-            { id: 1, content: '神秘信件', status: 'pending', plantedIn: 1 },
-            { id: 2, content: '已回收的伏笔', status: 'resolved', plantedIn: 1 },
+            // #1 已埋待回收（planted）——应进入「待回收」区
+            { id: 1, content: '神秘信件', status: 'planted', plantedIn: 1 },
+            // #2 已回收——不应出现在活跃伏笔层
+            { id: 2, content: '已回收的伏笔', status: 'resolved', plantedIn: 1, resolvedIn: 2 },
+            // #3 本章（第2章）须埋——应进入置顶提醒
+            { id: 3, content: '黑玉印章', status: 'pending', plantedIn: 2 },
           ],
         }),
       );
@@ -323,10 +327,14 @@ describe('composePrompt', () => {
       expect(prompt).toContain('林青');
       expect(prompt).toContain('### 滚动摘要层');
       expect(prompt).toContain('林青抵达客栈');
-      expect(prompt).toContain('### 活跃伏笔层（待回收）');
+      expect(prompt).toContain('### 活跃伏笔层');
+      expect(prompt).toContain('待回收');
       expect(prompt).toContain('神秘信件');
       // 已回收伏笔不应出现
       expect(prompt).not.toContain('已回收的伏笔');
+      // 第2章须埋设的伏笔应置顶提醒（lastUpdatedChapter=1 → currentChapter=2）
+      expect(prompt).toContain('本章须埋设的伏笔');
+      expect(prompt).toContain('黑玉印章');
     });
 
     it('does not inject layers in concept stage (unchanged behavior)', async () => {
@@ -353,6 +361,74 @@ describe('composePrompt', () => {
       const idx = (s: string) => prompt.indexOf(s);
       expect(idx('## Project Files')).toBeLessThan(idx('## Novel Context Layers'));
       expect(idx('## Novel Context Layers')).toBeLessThan(idx('## Available Tools'));
+    });
+
+    it('buildForeshadowLayer: planted 进待回收区，pending 本章须埋置顶，逾期未埋单独警示', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 5, updatedAt: '' }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          foreshadows: [
+            { id: 1, content: '已埋待回收', status: 'planted', plantedIn: 3 },
+            { id: 2, content: '逾期未埋', status: 'pending', plantedIn: 2 },
+            { id: 3, content: '本章须埋', status: 'pending', plantedIn: 6 },
+            { id: 4, content: '未来伏笔不显示', status: 'pending', plantedIn: 10 },
+            { id: 5, content: '已回收', status: 'resolved', plantedIn: 1, resolvedIn: 4 },
+          ],
+        }),
+      );
+      const prompt = await composePrompt({
+        message: '写第六章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      // 本章须埋置顶
+      expect(prompt).toContain('本章须埋设的伏笔');
+      expect(prompt).toContain('本章须埋');
+      // planted 进待回收
+      expect(prompt).toContain('待回收');
+      expect(prompt).toContain('已埋待回收');
+      // 逾期未埋警示
+      expect(prompt).toContain('逾期未埋');
+      expect(prompt).toContain('逾期未埋');
+      // 未来伏笔不显示
+      expect(prompt).not.toContain('未来伏笔不显示');
+      // 已回收不显示
+      expect(prompt).not.toContain('已回收');
+    });
+
+    it('buildForeshadowLayer: 无 planted 且无逾期时活跃伏笔层不出现', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 5, updatedAt: '' }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          foreshadows: [
+            { id: 1, content: '未来伏笔', status: 'pending', plantedIn: 10 },
+            { id: 2, content: '已回收', status: 'resolved', plantedIn: 1, resolvedIn: 3 },
+          ],
+        }),
+      );
+      const prompt = await composePrompt({
+        message: '写第六章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      // 无 planted、无逾期 → 活跃伏笔层不出现
+      expect(prompt).not.toContain('### 活跃伏笔层');
+      // 未来伏笔也不进入置顶提醒（plantedIn=10 ≠ currentChapter=6）
+      expect(prompt).not.toContain('本章须埋设的伏笔');
     });
   });
 });

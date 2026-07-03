@@ -39,9 +39,10 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
 
 **元叙事禁令**：正文内严禁出现章节编号引用（如「第15章」「第十二章」等）。章节编号只能出现在文件首行标题（如「# 第3章 令牌」），绝不能在散文叙事中出现。角色不会知道自己身处「第几章」。
 
-每写完一章后，你必须完成以下两件事以保持后续章节的一致性：
+每写完一章后，你必须完成以下三件事以保持后续章节的一致性：
 (1) 为该章生成约 200 字的**语义摘要**，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。摘要必须包含：本章情节推进、角色状态变化（位置/情绪/获知新信息）、伏笔兑现或新增。**严禁复制正文原文段落**——摘要必须是你的概括重述，不是截取。
 (2) 更新 .novel/state.json——刷新每个在场角色的位置、情绪、新获知的信息（knows）与关系变化；推进时间线和 lastUpdatedChapter；设置 updatedAt。
+(3) 更新 .novel/foreshadow.json 的伏笔状态：本章埋设了某条伏笔（首次在正文中植入线索），将该伏笔的 status 从 "pending" 改为 "planted"；本章回收了某条伏笔（伏笔线索得到兑现/揭晓），将 status 改为 "resolved" 并填写 resolvedIn 为当前章号。同时同步 state.json 的 activeForeshadows 字段——收集所有 status 为 "planted" 的伏笔 ID 列表。
 
 写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。`,
   drafting: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。`,
@@ -124,31 +125,88 @@ async function buildStateLayer(projectDir: string): Promise<string> {
   return lines.join('\n');
 }
 
-/** 活跃伏笔层：foreshadow.json 中 status=pending 的伏笔。 */
-async function buildForeshadowLayer(projectDir: string): Promise<string> {
+/**
+ * 解析 foreshadow.json，返回未回收伏笔列表。
+ * 调用方据此做分区注入。
+ */
+export async function loadForeshadows(projectDir: string): Promise<{
+  foreshadows: Array<{ id: number; content: string; status: string; plantedIn: number | null; resolvedIn?: number | null }>;
+}> {
   const raw = await readNovelFile(projectDir, 'foreshadow.json');
-  if (!raw) return '';
-  let data: {
-    foreshadows?: Array<{
-      id: number;
-      content: string;
-      status: string;
-      plantedIn?: number | null;
-    }>;
-  };
+  if (!raw) return { foreshadows: [] };
   try {
-    data = JSON.parse(raw);
+    const data = JSON.parse(raw) as {
+      foreshadows?: Array<{ id: number; content: string; status: string; plantedIn?: number | null; resolvedIn?: number | null }>;
+    };
+    const list = (data.foreshadows ?? [])
+      .filter((f) => f && f.content)
+      .map((f) => ({
+        id: f.id,
+        content: f.content,
+        status: f.status,
+        plantedIn: typeof f.plantedIn === 'number' ? f.plantedIn : null,
+        resolvedIn: typeof f.resolvedIn === 'number' ? f.resolvedIn : null,
+      }));
+    return { foreshadows: list };
   } catch {
-    return '';
+    return { foreshadows: [] };
   }
-  const pending = (data.foreshadows ?? []).filter(
-    (f) => f && f.status === 'pending' && f.content,
+}
+
+/**
+ * 本章须埋设的伏笔：plantedIn === currentChapter 且 status 仍为 pending 的条目。
+ * 返回「置顶提醒」区块，空则返回空串。
+ */
+async function buildCurrentChapterForeshadows(
+  projectDir: string,
+  currentChapter: number,
+): Promise<string> {
+  const { foreshadows } = await loadForeshadows(projectDir);
+  const toPlant = foreshadows.filter(
+    (f) => f.status === 'pending' && f.plantedIn === currentChapter,
   );
-  if (pending.length === 0) return '';
-  const lines: string[] = ['### 活跃伏笔层（待回收）'];
-  for (const f of pending) {
-    const planted = f.plantedIn ? `（埋于第${f.plantedIn}章）` : '';
-    lines.push(`- [#${f.id}] ${f.content}${planted}`);
+  if (toPlant.length === 0) return '';
+  const lines: string[] = [`### ⚠ 本章须埋设的伏笔（plantedIn=${currentChapter}，切勿遗漏）`];
+  for (const f of toPlant) {
+    lines.push(`- [#${f.id}] ${f.content}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 活跃伏笔层：
+ * - 「待回收」区 = status === 'planted'（已埋进故事，等待回收）
+ * - 「逾期未埋」区 = status === 'pending' 且 plantedIn < currentChapter
+ *   （规划埋在本章或更早但状态仍未推进——提醒 agent 补埋或放弃）
+ * status === 'pending' 且 plantedIn >= currentChapter 的伏笔不在此层显示
+ * （未来伏笔，避免信息过载），由 buildCurrentChapterForeshadows 在写作时定向提醒。
+ */
+async function buildForeshadowLayer(
+  projectDir: string,
+  currentChapter: number,
+): Promise<string> {
+  const { foreshadows } = await loadForeshadows(projectDir);
+  if (foreshadows.length === 0) return '';
+
+  const planted = foreshadows.filter((f) => f.status === 'planted');
+  const overdue = foreshadows.filter(
+    (f) => f.status === 'pending' && f.plantedIn !== null && f.plantedIn < currentChapter,
+  );
+  if (planted.length === 0 && overdue.length === 0) return '';
+
+  const lines: string[] = ['### 活跃伏笔层'];
+  if (planted.length > 0) {
+    lines.push('**待回收**（已埋进故事，等待兑现）：');
+    for (const f of planted) {
+      const plantedNote = f.plantedIn ? `（埋于第${f.plantedIn}章）` : '';
+      lines.push(`- [#${f.id}] ${f.content}${plantedNote}`);
+    }
+  }
+  if (overdue.length > 0) {
+    lines.push('**逾期未埋**（规划章号已过但状态仍为 pending——补埋或标记放弃）：');
+    for (const f of overdue) {
+      lines.push(`- [#${f.id}] ${f.content}（应埋于第${f.plantedIn}章）`);
+    }
   }
   return lines.join('\n');
 }
@@ -158,7 +216,10 @@ async function buildForeshadowLayer(projectDir: string): Promise<string> {
  * 核心设定（恒定）→ 状态 → 滚动摘要 → 活跃伏笔。
  * 任一层缺失则跳过；整体为空时仍返回占位说明，提示 agent 维护摘要与状态。
  */
-async function buildWritingContextLayers(projectDir: string): Promise<string> {
+async function buildWritingContextLayers(
+  projectDir: string,
+  currentChapter: number,
+): Promise<string> {
   const sections: string[] = [];
 
   const core = await buildCoreSettingsLayer(projectDir);
@@ -176,7 +237,7 @@ async function buildWritingContextLayers(projectDir: string): Promise<string> {
     );
   }
 
-  const foreshadow = await buildForeshadowLayer(projectDir);
+  const foreshadow = await buildForeshadowLayer(projectDir, currentChapter);
   if (foreshadow) sections.push(foreshadow);
 
   return `## Novel Context Layers\n\n${sections.join('\n\n')}`;
@@ -283,7 +344,18 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
       const perChapter = Math.round(projectMeta.targetWords / projectMeta.chapterCount);
       parts.push(`\n## 本章字数要求\n每章目标约 ${perChapter} 字（CJK 字符），允许 ±20% 浮动。偏差超 ±30% 将被系统标记为字数异常。`);
     }
-    const layers = await buildWritingContextLayers(projectDir);
+
+    // 计算当前章号 = 已完成章数 + 1（从 state.json lastUpdatedChapter 推断）
+    const state = await getStateTable(projectDir);
+    const currentChapter = state.lastUpdatedChapter + 1;
+
+    // 定向提醒：本章须埋设的伏笔，置顶于分层上下文之前
+    const chapterForeshadow = await buildCurrentChapterForeshadows(projectDir, currentChapter);
+    if (chapterForeshadow) {
+      parts.push(`\n${chapterForeshadow}`);
+    }
+
+    const layers = await buildWritingContextLayers(projectDir, currentChapter);
     if (layers) {
       parts.push(`\n${layers}`);
     }
