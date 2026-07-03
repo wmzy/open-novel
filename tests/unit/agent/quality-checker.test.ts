@@ -11,6 +11,7 @@ import {
   analyzeOoc,
   detectOoc,
   detectDegradation,
+  buildExcludeGrams,
   type Foreshadow,
   type ChapterContent,
   type CharacterProfile,
@@ -427,5 +428,34 @@ describe('detectDegradation', () => {
     const result = detectDegradation(ascii);
     expect(result.detected).toBe(false);
     expect(result.totalGrams).toBe(0);
+  });
+
+  it('excludeGrams 排除角色名后聚焦章不误报', () => {
+    // 角色名「林冲」高频，但后续动词各不相同，排除后其他 2-gram 均低频
+    const focused = '林冲走在山道上。林冲抬头看天。林冲停下脚步。林冲回头望去。林冲继续前行。林冲握紧双拳。林冲推开木门。'.repeat(6);
+    const withExclude = detectDegradation(focused, { excludeGrams: ['林冲'] });
+    expect(withExclude.detected).toBe(false);
+  });
+
+  it('excludeGrams 排除角色名后仍检测到真正的退化词', () => {
+    // 「林冲」少量出现（被排除），「今日」退化高频（未被排除）
+    const text = '林冲知道今日不对劲。今日的山风特别冷。今日他必须做决定。今日就是终点。今日没有退路了。今日的一切都将改变。'.repeat(3);
+    const result = detectDegradation(text, { excludeGrams: ['林冲'] });
+    expect(result.detected).toBe(true);
+    expect(result.repeatedPhrase).toBe('今日');
+  });
+});
+
+describe('buildExcludeGrams', () => {
+  it('2字角色名生成1个2-gram', () => {
+    expect(buildExcludeGrams(['林冲', '孙二娘'])).toEqual(['林冲', '孙二娘']);
+  });
+
+  it('3字角色名生成2个2-gram', () => {
+    expect(buildExcludeGrams(['欧阳锋'])).toEqual(['欧阳', '阳锋']);
+  });
+
+  it('空数组返回空数组', () => {
+    expect(buildExcludeGrams([])).toEqual([]);
   });
 });

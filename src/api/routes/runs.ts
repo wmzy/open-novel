@@ -8,16 +8,16 @@ import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
-import { detectAiPatterns, detectDegradation } from '../../agent/quality-checker';
+import { detectAiPatterns, detectDegradation, buildExcludeGrams } from '../../agent/quality-checker';
 import type { AgentEvent, StreamEvent } from '../../agent/types';
-import { ensureContextArtifacts } from '../../agent/context-manager';
+import { ensureContextArtifacts, getStateTable } from '../../agent/context-manager';
 import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
-import { conversations, messages, runs as runsTable } from '../../db/schema';
+import { conversations, messages, projects, runs as runsTable } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { eq } from 'drizzle-orm';
 
@@ -30,8 +30,8 @@ const QUALITY_REJECT_SCORE = 60;
 const QUALITY_WARN_SCORE = 30;
 
 // ===== 字数校验配置 =====
-const TARGET_WORDS = 3500;
-const WORD_DEVIATION_THRESHOLD = 0.5;
+const DEFAULT_TARGET_WORDS = 3500; // 项目元数据不可用时的兜底
+const WORD_DEVIATION_THRESHOLD = 0.3; // 从 0.5 收紧到 0.3
 
 /** 章节正文文件名（中英文命名，排除摘要/退化文件）。返回章节号或 null。 */
 function isChapterBody(p: string): number | null {
@@ -49,11 +49,19 @@ function resolveWrittenPath(projectDir: string, p: string): string {
   return path.isAbsolute(p) ? p : path.join(projectDir, p);
 }
 
-/** 写后质检门禁：对新章节正文跑 detectAiPatterns，退化分高时归档并通知前端。 */
+/** 检测正文中是否出现章节编号引用（如「第15章」），排除首行标题。 */
+function hasMetaNarrativeLeak(content: string): boolean {
+  const lines = content.split(/\r?\n/);
+  const bodyLines = lines.length > 0 && /^\s{0,3}#{1,6}\s/.test(lines[0]) ? lines.slice(1) : lines;
+  return /第\d+章|第[一二三四五六七八九十百]+章/.test(bodyLines.join('\n'));
+}
+
+/** 写后质检门禁：对新章节正文跑全文退化终检 + detectAiPatterns + 元叙事泄漏检测。 */
 async function qualityGateCheck(
   run: ReturnType<typeof createRun>,
   projectDir: string,
   writtenPaths: Set<string>,
+  excludeGrams: string[],
 ): Promise<void> {
   for (const p of writtenPaths) {
     const chapterNum = isChapterBody(p);
@@ -62,6 +70,23 @@ async function qualityGateCheck(
     const fullPath = resolveWrittenPath(projectDir, p);
     let content: string;
     try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
+
+    // P0 缺陷1: 全文退化终检——补全流式 watchdog 的短章节盲区
+    // 流式 watchdog 需积满 2000 字符才检测，短章节（<2000字）从未触发
+    const degradation = detectDegradation(content, { excludeGrams });
+    if (degradation.detected) {
+      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch {}
+      emitEvent(run, 'agent', {
+        type: 'quality-rejected',
+        chapter: chapterNum,
+        score: 100,
+        reason: 'degradation',
+        phrase: degradation.repeatedPhrase,
+        count: degradation.count,
+        ratio: Math.round(degradation.ratio * 100),
+      });
+      continue; // 已归档，不再检测 AI 味
+    }
 
     const report = detectAiPatterns(content);
     if (report.score >= QUALITY_REJECT_SCORE) {
@@ -80,6 +105,16 @@ async function qualityGateCheck(
         score: report.score,
       });
     }
+
+    // P1 缺陷3: 元叙事泄漏检测——正文出现章节编号引用
+    if (hasMetaNarrativeLeak(content)) {
+      emitEvent(run, 'agent', {
+        type: 'quality-warning',
+        chapter: chapterNum,
+        reason: 'meta-narrative-leak',
+        message: '正文中出现章节编号引用（如「第15章」），违反元叙事禁令',
+      });
+    }
   }
 }
 
@@ -88,6 +123,7 @@ async function wordCountCheck(
   run: ReturnType<typeof createRun>,
   projectDir: string,
   writtenPaths: Set<string>,
+  targetWords: number,
 ): Promise<void> {
   for (const p of writtenPaths) {
     const chapterNum = isChapterBody(p);
@@ -98,13 +134,13 @@ async function wordCountCheck(
     try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
 
     const cjkCount = [...content].filter((c) => c >= '\u4e00' && c <= '\u9fff').length;
-    const deviation = Math.abs(cjkCount - TARGET_WORDS) / TARGET_WORDS;
+    const deviation = Math.abs(cjkCount - targetWords) / targetWords;
     if (deviation > WORD_DEVIATION_THRESHOLD) {
       emitEvent(run, 'agent', {
         type: 'word-count-warning',
         chapter: chapterNum,
         wordCount: cjkCount,
-        target: TARGET_WORDS,
+        target: targetWords,
         deviation: Math.round(deviation * 100),
       });
     }
@@ -245,6 +281,21 @@ runsRouter.post('/', async (c) => {
   const timeoutTimer = setTimeout(() => cancelRun(run), config.agent.timeoutMs);
   timeoutTimer.unref();
 
+  // P2 缺陷5: 读取角色名生成 excludeGrams，避免聚焦章误报退化检测
+  const characterState = await getStateTable(projectDir).catch(() => null);
+  const excludeGrams = characterState?.characters
+    ? buildExcludeGrams(characterState.characters.map((c) => c.name))
+    : [];
+
+  // P1 缺陷4: 从项目元数据计算每章字数目标
+  let perChapterTarget = DEFAULT_TARGET_WORDS;
+  try {
+    const [proj] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (proj?.targetWords && proj?.chapterCount) {
+      perChapterTarget = Math.round(proj.targetWords / proj.chapterCount);
+    }
+  } catch {}
+
   // Parse stream
   const onStreamComplete = () => {
     if (child.stdin && !child.stdin.destroyed) {
@@ -259,7 +310,7 @@ runsRouter.post('/', async (c) => {
       if (watchdogTriggered) return;
       watchdogBuffer = (watchdogBuffer + event.delta).slice(-WATCHDOG_WINDOW_SIZE);
       if (watchdogBuffer.length >= WATCHDOG_WINDOW_SIZE) {
-        const result = detectDegradation(watchdogBuffer);
+        const result = detectDegradation(watchdogBuffer, { excludeGrams });
         if (result.detected) {
           watchdogTriggered = true;
           emitEvent(run, 'agent', {
@@ -335,12 +386,12 @@ runsRouter.post('/', async (c) => {
 
     // P1-b: 写后质检门禁 — 退化分高的章节自动归档为 .degraded.md
     if (code === 0 && writtenPaths.size > 0) {
-      await qualityGateCheck(run, projectDir, writtenPaths).catch(() => {});
+      await qualityGateCheck(run, projectDir, writtenPaths, excludeGrams).catch(() => {});
     }
 
     // P2: 字数校验 — 偏差超阈值的章节通知前端
     if (code === 0 && writtenPaths.size > 0) {
-      await wordCountCheck(run, projectDir, writtenPaths).catch(() => {});
+      await wordCountCheck(run, projectDir, writtenPaths, perChapterTarget).catch(() => {});
     }
 
     // 兜底：补全缺失的章节摘要与状态表（仅写作成功时）

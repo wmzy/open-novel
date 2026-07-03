@@ -304,7 +304,7 @@ describe('composePrompt', () => {
           ],
         }),
       );
-      await fs.writeFile(path.join(novel, 'chapters', '第1章.summary.md'), '林青抵达客栈，发现密信。');
+      await fs.writeFile(path.join(novel, 'chapters', '第1章.summary.md'), '林青抵达客栈后，从掌柜手中接过一封无名密信，信上只有朱砂画的半截剑刃。他立刻警觉起来，回房后取出暗藏的短刀，等待天明。');
     }
 
     it('injects all context layers in writing stage', async () => {

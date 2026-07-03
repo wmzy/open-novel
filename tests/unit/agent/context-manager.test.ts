@@ -78,7 +78,7 @@ describe('context-manager', () => {
       await writeSummary(dir, 1, long);
       await writeSummary(dir, 2, long);
       await writeSummary(dir, 3, long);
-      await writeSummary(dir, 4, 'recent four'); // 最近 3 章为 2,3,4
+      await writeSummary(dir, 4, '第四章真正的语义摘要，林冲进入山坛后发现令牌，与孙二娘正面对峙，哑叔在旁沉默。'); // 最近 3 章为 2,3,4
       const text = await buildRollingSummaryContext(dir);
       // 第1章进入简摘区，应被压缩到 50 字 + 省略号
       expect(text).toContain('第1章：');
@@ -86,12 +86,42 @@ describe('context-manager', () => {
       expect(briefLine.length).toBeLessThanOrEqual(60);
       expect(briefLine.endsWith('…')).toBe(true);
       // 最近章节使用详摘，保留全文
-      expect(text).toContain('recent four');
+      expect(text).toContain('林冲进入山坛');
       expect(text).toContain('##### 第4章');
     });
 
     it('buildRollingSummaryContext returns empty string when no summaries', async () => {
       expect(await buildRollingSummaryContext(dir)).toBe('');
+    });
+
+    it('buildRollingSummaryContext 跳过含 [自动生成] 标记的摘要', async () => {
+      await writeSummary(dir, 1, '[自动生成] 这是从正文截取的前面两百字不是真正的语义摘要。'.repeat(2));
+      await writeSummary(dir, 2, '第二章真正的语义摘要，林冲进入山坛发现令牌，与孙二娘对峙，哑叔在旁沉默。'.repeat(2));
+      const text = await buildRollingSummaryContext(dir);
+      // 第1章的无效摘要应被跳过
+      expect(text).not.toContain('自动生成');
+      // 第2章的有效摘要保留
+      expect(text).toContain('林冲进入山坛');
+    });
+
+    it('buildRollingSummaryContext 跳过与正文逐字复制的摘要', async () => {
+      const bodyText = '山道从坟场一路下到山坛，八里路。林冲走在前面，孙二娘走在后面，两人之间只听见脚步声。'.repeat(3);
+      await writeChapterBody(dir, '.novel/chapters/第1章.md', bodyText);
+      // 摘要是正文前40字的逐字复制
+      await writeSummary(dir, 1, bodyText.slice(0, 40));
+      const text = await buildRollingSummaryContext(dir);
+      // 应被跳过（唯一摘要无效，返回空串）
+      expect(text).toBe('');
+    });
+
+    it('buildRollingSummaryContext 最近章节附加首尾句', async () => {
+      await writeSummary(dir, 1, '第一章的语义摘要，内容足够长可以通过校验检测。'.repeat(3));
+      await writeChapterBody(dir, '.novel/chapters/第1章.md', '# 第1章 令牌\n这是首句内容描写。中间还有更多叙事文字展开。这是最后一句结尾。');
+      const text = await buildRollingSummaryContext(dir);
+      expect(text).toContain('[首句]');
+      expect(text).toContain('这是首句内容');
+      expect(text).toContain('[尾句]');
+      expect(text).toContain('这是最后一句结尾');
     });
   });
 

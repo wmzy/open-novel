@@ -37,8 +37,10 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
 
   writing: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。将章节保存到 .novel/chapters/ 目录。
 
+**元叙事禁令**：正文内严禁出现章节编号引用（如「第15章」「第十二章」等）。章节编号只能出现在文件首行标题（如「# 第3章 令牌」），绝不能在散文叙事中出现。角色不会知道自己身处「第几章」。
+
 每写完一章后，你必须完成以下两件事以保持后续章节的一致性：
-(1) 为该章生成约 200 字的压缩摘要，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。
+(1) 为该章生成约 200 字的**语义摘要**，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。摘要必须包含：本章情节推进、角色状态变化（位置/情绪/获知新信息）、伏笔兑现或新增。**严禁复制正文原文段落**——摘要必须是你的概括重述，不是截取。
 (2) 更新 .novel/state.json——刷新每个在场角色的位置、情绪、新获知的信息（knows）与关系变化；推进时间线和 lastUpdatedChapter；设置 updatedAt。
 
 写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。`,
@@ -209,10 +211,12 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
 
   // Load project metadata from DB
   let projectContext = '';
+  let projectMeta: { targetWords: number | null; chapterCount: number | null } | null = null;
   try {
     const project = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     if (project.length > 0) {
       const p = project[0];
+      projectMeta = { targetWords: p.targetWords, chapterCount: p.chapterCount };
       projectContext = [
         `Project: ${p.title}`,
         `Genre: ${p.genre}`,
@@ -272,8 +276,13 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
     parts.push(`\n## Project Files\n${fileList.map((f) => `- ${f}`).join('\n')}`);
   }
 
-  // 写作阶段：注入分层上下文（核心设定 / 状态 / 滚动摘要 / 活跃伏笔）
+  // 写作阶段：注入字数目标 + 分层上下文（核心设定 / 状态 / 滚动摘要 / 活跃伏笔）
   if (isWritingStage(currentStage)) {
+    // P1 缺陷4: 动态注入每章字数目标
+    if (projectMeta?.targetWords && projectMeta?.chapterCount) {
+      const perChapter = Math.round(projectMeta.targetWords / projectMeta.chapterCount);
+      parts.push(`\n## 本章字数要求\n每章目标约 ${perChapter} 字（CJK 字符），允许 ±20% 浮动。偏差超 ±30% 将被系统标记为字数异常。`);
+    }
     const layers = await buildWritingContextLayers(projectDir);
     if (layers) {
       parts.push(`\n${layers}`);

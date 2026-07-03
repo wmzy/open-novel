@@ -20,8 +20,14 @@ const PROFILES_FILE = path.join('characters', 'profiles.md');
 
 /** 滚动摘要：最近若干章使用详摘，其余压缩为简摘。 */
 const RECENT_CHAPTER_COUNT = 3;
+/** 最近若干章附加正文首尾句，避免 agent 重复使用相同的开头/收尾。 */
+const RECENT_FIRST_LAST_COUNT = 2;
 /** 简摘每章压缩到的字数上限。 */
 const BRIEF_SUMMARY_MAX_CHARS = 50;
+/** 有效摘要的 CJK 最少字数；过短视为无效。 */
+const MIN_SUMMARY_CJK = 30;
+/** 检测正文复制时的连续匹配片段长度。 */
+const COPY_FRAGMENT_LEN = 30;
 
 /** 章节摘要文件名，例如 `.novel/chapters/第3章.summary.md`。 */
 const SUMMARY_FILE_RE = /^第(\d+)章\.summary\.md$/;
@@ -177,16 +183,84 @@ export async function getChapterSummaries(
 }
 
 /**
+ * 校验章节摘要质量。
+ *
+ * 三重检测：
+ * 1. 禁止 `[自动生成]` 标记 —— 那是 buildPlaceholderSummary 的截取产物，非语义摘要；
+ * 2. CJK 字数 ≥ MIN_SUMMARY_CJK —— 过短摘要么信息量不足；
+ * 3. 不与正文连续 COPY_FRAGMENT_LEN 字重复 —— 防止 agent 把正文开头当摘要。
+ *
+ * 无效摘要在 buildRollingSummaryContext 中被跳过，不注入下游上下文，
+ * 避免废稿摘要把“正文开头”当摘要污染后续章节。
+ */
+function isSummaryValid(summary: string, body: string): boolean {
+  // 1. 模板标记
+  if (summary.includes('[自动生成]')) return false;
+
+  // 2. 字数
+  const cjkCount = [...summary].filter((c) => c >= '\u4e00' && c <= '\u9fff').length;
+  if (cjkCount < MIN_SUMMARY_CJK) return false;
+
+  // 3. 正文复制检测：正文中是否存在与摘要连续 COPY_FRAGMENT_LEN 字相同的片段
+  if (body) {
+    const bodyClean = body.replace(/\s+/g, ' ').trim();
+    const summaryClean = summary.replace(/\s+/g, ' ').trim();
+    for (let i = 0; i <= summaryClean.length - COPY_FRAGMENT_LEN; i++) {
+      const fragment = summaryClean.slice(i, i + COPY_FRAGMENT_LEN);
+      if (bodyClean.includes(fragment)) return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * 从章节正文提取首句和尾句（按中文句号/问号/叹号分割）。
+ * 用于最近章节上下文，让 agent 看到自己刚用过的开头/收尾，避免重复。
+ */
+function extractFirstLastSentence(body: string): { first: string; last: string } {
+  const lines = body.split(/\r?\n/);
+  // 跳过首行 Markdown 标题
+  const startIndex = lines.length > 0 && /^\s{0,3}#{1,6}\s/.test(lines[0]) ? 1 : 0;
+  const prose = lines.slice(startIndex).join('\n').replace(/\s+/g, ' ').trim();
+
+  // 按中文句末标点分割
+  const sentences = prose
+    .split(/[。！？!?\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 5);
+
+  return {
+    first: sentences[0] ?? '',
+    last: sentences.length > 1 ? sentences[sentences.length - 1] : '',
+  };
+}
+
+/**
  * 构建分层注入文本：最近 3 章详摘 + 更早章节简摘（每章压缩到 50 字）。
- * 无任何摘要时返回空串。
+ * 最近 2 章附加正文首尾句，避免 agent 重复使用相同的开头/收尾。
+ * 无效摘要（模板残留 / 正文复制 / 过短）被跳过，不注入下游上下文。
+ * 无任何有效摘要时返回空串。
  */
 export async function buildRollingSummaryContext(projectDir: string): Promise<string> {
   const summaries = await getChapterSummaries(projectDir);
   if (summaries.length === 0) return '';
 
-  const splitIdx = Math.max(0, summaries.length - RECENT_CHAPTER_COUNT);
-  const earlier = summaries.slice(0, splitIdx);
-  const recent = summaries.slice(splitIdx);
+  // 读取每章正文，用于摘要校验 + 首尾句提取
+  const withBodies = await Promise.all(
+    summaries.map(async (s) => ({
+      chapter: s.chapter,
+      summary: s.summary,
+      body: await readNovelFile(projectDir, path.join(CHAPTERS_DIR, `第${s.chapter}章.md`)),
+    })),
+  );
+
+  // 校验摘要，过滤无效的（模板残留 / 正文复制 / 过短）
+  const valid = withBodies.filter((s) => isSummaryValid(s.summary, s.body));
+
+  const splitIdx = Math.max(0, valid.length - RECENT_CHAPTER_COUNT);
+  const earlier = valid.slice(0, splitIdx);
+  const recent = valid.slice(splitIdx);
 
   const lines: string[] = [];
 
@@ -199,9 +273,18 @@ export async function buildRollingSummaryContext(projectDir: string): Promise<st
 
   if (recent.length > 0) {
     lines.push('#### 最近章节（详摘）');
+    // 最近 RECENT_FIRST_LAST_COUNT 章附加首尾句
+    const withEnds = new Set(
+      recent.slice(-RECENT_FIRST_LAST_COUNT).map((s) => s.chapter),
+    );
     for (const s of recent) {
       lines.push(`##### 第${s.chapter}章`);
       lines.push(s.summary);
+      if (withEnds.has(s.chapter) && s.body) {
+        const { first, last } = extractFirstLastSentence(s.body);
+        if (first) lines.push(`> [首句] ${first}`);
+        if (last) lines.push(`> [尾句] ${last}`);
+      }
     }
   }
 
