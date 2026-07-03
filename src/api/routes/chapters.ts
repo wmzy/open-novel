@@ -43,8 +43,53 @@ async function readChapterContent(novelDir: string, num: number): Promise<string
   }
 }
 
+/**
+ * 扫描 .novel/chapters/ 目录，将磁盘上存在但 DB 缺失的章节补入。
+ * 解决 DB 数据丢失（如 PGlite 重建）后写作视图为空的问题。
+ * 文件系统是事实来源，DB 仅缓存元数据。
+ */
+async function resyncChaptersFromDisk(projectId: string): Promise<void> {
+  const novelDir = await resolveNovelDir(projectId);
+  const chaptersDir = path.join(novelDir, 'chapters');
+  let files: string[];
+  try {
+    files = await fs.readdir(chaptersDir);
+  } catch { return; }
+
+  for (const file of files) {
+    if (!file.endsWith('.md') || file.endsWith('.summary.md')) continue;
+    const match = file.match(/(\d+)/);
+    if (!match) continue;
+    const num = parseInt(match[1], 10);
+
+    const [existing] = await db.select().from(chapters)
+      .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
+      .limit(1);
+    if (existing) continue;
+
+    try {
+      const content = await fs.readFile(path.join(chaptersDir, file), 'utf-8');
+      const stripped = content.replace(/^[#*>\-\[\]()!|]+\s*/gm, '').trim();
+      const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+      const wordCount = cjk > 0 ? cjk : stripped.split(/\s+/).filter(Boolean).length;
+      const titleMatch = content.match(/^#\s+(.+)$/m);
+      const title = titleMatch ? titleMatch[1].trim() : '';
+
+      await db.insert(chapters).values({
+        id: generateId('ch_'),
+        projectId,
+        number: num,
+        title,
+        wordCount,
+        status: 'draft',
+      });
+    } catch { /* skip unreadable */ }
+  }
+}
+
 chaptersRouter.get('/', async (c) => {
   const projectId = c.req.param('projectId')!;
+  await resyncChaptersFromDisk(projectId).catch(() => {});
   const all = await db.select().from(chapters)
     .where(eq(chapters.projectId, projectId))
     .orderBy(chapters.number);

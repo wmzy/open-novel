@@ -213,7 +213,6 @@ export function useRun(conversationId?: string) {
             }
             return updated;
           });
-          persistAssistantMessage();
           cleanup(runId);
           return;
         } finally {
@@ -233,7 +232,6 @@ export function useRun(conversationId?: string) {
         break;
       }
 
-      persistAssistantMessage();
       cleanup(runId);
     } catch (err) {
       setMessages((prev) => [...prev, {
@@ -374,40 +372,6 @@ export function useRun(conversationId?: string) {
       assistantEventsRef.current = last.events ?? null;
       return updated;
     });
-  }
-
-  /** 当 agent 纯工具调用无 text_delta 时，从 events 里拼出可读文本用于持久化展示。 */
-  function extractTextFromEvents(events: AgentEvent[] | null): string {
-    if (!events || events.length === 0) return '';
-    const texts = events.filter((e) => e.kind === 'text').map((e) => (e as { text: string }).text);
-    if (texts.length) return texts.join('');
-    // 无正文：用工具调用摘要作为占位，保证会话历史不为空
-    const tools = events.filter((e) => e.kind === 'tool_use');
-    if (tools.length) {
-      return tools.map((t) => {
-        const name = (t as { name?: string }).name || 'tool';
-        return `[${name}]`;
-      }).join(' ');
-    }
-    return '';
-  }
-
-  function persistAssistantMessage() {
-    const convId = conversationIdRef.current;
-    if (!convId) return;
-    const content = assistantContentRef.current || extractTextFromEvents(assistantEventsRef.current);
-    if (!content) return;
-    // Fire-and-forget: save the assistant message (including events/artifacts) to the conversation
-    fetch(`/api/conversations/${convId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        role: 'assistant',
-        content,
-        events: assistantEventsRef.current,
-        artifacts: assistantArtifactsRef.current,
-      }),
-    }).catch(() => { /* ignore persistence errors */ });
   }
 
   function cleanup(runId?: string) {

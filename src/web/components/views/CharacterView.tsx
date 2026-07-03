@@ -43,11 +43,22 @@ const charName = css`
   color: var(--haze-color-text);
 `;
 
-/** 角色字段网格：两列排布"标签：值"。 */
+/** 角色字段网格：单列排布（角色档案多为段落式子节，两列会截断）。 */
 const charFields = css`
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.4rem 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.4rem;
+`;
+
+/** 子节标题（外貌/性格/背景等）。 */
+const subTitle = css`
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--haze-color-text-secondary);
+  margin-top: 0.5rem;
+  margin-bottom: 0.2rem;
+  padding-bottom: 0.15rem;
+  border-bottom: 1px dashed var(--haze-color-border);
 `;
 
 /** 需要强调的关键字段（性格等核心特征 + 驱动冲突的动机类字段）。 */
@@ -94,7 +105,9 @@ export default function CharacterView({ projectId }: Props) {
       <div className={charGrid}>
         {sections.map((s, i) => {
           const role = detectRole(s.title);
-          const name = s.fields.find((f) => f.key === '姓名')?.value;
+          // 从标题提取角色名："一、林冲（主角）" → "林冲"
+          const titleName = s.title.replace(/^[一二三四五六七八九十\d]+[、.)\s]+/, '').replace(/[（(].*$/, '').trim();
+          const name = s.fields.find((f) => f.key === '姓名')?.value || titleName;
           // 头部展示姓名，因此字段区不再重复"姓名"
           const rest = {
             fields: s.fields.filter((f) => f.key !== '姓名'),
@@ -107,6 +120,9 @@ export default function CharacterView({ projectId }: Props) {
           const emphasize = (key: string): CSSProperties | undefined =>
             EMPHASIZED_KEYS.has(key) ? { color: role.color, fontWeight: 500 } : undefined;
 
+          const hasDirect = rest.fields.length > 0 || rest.items.length > 0 || rest.body.length > 0 || rest.ordered.length > 0;
+          const hasSubs = s.subsections.length > 0;
+
           return (
             <div key={i} className={card} style={cardStyle}>
               <div className={charHeader}>
@@ -114,8 +130,16 @@ export default function CharacterView({ projectId }: Props) {
                 {name && <span className={charName}>{name}</span>}
               </div>
               <div className={charFields}>
-                {rest.fields.length > 0 || rest.items.length > 0 || rest.body.length > 0 || rest.ordered.length > 0 ? (
-                  renderBlock(rest, emphasize)
+                {hasDirect || hasSubs ? (
+                  <>
+                    {renderBlock(rest, emphasize)}
+                    {s.subsections.map((sub, j) => (
+                      <div key={`sub${j}`}>
+                        <div className={subTitle}>{sub.title}</div>
+                        {renderBlock(sub, emphasize)}
+                      </div>
+                    ))}
+                  </>
                 ) : (
                   <span className={charName} style={{ opacity: 0.55, fontWeight: 400 }}>暂无字段</span>
                 )}

@@ -8,6 +8,7 @@ import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
+import type { AgentEvent } from '../../agent/types';
 import { ensureContextArtifacts } from '../../agent/context-manager';
 import { createSnapshot, restoreSnapshot, listSnapshots } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
@@ -31,6 +32,61 @@ export function sanitizeStderr(text: string): string {
   let result = text;
   for (const [pattern, replacement] of SECRET_PATTERNS) result = result.replace(pattern, replacement);
   return result;
+}
+
+/**
+ * 将原始 StreamEvent[] 转换为可持久化的 AgentEvent[] 格式（合并连续 text/thinking delta）。
+ * 同时提取纯文本 content 供消息表存储。无文本输出时用工具调用摘要兜底。
+ */
+export function transformStreamEvents(rawEvents: Record<string, unknown>[]): { content: string; events: AgentEvent[] } {
+  const events: AgentEvent[] = [];
+  let textBuf = '';
+  let thinkingBuf = '';
+
+  const flush = () => {
+    if (thinkingBuf) { events.push({ kind: 'thinking', text: thinkingBuf }); thinkingBuf = ''; }
+    if (textBuf) { events.push({ kind: 'text', text: textBuf }); textBuf = ''; }
+  };
+
+  for (const e of rawEvents) {
+    const type = e.type as string;
+    if (type === 'text_delta') {
+      textBuf += String(e.delta || '');
+    } else if (type === 'thinking_delta') {
+      thinkingBuf += String(e.delta || '');
+    } else {
+      flush();
+      switch (type) {
+        case 'tool_use':
+          events.push({ kind: 'tool_use', id: String(e.id || ''), name: String(e.name || ''), input: e.input });
+          break;
+        case 'tool_result':
+          events.push({ kind: 'tool_result', toolUseId: String(e.toolUseId || ''), content: String(e.content || ''), isError: e.isError === true });
+          break;
+        case 'status':
+          events.push({ kind: 'status', label: String(e.label || ''), detail: e.detail as string | undefined });
+          break;
+        case 'usage': {
+          const u = e.usage as Record<string, unknown> | null;
+          events.push({ kind: 'usage', inputTokens: u?.input_tokens as number | undefined, outputTokens: u?.output_tokens as number | undefined, costUsd: e.costUsd as number | undefined });
+          break;
+        }
+        case 'error':
+          events.push({ kind: 'raw', line: String(e.message || '') });
+          break;
+        case 'raw':
+          events.push({ kind: 'raw', line: String(e.line || '') });
+          break;
+      }
+    }
+  }
+  flush();
+
+  const textContent = events.filter((e) => e.kind === 'text').map((e) => (e as { text: string }).text).join('');
+  const toolSummary = events.filter((e) => e.kind === 'tool_use').map((e) => `[${(e as { name: string }).name}]`).join(' ');
+  const content = textContent || toolSummary;
+
+  return { content, events };
 }
 
 const runsRouter = new Hono();
@@ -136,6 +192,22 @@ runsRouter.post('/', async (c) => {
     }
 
     finishRun(run, code === 0 ? 'succeeded' : 'failed');
+
+    // Persist assistant message (authoritative — frontend no longer persists).
+    // Even if the SSE client disconnected, the message is durably stored here.
+    if (code === 0 && agentEvents.length > 0) {
+      const { content: assistantContent, events: agentEventList } = transformStreamEvents(agentEvents);
+      if (assistantContent || agentEventList.length > 0) {
+        await db.insert(messages).values({
+          id: generateId('msg_'),
+          conversationId: convId,
+          role: 'assistant',
+          content: assistantContent || '(无文本输出)',
+          events: agentEventList,
+          artifacts: writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null,
+        }).catch(() => {});
+      }
+    }
 
     // Sync file changes back to DB and create snapshot
     const projectDir = await resolveProjectDir(projectId);
