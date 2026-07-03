@@ -37,6 +37,7 @@
     "mermaid": "^11.16.0",
     "pino": "^10.3.1",
     "pino-pretty": "^10.3.1",
+    "pinyin-pro": "^3.28.1",
     "postgres": "^3.4.9",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

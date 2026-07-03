@@ -1,0 +1,6 @@
+{
+  "先秦": { "nameLength": "single", "style": "朴素单字名为主" },
+  "汉唐": { "nameLength": "any", "style": "吉祥字、德行字（安、平、远、信）" },
+  "宋明": { "nameLength": "any", "style": "理学问理字（理、道、渊、致）" },
+  "模糊古代": { "nameLength": "any", "style": "可混合，以意象优先，不强求时代一致性" }
+}

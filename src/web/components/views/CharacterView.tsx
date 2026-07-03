@@ -1,10 +1,11 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { css } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
 import { parseSections } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
 import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildRelationshipGraph } from '../../../shared/diagram-builders';
+import NamingPanel from '../NamingPanel';
 import type { CSSProperties } from 'react';
 
 interface Props {
@@ -85,7 +86,20 @@ function detectRole(title: string): RoleStyle {
   return { kind: 'support', color: 'var(--haze-color-warning, #f59e0b)', label: title.includes('配角') ? '配角' : title };
 }
 
+/** 命名工具切换按钮。 */
+const namingToggleBtn = css`
+  font-size: 0.75rem;
+  color: var(--haze-color-primary);
+  background: none;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+  &:hover { background: var(--haze-color-bg-hover, rgba(255,255,255,0.05)); }
+`;
+
 export default function CharacterView({ projectId }: Props) {
+  const [showNaming, setShowNaming] = useState(false);
   const { data, isLoading } = useNovelFile(projectId, 'characters', 'characters/profiles.md');
 
   // 额外读取 state.json 获取角色关系数据
@@ -118,8 +132,15 @@ export default function CharacterView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>角色</h3>
+        <button
+          className={namingToggleBtn}
+          onClick={() => setShowNaming((v) => !v)}
+        >
+          {showNaming ? '▾ 收起起名工具' : '▸ 起名工具'}
+        </button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      {showNaming && <NamingPanel projectId={projectId} />}
       <CollapsibleDiagram chart={relGraph} title="人物关系" />
       <div className={charGrid}>
         {sections.map((s, i) => {
