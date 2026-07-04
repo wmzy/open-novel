@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { css } from '@linaria/core';
+import { useState } from 'react';
+import RevisionDialog from '../RevisionDialog';
 
 interface ChapterRow {
   id: string;
@@ -86,6 +88,20 @@ const emptyHint = css`
   & h3 { margin-bottom: 0.5rem; color: var(--haze-color-text); }
 `;
 
+const reviseBtn = css`
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--haze-color-text);
+  &:hover {
+    border-color: var(--haze-color-primary);
+    color: var(--haze-color-primary);
+  }
+`;
+
 const statusLabels: Record<string, string> = {
   draft: '草稿',
   review: '审阅中',
@@ -100,6 +116,7 @@ export default function WritingView({
   projectId: string;
   onViewChange: (view: string) => void;
 }) {
+  const [reviseChapter, setReviseChapter] = useState<number | null>(null);
   const { data: chapters } = useQuery<ChapterRow[]>({
     queryKey: ['chapters', projectId],
     queryFn: async () => {
@@ -144,10 +161,56 @@ export default function WritingView({
               第 {c.number} 章 {c.title}
               <span className={statusBadge}>{statusLabels[c.status] || c.status}</span>
             </span>
-            <span className={chapterMeta}>{(c.wordCount || 0).toLocaleString()} 字</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <span className={chapterMeta}>{(c.wordCount || 0).toLocaleString()} 字</span>
+              <button
+                className={reviseBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setReviseChapter(c.number);
+                }}
+              >
+                ✎ 修订
+              </button>
+            </span>
           </div>
         ))}
       </div>
+      {reviseChapter !== null && (
+        <RevisionDialog
+          projectId={projectId}
+          targetFile={`chapters/第${reviseChapter}章.md`}
+          onClose={() => setReviseChapter(null)}
+          onSubmit={async (mode, data) => {
+            if (mode === 'revise') {
+              await fetch('/api/runs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  projectId,
+                  agentId: 'claude-code',
+                  stage: 'writing',
+                  message: data.revisionNote,
+                  mode: 'revise',
+                  targetFile: `chapters/第${reviseChapter}章.md`,
+                  revisionNote: data.revisionNote,
+                }),
+              });
+            } else {
+              await fetch(`/api/projects/${projectId}/rename`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  oldName: data.oldName,
+                  newName: data.newName,
+                  scope: data.scope,
+                }),
+              });
+            }
+            setReviseChapter(null);
+          }}
+        />
+      )}
     </div>
   );
 }
