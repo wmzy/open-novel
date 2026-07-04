@@ -431,4 +431,48 @@ describe('composePrompt', () => {
       expect(prompt).not.toContain('本章须埋设的伏笔');
     });
   });
+
+  describe('阶段不匹配检测 (Bug #4)', () => {
+    it('scenes 阶段发送写作意图时提示词包含阶段不匹配警告', async () => {
+      const prompt = await composePrompt({
+        message: '请写第3章',
+        projectId: 'p',
+        stage: 'scenes',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('阶段不匹配提醒');
+      expect(prompt).toContain('scenes');
+      expect(prompt).toContain('PATCH /api/projects');
+    });
+
+    it('writing 阶段发送写作意图时不触发警告', async () => {
+      const prompt = await composePrompt({
+        message: '请写第3章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('阶段不匹配提醒');
+    });
+
+    it('concept 阶段发送非写作指令时不触发警告', async () => {
+      const prompt = await composePrompt({
+        message: '帮我完善主角的背景故事',
+        projectId: 'p',
+        stage: 'concept',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('阶段不匹配提醒');
+    });
+
+    it('“继续写”也触发写作意图检测', async () => {
+      const prompt = await composePrompt({
+        message: '继续写下一章',
+        projectId: 'p',
+        stage: 'outline',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('阶段不匹配提醒');
+    });
+  });
 });

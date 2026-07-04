@@ -85,6 +85,42 @@ function isWritingStage(stage: string): boolean {
   return WRITING_STAGES.has(stage);
 }
 
+/**
+ * 检测用户消息与当前阶段的错配。
+ *
+ * Bug #4 的根因：用户说“写第3章”但项目还在 scenes 阶段时，agent 收到矛盾指令
+ * （用户要写章节但 SKILL 说规划场景），最终产出 0 个文件。
+ *
+ * 本函数不自动切换阶段（可能有未完成的场景规划），而是在提示词头部注入
+ * 明确的提醒，让 agent 告诉用户需要先切换阶段。
+ */
+function detectStageMismatch(message: string, stage?: string): string {
+  if (!stage || !message) return '';
+
+  // 检测写作意图
+  const writingIntentPatterns = [
+    /写第\s*[\d一二三四五六七八九十百零]+\s*章/,
+    /写下一章/,
+    /继续写/,
+    /写章节/,
+    /开始写作/,
+    /写正文/,
+  ];
+  const wantsWriting = writingIntentPatterns.some((p) => p.test(message));
+
+  if (wantsWriting && !isWritingStage(stage)) {
+    return `> ⚠️ **阶段不匹配提醒**
+> 用户消息包含写作意图（如“写第N章”），但当前项目阶段是「${stage}」。
+> writing 阶段的提示词和上下文层尚未注入——现在写章节会缺少必要的前期设定。
+>
+> **请在回复中明确告知用户**：当前阶段是「${stage}」，需要先完成当前阶段并切换到 writing 阶段。
+> 如果用户确实想跳过前期直接写章节，请告诉他们可通过 PATCH /api/projects/{id} 切换阶段。
+> 不要在错误的阶段下直接写章节文件。\n`;
+  }
+
+  return '';
+}
+
 /** 读取 `.novel/` 下指定相对路径文件内容，失败返回空串。 */
 async function readNovelFile(projectDir: string, relativePath: string): Promise<string> {
   try {
@@ -95,13 +131,27 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
   }
 }
 
-/** 核心设定层（恒定）：concept.md + world-building.md 全文。 */
+/** 核心设定层（恒定）：concept.md + world-building.md。
+ * 全量注入会消耗大量 token（concept+world 可达 60KB+），导致 agent 上下文超载。
+ * 这里在保持完整性的前提下控制大小：超过 CORE_LAYER_MAX_CHARS 时截断 world-building 的末尾细节。 */
+const CORE_LAYER_MAX_CHARS = 16000; // 约 8K token，留足空间给其他层
+
 async function buildCoreSettingsLayer(projectDir: string): Promise<string> {
   const blocks: string[] = [];
   const concept = await readNovelFile(projectDir, 'concept.md');
   if (concept) blocks.push(`#### 故事概念 (concept.md)\n${concept}`);
   const world = await readNovelFile(projectDir, 'world-building.md');
-  if (world) blocks.push(`#### 世界观 (world-building.md)\n${world}`);
+  if (world) {
+    let worldContent = world;
+    const totalSize = blocks.join('\n\n').length + world.length;
+    if (totalSize > CORE_LAYER_MAX_CHARS) {
+      // 截断 world-building，保留开头（力量体系 / 社会结构等核心部分通常在前半）
+      const budget = CORE_LAYER_MAX_CHARS - blocks.join('\n\n').length;
+      worldContent = world.slice(0, Math.max(budget, 6000))
+        + `\n\n[…世界观文档已截断，完整内容见 world-building.md…]`;
+    }
+    blocks.push(`#### 世界观 (world-building.md)\n${worldContent}`);
+  }
   if (blocks.length === 0) return '';
   return `### 核心设定层（恒定）\n${blocks.join('\n\n')}`;
 }
@@ -280,6 +330,11 @@ const OUTPUT_FORMAT = `## Output Format
 export async function composePrompt(options: ComposePromptOptions): Promise<string> {
   const { message, projectId, skillId, stage, projectDir, history } = options;
 
+  // 阶段不匹配检测：用户消息含写作意图但当前阶段不是 writing。
+  // 根因：agent 在错误阶段收到写作指令时，提示词要求的是场景规划而非章节写作，
+  // 导致产出 0 个文件，浪费额度。这里在提示词头部注入明确提示。
+  const STAGE_MISMATCH_HINT = detectStageMismatch(message, stage);
+
   // Load project metadata from DB
   let projectContext = '';
   let projectMeta: { targetWords: number | null; chapterCount: number | null } | null = null;
@@ -320,6 +375,10 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
 
   // Compose the full prompt
   const parts: string[] = [];
+
+  if (STAGE_MISMATCH_HINT) {
+    parts.push(STAGE_MISMATCH_HINT);
+  }
 
   parts.push(`你是一位小说创作助手。你帮助用户写作、结构和精炼他们的小说。保持创意、周到、有支持性。被要求时撰写高质量散文，规划时提供清晰的结构性指导。
 

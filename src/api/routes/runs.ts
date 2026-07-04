@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun } from '../../agent/run';
+import type { RunSession } from '../../agent/run';
 import { eventStore } from '../../agent/event-store';
 import { composePrompt } from '../../agent/prompt-composer';
 import { getAgentDef } from '../../agent/registry';
@@ -255,11 +256,6 @@ runsRouter.post('/', async (c) => {
   const msgId = generateId('msg_');
   await db.insert(messages).values({ id: msgId, conversationId: convId, role: 'user', content: message });
 
-  const run = createRun({ projectId, agentId, skillId, stage });
-
-  // Store run in DB
-  await db.insert(runsTable).values({ id: run.id, conversationId: convId, agent: agentId, status: 'running' });
-
   // Compose prompt with project context, skill, and conversation history
   const projectDir = await resolveProjectDir(projectId);
   const composedPrompt = await composePrompt({
@@ -271,10 +267,25 @@ runsRouter.post('/', async (c) => {
     history: history.length > 0 ? history : undefined,
   });
 
+  /**
+   * Launch the agent subprocess and wire up all stream handling, watchdog,
+   * quality checks, and teardown. Extracted as a closure so it can be
+   * re-invoked for zero-output auto-retry.
+   *
+   * @param retryOf  Run ID this attempt is retrying (for logging). null on first attempt.
+   * @returns The RunSession for this attempt.
+   */
+  async function launchAndTrack(retryOf: string | null): Promise<RunSession> {
+  if (!def) throw new Error('Agent definition missing');
+  const run = createRun({ projectId, agentId, skillId, stage });
+  run.status = 'running';
+
+  // Store run in DB
+  void db.insert(runsTable).values({ id: run.id, conversationId: convId, agent: agentId, status: 'running' }).execute();
+
   // Launch agent
   const { child } = launchAgent(def, composedPrompt, projectDir, [], model);
   run.child = child;
-  run.status = 'running';
 
   // Watchdog: cancel the run if the agent subprocess exceeds the configured timeout.
   // unref() so the timer never keeps the event loop (and process) alive.
@@ -408,11 +419,31 @@ runsRouter.post('/', async (c) => {
       finishedAt: new Date(),
     }).where(eq(runsTable.id, run.id)).execute();
 
+    // P1: 零产出自动重试 — writing 阶段产出 0 个文件时自动重试一次。
+    // 根因：agent 有时读上下文后空转退出（~30%概率），不写任何文件。
+    // 不重试会浪费一轮对话额度且打断写作流程。
+    if (code === 0 && writtenPaths.size === 0 && stage === 'writing' && retryOf === null) {
+      emitEvent(run, 'agent', {
+        type: 'info',
+        message: 'Agent 未产出任何文件，正在自动重试…',
+        retry: true,
+      });
+      // 短暂延迟后重试，避免额度瞬时冲击
+      setTimeout(() => { void launchAndTrack(run.id); }, 2000);
+      // 不 finishRun — 重试的 run 会接管事件流
+      return;
+    }
+
     // P0: 最后才 finishRun — 'end' 事件表示管道完全收尾
     finishRun(run, code === 0 ? 'succeeded' : 'failed');
   });
 
-  return c.json({ runId: run.id, conversationId: convId }, 201);
+  return run;
+  } // end launchAndTrack
+
+  // 启动首次尝试
+  const firstRun = await launchAndTrack(null);
+  return c.json({ runId: firstRun.id, conversationId: convId }, 201);
 });
 
 runsRouter.get('/:id/events', async (c) => {
