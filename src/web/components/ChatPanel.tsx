@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import { useRun } from '@/web/hooks/useRun';
-import { useModels } from '@/web/hooks/useModels';
+import { useModels, useModelSelection } from '@/web/hooks/useModels';
 import { useConversations } from '@/web/hooks/useConversations';
 import { useAgents } from '@/web/hooks/useAgents';
 import { useAgentCommands } from '@/web/hooks/useAgentCommands';
@@ -45,7 +45,6 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isPinned, setIsPinned] = useState(true);
-  const [selectedModel, setSelectedModel] = useState('default');
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [activeCmdIndex, setActiveCmdIndex] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
@@ -79,6 +78,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   // Fetch available models
   const { data: models } = useModels(agentId);
   const availableModels = (models && models.length > 0 ? models : DEFAULT_MODELS).filter((m) => m.id !== 'default');
+
+  // 模型选择持久化到 localStorage（跨刷新/重进记住），切 agent 后旧模型不在新列表则自动回退 default
+  const [selectedModel, setSelectedModel] = useModelSelection(availableModels.map((m) => m.id));
 
   // Fetch conversations for this project
   const { data: conversations } = useConversations(projectId);
