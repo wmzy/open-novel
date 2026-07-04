@@ -11,6 +11,7 @@ import {
   updateStateTable,
   initStateTable,
   ensureContextArtifacts,
+  readCharacterNames,
 } from '../../../src/agent/context-manager';
 
 async function seedProfiles(dir: string, names: string[]) {
@@ -356,6 +357,36 @@ describe('context-manager', () => {
       // 文件仍在原位
       const content = await fs.readFile(path.join(chaptersDir, '第1章.md'), 'utf-8');
       expect(content).toBe('正常正文内容');
+    });
+  });
+
+  describe('readCharacterNames (table index)', () => {
+    it('parses names from table-style profiles.md', async () => {
+      const profiles = `# 角色档案索引
+
+## 核心角色
+
+| 角色 | 文件 | 定位 |
+|------|------|------|
+| 🗡️ 武松 | [武松.md](profiles/武松.md) | 主角 |
+| 👴 武大郎 | [武大郎.md](profiles/武大郎.md) | 祖父 |`;
+      await fs.mkdir(path.join(dir, '.novel', 'characters'), { recursive: true });
+      await fs.writeFile(path.join(dir, '.novel', 'characters', 'profiles.md'), profiles);
+
+      const names = await readCharacterNames(dir);
+      expect(names).toContain('武松');
+      expect(names).toContain('武大郎');
+      expect(names.length).toBe(2);
+    });
+
+    it('still parses legacy field format', async () => {
+      const profiles = `- 姓名：林冲\n- 姓名：孙二娘`;
+      await fs.mkdir(path.join(dir, '.novel', 'characters'), { recursive: true });
+      await fs.writeFile(path.join(dir, '.novel', 'characters', 'profiles.md'), profiles);
+
+      const names = await readCharacterNames(dir);
+      expect(names).toContain('林冲');
+      expect(names).toContain('孙二娘');
     });
   });
 });

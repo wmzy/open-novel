@@ -125,18 +125,29 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
   }
 }
 
-/** 从角色档案（characters/profiles.md）解析角色名列表。 */
-async function readCharacterNames(projectDir: string): Promise<string[]> {
+/** 从角色档案（characters/profiles.md）解析角色名列表。
+ *  支持两种格式：字段式（`- 姓名：xxx`）与表格索引式（`| 角色 | 文件 |`）。 */
+export async function readCharacterNames(projectDir: string): Promise<string[]> {
   const raw = await readNovelFile(projectDir, PROFILES_FILE);
   if (!raw) return [];
   const names: string[] = [];
-  // 匹配模板中的 `- 姓名：xxx` / `* 姓名: xxx` 字段
+  const seen = new Set<string>();
+
+  // 1. 字段式：- 姓名：xxx / * 姓名: xxx
   const fieldRe = /^[-*]\s*姓名\s*[:：]\s*(.+?)\s*$/gm;
   let m: RegExpExecArray | null;
   while ((m = fieldRe.exec(raw)) !== null) {
     const name = m[1].trim();
-    if (name && !names.includes(name)) names.push(name);
+    if (name && !seen.has(name)) { seen.add(name); names.push(name); }
   }
+
+  // 2. 表格索引式：| 角色 | 文件 |  ——  取第一列，去掉 emoji 前缀
+  const tableRe = /^\|\s*([^\[|]+?)\s*\|\s*\[.+?\]\([^)]+\)\s*\|/gm;
+  while ((m = tableRe.exec(raw)) !== null) {
+    const name = m[1].replace(/^[\p{Emoji}\uFE0F\s]+/u, '').trim();
+    if (name && name !== '角色' && !seen.has(name)) { seen.add(name); names.push(name); }
+  }
+
   return names;
 }
 
