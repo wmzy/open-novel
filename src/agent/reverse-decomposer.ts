@@ -48,7 +48,15 @@ export function buildReverseDecomposePrompt(meta: DecomposeMeta): string {
 - .novel/state.json：每个角色的 name/location/emotion/knows/relationships/lastAppearance；
   relationships 字段是角色关系图的唯一数据源，键=对方角色名，值=关系描述（如 "武松":"对手"）；
   timeline 推进到全书终局；activeForeshadows 收集所有 planted 伏笔。
-- .novel/foreshadow.json：识别全书的伏笔（status=planted）与回收（status=resolved）。
+- .novel/foreshadow.json：识别全书的伏笔与回收。**必须用标准 schema**：
+  \`\`\`json
+  { "foreshadows": [
+    { "id": 1, "content": "伏笔描述", "status": "planted",
+      "plantedIn": 章号, "resolvedIn": null }
+  ] }
+  \`\`\`
+  顶层键为 \`foreshadows\`（不是 items）；内容字段为 \`content\`（不是 description）；
+  status 取值 \`pending\`/\`planted\`/\`resolved\`；plantedIn/resolvedIn 为数字章号（无法确定时填 null）。
 
 ## 第五步·滚动摘要
 逐章读，为每章写约 200 字语义摘要到 .novel/chapters/第N章.summary.md。

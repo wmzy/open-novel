@@ -249,6 +249,29 @@ describe('checkForeshadows (IO)', () => {
     expect(report.healthy[0].content).toBe('神秘信件');
     expect(report.healthy[0].lastSeenChapter).toBe(1);
   });
+
+  it('容忍顶层 items 键（逆向/enrich 产出的 schema）', async () => {
+    const novel = path.join(dir, '.novel', 'chapters');
+    await fs.mkdir(novel, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, '.novel', 'foreshadow.json'),
+      JSON.stringify({
+        // 逆向拆解/enrich 产出的 schema：顶层 items + description 字段
+        items: [
+          { id: 'foreshadow-001', description: '蝴蝶玉佩', status: 'planted', plantedChapter: 1 },
+          { id: 'foreshadow-002', description: '诸子暗号', status: 'resolved', plantedChapter: 1, expectedPayoffChapter: 3 },
+        ],
+      }),
+    );
+    await fs.writeFile(path.join(novel, 'chapter-1.md'), '蝴蝶玉佩与诸子暗号同时出现。');
+    await fs.writeFile(path.join(novel, 'chapter-2.md'), '无关内容。');
+    const report = await checkForeshadows(dir, 5);
+    // items 键应被识别；伏笔 1 间隔 < 5 → healthy，伏笔 2 已 resolved
+    expect(report.healthy).toHaveLength(1);
+    expect(report.healthy[0].content).toBe('蝴蝶玉佩');
+    expect(report.resolved).toHaveLength(1);
+    expect(report.resolved[0].content).toBe('诸子暗号');
+  });
 });
 
 // ===== 人物 OOC 检测：档案解析 =====

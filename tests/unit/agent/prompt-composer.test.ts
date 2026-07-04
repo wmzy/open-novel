@@ -484,6 +484,36 @@ describe('composePrompt', () => {
       expect(outlineIdx).toBeGreaterThan(-1);
       expect(castIdx).toBeGreaterThan(outlineIdx);
     });
+
+    it('loadForeshadows 容忍 items 键 + description 字段（逆向/enrich schema）', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: ['foreshadow-001'], lastUpdatedChapter: 2, updatedAt: '' }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          // 逆向/enrich 产出的 schema：顶层 items + description
+          items: [
+            { id: 'foreshadow-001', description: '蝴蝶玉佩', status: 'planted', plantedChapter: 1 },
+            { id: 'foreshadow-002', description: '已回收的伏笔', status: 'resolved', plantedChapter: 1, expectedPayoffChapter: 2 },
+          ],
+        }),
+      );
+      const prompt = await composePrompt({
+        message: '写第三章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      // items 键的 planted 伏笔应被 loadForeshadows 读取并注入待回收区
+      expect(prompt).toContain('### 活跃伏笔层');
+      expect(prompt).toContain('蝴蝶玉佩');
+      // 已回收不出现
+      expect(prompt).not.toContain('已回收的伏笔');
+    });
   });
 
   describe('阶段不匹配检测 (Bug #4)', () => {

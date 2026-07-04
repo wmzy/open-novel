@@ -236,14 +236,22 @@ export async function loadForeshadows(projectDir: string): Promise<{
   if (!raw) return { foreshadows: [] };
   try {
     const data = JSON.parse(raw) as {
-      foreshadows?: Array<{ id: number; content: string; status: string; plantedIn?: number | null; resolvedIn?: number | null }>;
+      foreshadows?: Array<Record<string, unknown>>;
+      items?: Array<Record<string, unknown>>;
     };
-    const list = (data.foreshadows ?? [])
-      .filter((f) => f && f.content)
-      .map((f) => ({
-        id: f.id,
-        content: f.content,
-        status: f.status,
+    // 容错两种顶层键：标准 `foreshadows` 与逆向/enrich 产出的 `items`
+    const raw2 = Array.isArray(data.foreshadows) ? data.foreshadows : data.items;
+    const list = (raw2 ?? [])
+      .filter((f) => f && (typeof f.content === 'string' || typeof f.description === 'string'))
+      .map((f, idx) => ({
+        id: typeof f.id === 'number' ? f.id
+          : typeof f.id === 'string' ? (parseInt(f.id, 10) || idx + 1)
+            : idx + 1,
+        // 内容字段容错：content / description / text
+        content: typeof f.content === 'string' ? f.content
+          : typeof f.description === 'string' ? f.description
+            : (f.text as string) ?? '',
+        status: typeof f.status === 'string' ? f.status : 'pending',
         plantedIn: typeof f.plantedIn === 'number' ? f.plantedIn : null,
         resolvedIn: typeof f.resolvedIn === 'number' ? f.resolvedIn : null,
       }));

@@ -380,9 +380,11 @@ function pickNumField(o: Record<string, unknown>, keys: string[]): number | null
   return null;
 }
 
-function normalizeForeshadows(input: unknown): Foreshadow[] {
+export function normalizeForeshadows(input: unknown): Foreshadow[] {
   if (!input || typeof input !== 'object') return [];
-  const arr = (input as { foreshadows?: unknown }).foreshadows;
+  // 容错两种顶层键：标准 `foreshadows` 与逆向/enrich 产出的 `items`
+  const obj = input as { foreshadows?: unknown; items?: unknown };
+  const arr = Array.isArray(obj.foreshadows) ? obj.foreshadows : obj.items;
   if (!Array.isArray(arr)) return [];
   return arr
     .map((f, idx): Foreshadow | null => {

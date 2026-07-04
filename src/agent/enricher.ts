@@ -60,7 +60,9 @@ location/emotion 可从档案中的当前状态推断（若档案无明确信息
 
 ### 3.4 timeline 与 activeForeshadows
 - timeline：若 outline-detailed.md 有时间线标记，提取关键节点推进到当前进度
-- activeForeshadows：若 .novel/foreshadow.json 存在，收集 status=planted 的条目
+- activeForeshadows：若 .novel/foreshadow.json 存在，收集 status=planted 的条目 ID。
+  若需新建 foreshadow.json，**必须用标准 schema**：\`{ "foreshadows": [{ "id": 1, "content": "描述", "status": "planted", "plantedIn": null, "resolvedIn": null }] }\`。
+  顶层键为 \`foreshadows\`（不是 items），内容字段为 \`content\`（不是 description）。
 
 ## 第四步·章节滚动摘要（仅有正文时）
 若 .novel/chapters/ 下存在正文文件（第N章.md）但缺对应的 .summary.md：

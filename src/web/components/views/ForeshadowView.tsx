@@ -48,11 +48,28 @@ export default function ForeshadowView({ projectId }: Props) {
   if (isLoading) return <div>加载中...</div>;
   if (!data) return <div>尚未创建伏笔。在聊天面板中输入 /foreshadow 开始。</div>;
 
-  const pending = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'pending') || [];
-  const planted = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'planted') || [];
-  const resolved = data.foreshadows?.filter((f: { content: string; status: string }) => f.status === 'resolved') || [];
+  // 容错两种 schema：标准 { foreshadows } 与逆向/enrich 产出的 { items }
+  type Item = { id?: number | string; content?: string; description?: string; status: string; plantedIn?: number | string | null; resolvedIn?: number | string | null };
+  const rawList: Item[] = Array.isArray(data.foreshadows) ? data.foreshadows
+    : Array.isArray(data.items) ? data.items : [];
+  const num = (v: unknown): number => {
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') { const p = parseInt(v, 10); return Number.isNaN(p) ? 0 : p; }
+    return 0;
+  };
+  const normalize = (arr: Item[]) => arr.map((f, i) => ({
+    id: typeof f.id === 'number' ? f.id : typeof f.id === 'string' ? (parseInt(f.id, 10) || i + 1) : i + 1,
+    content: f.content ?? f.description ?? '',
+    status: f.status,
+    plantedIn: f.plantedIn != null ? num(f.plantedIn) : 0,
+    resolvedIn: f.resolvedIn != null ? num(f.resolvedIn) : undefined,
+  }));
 
-  const gantt = buildForeshadowGantt(data.foreshadows || []);
+  const pending = normalize(rawList.filter((f) => f.status === 'pending'));
+  const planted = normalize(rawList.filter((f) => f.status === 'planted'));
+  const resolved = normalize(rawList.filter((f) => f.status === 'resolved'));
+
+  const gantt = buildForeshadowGantt(normalize(rawList));
 
   return (
     <div>
@@ -61,19 +78,19 @@ export default function ForeshadowView({ projectId }: Props) {
       <div className={kanban}>
         <div className={column}>
           <div className={columnTitle}>待埋</div>
-          {pending.map((f: { content: string; status: string }, i: number) => (
+          {pending.map((f, i: number) => (
             <div key={i} className={item}>{f.content}</div>
           ))}
         </div>
         <div className={column}>
           <div className={columnTitle}>已埋</div>
-          {planted.map((f: { content: string; status: string }, i: number) => (
+          {planted.map((f, i: number) => (
             <div key={i} className={item}>{f.content}</div>
           ))}
         </div>
         <div className={column}>
           <div className={columnTitle}>已收</div>
-          {resolved.map((f: { content: string; status: string }, i: number) => (
+          {resolved.map((f, i: number) => (
             <div key={i} className={item}>{f.content}</div>
           ))}
         </div>
