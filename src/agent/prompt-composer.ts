@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import { buildRollingSummaryContext, getStateTable, readCharacterNames } from './context-manager';
 import { extractChapterOutline, identifyCast, buildCastLayer } from './chapter-context';
 import { buildReverseDecomposePrompt } from './reverse-decomposer';
+import { buildEnrichPrompt } from './enricher';
 
 export interface ComposePromptOptions {
   message: string;
@@ -436,7 +437,9 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
           projectDir,
           chapterCount: projectMeta?.chapterCount ?? 0,
         })
-      : STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
+      : currentStage === 'enrich'
+        ? buildEnrichPrompt({ projectDir })
+        : STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
 
   // Compose the full prompt
   const parts: string[] = [];
