@@ -13,6 +13,14 @@ export interface ComposePromptOptions {
   stage?: string;
   projectDir: string;
   history?: { role: string; content: string }[];
+  /** 运行模式：generate（默认，生成全新）或 revise（修订已有文件）。 */
+  mode?: 'generate' | 'revise';
+  /** revise 模式：目标文件相对路径。 */
+  reviseTarget?: string;
+  /** revise 模式：用户修订意见。 */
+  reviseNote?: string;
+  /** revise 模式：目标文件当前全文。 */
+  reviseContent?: string;
 }
 
 const STAGE_INSTRUCTIONS: Record<string, string> = {
@@ -59,6 +67,33 @@ actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视
   revision: `审阅和改进已有内容。重点检查：(1) 剧情连贯性和逻辑漏洞；(2) 伏笔是否被遗忘（POST /api/projects/{projectId}/check/foreshadows）；(3) 人物行为是否偏离设定（POST /api/projects/{projectId}/check/ooc，body: {chapterNum: N}）；(4) 文笔AI味（POST /api/projects/{projectId}/check/ai-patterns，body: {chapterNum: N}）。根据检查报告逐章修订。`,
   polish: `最终润色。聚焦行文质量——用词精准度、句式节奏、对话自然度、描写具体化。删除抽象情绪标签和万能形容词，用具体细节替代。`,
 };
+
+/**
+ * 修订模式的指令（替代 STAGE_INSTRUCTIONS）。注入目标文件全文 + 修订意见 + 外科手术规则。
+ * 设计依据见 spec §3.4。 */
+function buildReviseInstructions(reviseContent: string, reviseNote: string): string {
+  return `## 当前任务：修订已有内容
+
+你不是在从零创作，而是在对一份已有的文件做**定向修订**。
+
+### 目标文件
+以下是你需要修订的文件全文（已读入上下文，无需再 Read）：
+
+\`\`\`
+${reviseContent}
+\`\`\`
+
+### 修订意见
+${reviseNote}
+
+### 修订规则（严格遵守）
+
+1. **必须用 Edit 工具做外科手术修改**——只改动与修订意见直接相关的段落，其余原封不动。
+2. **禁止重写整篇**——如果你的改动会超过文件 30% 的内容，停下来在回复里说明原因，建议用户将修订拆分为多次。
+3. **保留原文风格**——修订是定向调整，不是风格重写。不要“顺手”优化你没被要求改的句子。
+4. **保存修改**——用 Edit 工具直接修改原文件（Edit 会直接写盘，不需要额外的 Write）。对整个文件的重建式改动才用 Write。
+5. **简短说明**——在回复中用 2-3 句话说明你改了什么、为什么，便于用户判断是否符合预期。`;
+}
 
 /**
  * List project files (names only, no content).
@@ -328,7 +363,14 @@ const OUTPUT_FORMAT = `## Output Format
 - When saving files, use appropriate markdown formatting for the content type`;
 
 export async function composePrompt(options: ComposePromptOptions): Promise<string> {
-  const { message, projectId, skillId, stage, projectDir, history } = options;
+  const { message, projectId, skillId, stage, projectDir, history,
+          mode = 'generate', reviseTarget, reviseNote, reviseContent } = options;
+
+  const isRevise = mode === 'revise' && !!reviseNote && !!reviseContent;
+  // revise 模式下，判断目标是否为章节正文（路径匹配 chapters/第N章.md）
+  const isChapterTarget = isRevise && !!reviseTarget
+    ? /^chapters[/\\]第\d+章\.md$/.test(reviseTarget)
+    : false;
 
   // 阶段不匹配检测：用户消息含写作意图但当前阶段不是 writing。
   // 根因：agent 在错误阶段收到写作指令时，提示词要求的是场景规划而非章节写作，
@@ -369,14 +411,16 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
   // List project files (names only - agent reads content itself)
   const fileList = await listProjectFiles(projectDir);
 
-  // Stage-specific instructions
+  // Stage-specific instructions (generate 模式) 或 revise 指令 (revise 模式)
   const currentStage = stage || 'concept';
-  const stageInstructions = STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
+  const stageInstructions = isRevise
+    ? buildReviseInstructions(reviseContent!, reviseNote!)
+    : STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
 
   // Compose the full prompt
   const parts: string[] = [];
 
-  if (STAGE_MISMATCH_HINT) {
+  if (STAGE_MISMATCH_HINT && !isRevise) {
     parts.push(STAGE_MISMATCH_HINT);
   }
 
@@ -406,8 +450,9 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
     parts.push(`\n## Project Files\n${fileList.map((f) => `- ${f}`).join('\n')}`);
   }
 
-  // 写作阶段：注入字数目标 + 分层上下文（核心设定 / 状态 / 滚动摘要 / 活跃伏笔）
-  if (isWritingStage(currentStage)) {
+  // 写作阶段（generate）或章节修订（revise）：注入字数目标 + 分层上下文
+  const needsWritingContext = isWritingStage(currentStage) || (isRevise && isChapterTarget);
+  if (needsWritingContext) {
     // P1 缺陷4: 动态注入每章字数目标
     if (projectMeta?.targetWords && projectMeta?.chapterCount) {
       const perChapter = Math.round(projectMeta.targetWords / projectMeta.chapterCount);
@@ -418,10 +463,12 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
     const state = await getStateTable(projectDir);
     const currentChapter = state.lastUpdatedChapter + 1;
 
-    // 定向提醒：本章须埋设的伏笔，置顶于分层上下文之前
-    const chapterForeshadow = await buildCurrentChapterForeshadows(projectDir, currentChapter);
-    if (chapterForeshadow) {
-      parts.push(`\n${chapterForeshadow}`);
+    // 定向提醒：本章须埋设的伏笔，置顶于分层上下文之前（仅 generate 模式；revise 不埋新伏笔）
+    if (mode === 'generate') {
+      const chapterForeshadow = await buildCurrentChapterForeshadows(projectDir, currentChapter);
+      if (chapterForeshadow) {
+        parts.push(`\n${chapterForeshadow}`);
+      }
     }
 
     const layers = await buildWritingContextLayers(projectDir, currentChapter);
@@ -433,7 +480,7 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
   parts.push(`\n${TOOL_INSTRUCTIONS}`);
   parts.push(`\n${OUTPUT_FORMAT}`);
 
-  if (skillContent) {
+  if (skillContent && !isRevise) {
     parts.push(`\n## Skill Instructions\n${skillContent}`);
   }
 

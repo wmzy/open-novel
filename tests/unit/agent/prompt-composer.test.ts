@@ -475,4 +475,102 @@ describe('composePrompt', () => {
       expect(prompt).toContain('阶段不匹配提醒');
     });
   });
+
+  describe('revise 模式', () => {
+    it('注入 REVISE_INSTRUCTIONS + 目标文件全文 + 修订意见，不注入阶段指令', async () => {
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novelDir, 'chapters', '第1章.md'),
+        '# 第一章\n\n这是已有的正文内容。\n',
+      );
+
+      const prompt = await composePrompt({
+        message: '主角太冷，加温度',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+        mode: 'revise',
+        reviseTarget: 'chapters/第1章.md',
+        reviseNote: '主角太冷，加温度',
+        reviseContent: '# 第一章\n\n这是已有的正文内容。\n',
+      });
+      expect(prompt).toContain('修订已有内容');
+      expect(prompt).toContain('这是已有的正文内容');
+      expect(prompt).toContain('主角太冷，加温度');
+      expect(prompt).toContain('外科手术');
+      // revise 模式不注入阶段指令（STAGE_INSTRUCTIONS）
+      expect(prompt).not.toContain('为小说撰写真正的散文正文');
+    });
+
+    it('目标是章节时注入核心设定层（保持连续性）', async () => {
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      await fs.writeFile(path.join(novelDir, 'concept.md'), '这是一个武侠故事。');
+      await fs.writeFile(
+        path.join(novelDir, 'chapters', '第1章.md'),
+        '# 第一章\n\n正文。\n',
+      );
+
+      const prompt = await composePrompt({
+        message: '修改',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+        mode: 'revise',
+        reviseTarget: 'chapters/第1章.md',
+        reviseNote: '修改',
+        reviseContent: '# 第一章\n\n正文。\n',
+      });
+      expect(prompt).toContain('Novel Context Layers');
+    });
+
+    it('目标是设定文件时不注入章节摘要层', async () => {
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'characters'), { recursive: true });
+      await fs.writeFile(path.join(novelDir, 'concept.md'), '概念。');
+      await fs.writeFile(
+        path.join(novelDir, 'characters', 'profiles.md'),
+        '## 一、主角\n\n角色描述。\n',
+      );
+
+      const prompt = await composePrompt({
+        message: '让主角更立体',
+        projectId: 'p',
+        stage: 'characters',
+        projectDir: tempDir,
+        mode: 'revise',
+        reviseTarget: 'characters/profiles.md',
+        reviseNote: '让主角更立体',
+        reviseContent: '## 一、主角\n\n角色描述。\n',
+      });
+      expect(prompt).toContain('修订已有内容');
+      // 设定文件修订不注入章节上下文层
+      expect(prompt).not.toContain('Novel Context Layers');
+    });
+
+    it('revise 模式不注入 Skill 指令', async () => {
+      mockGetPlugin.mockReturnValue({ skillContent: '## SKILL: 撰写散文' });
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novelDir, 'chapters', '第1章.md'),
+        '# 第一章\n\n正文。\n',
+      );
+
+      const prompt = await composePrompt({
+        message: '修改',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+        skillId: 'novel',
+        mode: 'revise',
+        reviseTarget: 'chapters/第1章.md',
+        reviseNote: '修改',
+        reviseContent: '# 第一章\n\n正文。\n',
+      });
+      expect(prompt).not.toContain('SKILL: 撰写散文');
+      mockGetPlugin.mockReturnValue(null);
+    });
+  });
 });
