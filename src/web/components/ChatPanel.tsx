@@ -13,6 +13,8 @@ import {
   inputArea, textarea, sendBtn, stopBtn, jumpBtn, emptyState,
   agentWarning, agentBadge, autocompleteDropdown, autocompleteItem,
   autocompleteCmd, autocompleteDesc, cmdBadge, cmdBadgeApp, cmdBadgeAgent,
+  askBox, askMessage, askOptions, askOptionBtn, askCheckbox, askInput,
+  askActions, askSubmitBtn, askCancelBtn,
 } from './ChatPanel.styles';
 
 interface Command {
@@ -48,10 +50,20 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const [activeCmdIndex, setActiveCmdIndex] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
 
+  // ask 选择框临时状态（多选的已选项、输入的文本）
+  const [askMultiSelected, setAskMultiSelected] = useState<string[]>([]);
+  const [askInputValue, setAskInputValue] = useState('');
+
   // File autocomplete for @ mentions
   const fileAutocomplete = useFileAutocomplete(projectId);
 
-  const { messages: chatMessages, isRunning, status, activeRunCount, availableCommands, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+  const { messages: chatMessages, isRunning, status, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+
+  // pendingAsk 变化时重置临时状态
+  useEffect(() => {
+    setAskMultiSelected([]);
+    setAskInputValue('');
+  }, [pendingAsk]);
 
   // 首屏预取 agent 命令（无需先发消息）；run 中实时推送会覆盖
   const { data: prefetchedCommands } = useAgentCommands(agentId);
@@ -379,6 +391,91 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       {currentAgent && !agentAvailable && !noAgentsAvailable && (
         <div className={agentWarning} data-testid="agent-unavailable">
           <span>Agent "{currentAgent.name}" 不可用，请检查是否已安装并可访问。</span>
+        </div>
+      )}
+
+      {pendingAsk && (
+        <div className={askBox} data-testid="ask-prompt">
+          <div className={askMessage}>{pendingAsk.message}</div>
+          {pendingAsk.kind === 'select' && pendingAsk.options && (
+            <div className={askOptions}>
+              {pendingAsk.options.map((opt) => (
+                <button
+                  key={opt}
+                  className={askOptionBtn}
+                  onClick={() => resolveAsk('accept', opt)}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          )}
+          {pendingAsk.kind === 'multiselect' && pendingAsk.optionsMulti && (
+            <>
+              <div className={askOptions}>
+                {pendingAsk.optionsMulti.map((opt) => {
+                  const checked = askMultiSelected.includes(opt);
+                  return (
+                    <label key={opt} className={askCheckbox}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => {
+                          setAskMultiSelected((prev) =>
+                            checked ? prev.filter((o) => o !== opt) : [...prev, opt],
+                          );
+                        }}
+                      />
+                      <span>{opt}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div className={askActions}>
+                <button
+                  className={askSubmitBtn}
+                  disabled={askMultiSelected.length === 0}
+                  onClick={() => resolveAsk('accept', askMultiSelected)}
+                >
+                  确认
+                </button>
+              </div>
+            </>
+          )}
+          {pendingAsk.kind === 'input' && (
+            <>
+              <input
+                className={askInput}
+                placeholder={pendingAsk.placeholder || '请输入...'}
+                value={askInputValue}
+                onChange={(e) => setAskInputValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && askInputValue.trim()) {
+                    resolveAsk('accept', askInputValue.trim());
+                  }
+                }}
+              />
+              <div className={askActions}>
+                <button
+                  className={askSubmitBtn}
+                  disabled={!askInputValue.trim()}
+                  onClick={() => resolveAsk('accept', askInputValue.trim())}
+                >
+                  提交
+                </button>
+              </div>
+            </>
+          )}
+          {pendingAsk.kind === 'confirm' && (
+            <div className={askActions}>
+              <button className={askSubmitBtn} onClick={() => resolveAsk('accept', true)}>
+                是
+              </button>
+              <button className={askCancelBtn} onClick={() => resolveAsk('accept', false)}>
+                否
+              </button>
+            </div>
+          )}
         </div>
       )}
 

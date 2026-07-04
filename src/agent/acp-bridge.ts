@@ -10,6 +10,7 @@ import { Writable, Readable } from 'node:stream';
 import {
   client,
   ndJsonStream,
+  PROTOCOL_VERSION,
   type SessionUpdate,
   type ContentChunk,
   type ToolCall,
@@ -18,7 +19,9 @@ import {
   type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { StreamEvent, AgentCommand, RuntimeModelOption } from './types';
+import { randomUUID } from 'node:crypto';
+import type { StreamEvent, AgentCommand, RuntimeModelOption, AskPrompt } from './types';
+import { getRun, registerAsk } from './run';
 
 type EventSink = (event: StreamEvent) => void;
 
@@ -65,6 +68,62 @@ export function extractAcpModelInfo(
     configId: modelOption.id,
     currentModelId: modelOption.currentValue,
   };
+}
+
+/**
+ * 从 ACP elicitation/create 请求参数构建 AskPrompt。
+ *
+ * 纯函数，便于单测。ACP 的 form 模式用 requestedSchema.properties.value 描述单个字段，
+ * 根据 value 的 type 映射到 open-novel 的 AskPrompt.kind：
+ * - string + enum → select（单选）
+ * - string 无 enum → input（文本输入）
+ * - boolean → confirm（确认）
+ * - array → multiselect（多选）
+ */
+export function createAskPrompt(
+  message: string,
+  requestedSchema: { properties?: Record<string, unknown> } | null | undefined,
+): AskPrompt {
+  const valueProp = (requestedSchema?.properties?.value ?? {}) as Record<string, unknown>;
+  const type = (valueProp.type as string) ?? 'string';
+  const askId = randomUUID();
+
+  if (type === 'boolean') {
+    return { askId, kind: 'confirm', message };
+  }
+  if (type === 'array') {
+    // ACP 多选：items 描述选项的 string schema，enum 或 oneOf 含选项值
+    const items = (valueProp.items ?? {}) as Record<string, unknown>;
+    const optionsMulti = extractEnumOptions(items);
+    return { askId, kind: 'multiselect', message, optionsMulti };
+  }
+  if (type === 'string') {
+    const options = extractEnumOptions(valueProp);
+    if (options.length > 0) {
+      return { askId, kind: 'select', message, options };
+    }
+    return {
+      askId,
+      kind: 'input',
+      message,
+      placeholder: (valueProp.description as string) || undefined,
+    };
+  }
+  // 未知类型降级为文本输入，避免阻塞 agent
+  return { askId, kind: 'input', message };
+}
+
+/** 从 ACP 属性 schema 提取枚举选项（enum 或 oneOf[].const）。 */
+function extractEnumOptions(propSchema: Record<string, unknown>): string[] {
+  const enumValues = propSchema.enum;
+  if (Array.isArray(enumValues)) return enumValues.map(String);
+  const oneOf = propSchema.oneOf;
+  if (Array.isArray(oneOf)) {
+    return oneOf
+      .map((v) => (v as Record<string, unknown>)?.const)
+      .filter((v): v is string => typeof v === 'string');
+  }
+  return [];
 }
 
 /**
@@ -153,6 +212,7 @@ export async function runAcpTurn(
   extraDirs: string[],
   onEvent: EventSink,
   model?: string,
+  runId?: string,
 ): Promise<{ stopReason: string }> {
   if (!child.stdin || !child.stdout) {
     throw new Error('ACP child process missing stdin/stdout pipes');
@@ -162,21 +222,60 @@ export async function runAcpTurn(
   const readable = Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
   const transport = ndJsonStream(writable, readable);
 
-  const app = client({ name: 'open-novel' }).onRequest(
-    'session/request_permission',
-    async (ctx) => {
-      const first = ctx.params.options[0];
-      return {
-        outcome: first
-          ? { outcome: 'selected' as const, optionId: first.optionId }
-          : { outcome: 'cancelled' as const },
-      };
-    },
-  );
+  const app = client({ name: 'open-novel' })
+    .onRequest(
+      'session/request_permission',
+      async (ctx) => {
+        const first = ctx.params.options[0];
+        return {
+          outcome: first
+            ? { outcome: 'selected' as const, optionId: first.optionId }
+            : { outcome: 'cancelled' as const },
+        };
+      },
+    )
+    .onRequest('elicitation/create', async (ctx) => {
+      // CreateElicitationRequest 是 discriminated union（mode: form | url）。
+      // 仅处理 form 模式；url 模式（浏览器跳转）当前不支持，取消。
+      const params = ctx.params as Record<string, unknown>;
+      const message = (params.message as string) ?? '';
+      const requestedSchema =
+        params.mode === 'form'
+          ? ((params as Record<string, unknown>).requestedSchema as { properties?: Record<string, unknown> })
+          : null;
+      const ask = createAskPrompt(message, requestedSchema);
+
+      if (runId) {
+        const run = getRun(runId);
+        if (run) {
+          // 推给前端，等用户回传
+          onEvent({ type: 'ask', ask });
+          const response = await registerAsk(run, ask.askId);
+          if (response.action === 'accept') {
+            return {
+              action: 'accept' as const,
+              content: (response.content ?? { value: undefined }) as Record<string, unknown> as never,
+            };
+          }
+        }
+      }
+      // 无 runId（如 probe 会话）或 run 已结束：取消，不阻塞 agent
+      return { action: 'cancel' as const };
+    });
 
   let stopReason = 'end_turn';
 
   await app.connectWith(transport, async (ctx) => {
+    // 声明 client capability：elicitation.form（让 omp 知道可以向用户提问）。
+    // SDK 高级 API 不自动发 initialize，需手动发。
+    // omp 的 createAcpExtensionUiContext 检查 clientCapabilities.elicitation.form != null。
+    await ctx.request('initialize', {
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        elicitation: { form: {} },
+      },
+    });
+
     const builder = ctx.buildSession(cwd);
     if (extraDirs.length > 0) builder.withAdditionalDirectories(extraDirs);
     const session = await builder.start();

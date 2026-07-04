@@ -40,6 +40,7 @@ export type StreamEvent =
   | { type: 'usage'; usage?: unknown; costUsd?: number | null }
   | { type: 'error'; message: string }
   | { type: 'commands'; commands: AgentCommand[] }
+  | { type: 'ask'; ask: AskPrompt }
   | { type: 'raw'; line: string };
 
 /** Agent slash command (simplified from ACP AvailableCommand) */
@@ -47,6 +48,33 @@ export type AgentCommand = {
   name: string;
   description: string;
   inputHint?: string;
+};
+
+/**
+ * ACP elicitation（向用户提问的选择框）。
+ *
+ * omp skill 调 select/confirm/input 时，经 ACP elicitation/create 请求到 client。
+ * open-novel 把它转成此结构经 SSE 推给前端，前端渲染选择框，用户答后回传。
+ *
+ * schema 取自 ACP ElicitationFormMode.requestedSchema.properties.value：
+ * - type='string' + enum → 单选
+ * - type='string' 无 enum → 文本输入
+ * - type='boolean' → 确认（是/否）
+ * - type='array' → 多选
+ */
+export type AskPrompt = {
+  /** 唯一 id，前端回传时带上以匹配 pending promise。 */
+  askId: string;
+  /** omp 的 ask 语义（映射自 schema.type）。 */
+  kind: 'select' | 'confirm' | 'input' | 'multiselect';
+  /** agent 的问题文本。 */
+  message: string;
+  /** 单选选项（kind='select' 时）。 */
+  options?: string[];
+  /** 多选选项（kind='multiselect' 时）。 */
+  optionsMulti?: string[];
+  /** 文本输入提示（kind='input' 时）。 */
+  placeholder?: string;
 };
 
 /** Persisted agent events on messages (used by frontend) */
@@ -57,4 +85,5 @@ export type AgentEvent =
   | { kind: 'tool_use'; id: string; name: string; input: unknown }
   | { kind: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { kind: 'usage'; inputTokens?: number; outputTokens?: number; costUsd?: number }
+  | { kind: 'ask'; ask: AskPrompt }
   | { kind: 'raw'; line: string };

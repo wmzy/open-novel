@@ -20,6 +20,14 @@ export interface RunSession {
   cancelRequested: boolean;
   finished: Promise<void>;
   _finishResolve: () => void;
+  /**
+   * 挂起的 ACP elicitation 请求。
+   *
+   * key = askId，value = resolver。acp-bridge 的 elicitation/create handler
+   * registerAsk 注册后 await；前端回传时 runs.ts 的 POST /ask/:askId
+   * 调 resolveAsk 唤醒，handler 返回用户答案给 omp。
+   */
+  _pendingAsks: Map<string, (response: { action: 'accept' | 'cancel'; content?: unknown }) => void>;
 }
 
 const runs = new Map<string, RunSession>();
@@ -48,6 +56,7 @@ export function createRun(meta: { projectId: string; agentId: string; skillId: s
     cancelRequested: false,
     finished,
     _finishResolve: finishResolve!,
+    _pendingAsks: new Map(),
   };
   runs.set(run.id, run);
   return run;
@@ -87,6 +96,37 @@ export function cancelRun(run: RunSession) {
   } else {
     finishRun(run, 'canceled');
   }
+}
+
+/**
+ * 注册一个挂起的 elicitation，返回 promise（acp-bridge handler await 它）。
+ *
+ * 前端回传答案时 resolveAsk 唤醒。
+ */
+export function registerAsk(
+  run: RunSession,
+  askId: string,
+): Promise<{ action: 'accept' | 'cancel'; content?: unknown }> {
+  return new Promise((resolve) => {
+    run._pendingAsks.set(askId, resolve);
+  });
+}
+
+/**
+ * 前端回传用户答案时调用，唤醒挂起的 elicitation handler。
+ *
+ * 返回 true 表示找到并唤醒了对应的 ask，false 表示 ask 已过期/不存在。
+ */
+export function resolveAsk(
+  run: RunSession,
+  askId: string,
+  response: { action: 'accept' | 'cancel'; content?: unknown },
+): boolean {
+  const resolver = run._pendingAsks.get(askId);
+  if (!resolver) return false;
+  run._pendingAsks.delete(askId);
+  resolver(response);
+  return true;
 }
 
 export function subscribeRun(run: RunSession, send: (event: string, data: unknown, id: number) => void) {

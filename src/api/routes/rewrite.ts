@@ -109,7 +109,7 @@ rewriteRouter.post('/', async (c) => {
   child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
 
   if (isAcp) {
-    runAcpTurn(child, composedPrompt, projectDir, [], emit, model)
+    runAcpTurn(child, composedPrompt, projectDir, [], emit, model, run.id)
       .then(({ stopReason }) => {
         acpStopReason = stopReason;
         // omp 是常驻进程，会话结束后不自行退出。主动 kill 触发 child.on('close') 收尾链路。

@@ -6,6 +6,8 @@ import {
   finishRun,
   cancelRun,
   subscribeRun,
+  registerAsk,
+  resolveAsk,
 } from '../../../src/agent/run';
 import type { RunSession } from '../../../src/agent/run';
 
@@ -247,5 +249,47 @@ describe('subscribeRun', () => {
     expect(run.clients.size).toBe(1);
     emitEvent(run, 'token', null);
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('registerAsk / resolveAsk', () => {
+  it('registerAsk 返回 promise，resolveAsk 唤醒后 resolve', async () => {
+    const run = createRun(META);
+    const promise = registerAsk(run, 'ask_1');
+    expect(run._pendingAsks.has('ask_1')).toBe(true);
+
+    const ok = resolveAsk(run, 'ask_1', { action: 'accept', content: { value: '是的' } });
+    expect(ok).toBe(true);
+    expect(run._pendingAsks.has('ask_1')).toBe(false);
+
+    const response = await promise;
+    expect(response.action).toBe('accept');
+    expect(response.content).toEqual({ value: '是的' });
+  });
+
+  it('resolveAsk 对不存在的 askId 返回 false', () => {
+    const run = createRun(META);
+    const ok = resolveAsk(run, 'nope', { action: 'cancel' });
+    expect(ok).toBe(false);
+  });
+
+  it('cancel action 也应唤醒 promise', async () => {
+    const run = createRun(META);
+    const promise = registerAsk(run, 'ask_c');
+    resolveAsk(run, 'ask_c', { action: 'cancel' });
+    const response = await promise;
+    expect(response.action).toBe('cancel');
+    expect(response.content).toBeUndefined();
+  });
+
+  it('多个 ask 可并行挂起，各自独立 resolve', async () => {
+    const run = createRun(META);
+    const p1 = registerAsk(run, 'a1');
+    const p2 = registerAsk(run, 'a2');
+    resolveAsk(run, 'a2', { action: 'accept', content: { value: 2 } });
+    resolveAsk(run, 'a1', { action: 'accept', content: { value: 1 } });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect((r1.content as { value: number }).value).toBe(1);
+    expect((r2.content as { value: number }).value).toBe(2);
   });
 });

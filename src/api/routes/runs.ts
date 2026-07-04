@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
-import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun } from '../../agent/run';
+import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun, resolveAsk } from '../../agent/run';
 import type { RunSession } from '../../agent/run';
 import { eventStore } from '../../agent/event-store';
 import { composePrompt } from '../../agent/prompt-composer';
@@ -390,7 +390,7 @@ runsRouter.post('/', async (c) => {
 
   // ACP: 驱动协议会话，事件经 emitWithWatchdog 注入
   if (isAcp) {
-    runAcpTurn(child, composedPrompt, projectDir, [], emitWithWatchdog, model)
+    runAcpTurn(child, composedPrompt, projectDir, [], emitWithWatchdog, model, run.id)
       .then(({ stopReason }) => {
         acpStopReason = stopReason;
         if (stopReason === 'refusal' || stopReason === 'max_turn_requests') {
@@ -615,6 +615,20 @@ runsRouter.delete('/:id', async (c) => {
   const run = getRun(c.req.param('id'));
   if (!run) return c.json({ error: 'Not found' }, 404);
   cancelRun(run);
+  return c.json({ ok: true });
+});
+
+// 回答 agent 的 elicitation（ask 选择框）提问。
+// 前端渲染选择框后，用户选完答案 POST 到此 endpoint，唤醒挂起的 elicitation handler。
+runsRouter.post('/:id/ask/:askId', async (c) => {
+  const run = getRun(c.req.param('id'));
+  if (!run) return c.json({ error: 'Not found' }, 404);
+  const askId = c.req.param('askId');
+  const body = await c.req.json().catch(() => ({}));
+  const action = body.action === 'accept' ? 'accept' : 'cancel';
+  const content = action === 'accept' ? { value: body.value } : undefined;
+  const ok = resolveAsk(run, askId, { action, content });
+  if (!ok) return c.json({ error: 'Ask not found or expired' }, 404);
   return c.json({ ok: true });
 });
 

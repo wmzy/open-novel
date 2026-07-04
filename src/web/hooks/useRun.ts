@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { AgentEvent, AgentCommand } from '@/agent/types';
+import type { AgentEvent, AgentCommand, AskPrompt } from '@/agent/types';
 import { consumeSseStream, MAX_RECONNECT_ATTEMPTS } from './sse-stream';
 
 export interface ChatMessage {
@@ -22,6 +22,7 @@ export function useRun(conversationId?: string) {
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [availableCommands, setAvailableCommands] = useState<AgentCommand[]>([]);
+  const [pendingAsk, setPendingAsk] = useState<AskPrompt | null>(null);
   const activeRunsRef = useRef(new Set<string>());
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string | null>(conversationId || null);
@@ -296,6 +297,12 @@ export function useRun(conversationId?: string) {
       return;
     }
 
+    // ask（elicitiation）：agent 向用户提问，推给前端渲染选择框
+    if (type === 'ask') {
+      setPendingAsk(event.ask as AskPrompt);
+      return;
+    }
+
     // Handle text/thinking deltas with batching
     if (type === 'text_delta') {
       const delta = String(event.delta || '');
@@ -412,6 +419,22 @@ export function useRun(conversationId?: string) {
     }
   }
 
+  const resolveAsk = useCallback(async (action: 'accept' | 'cancel', value?: unknown) => {
+    const ask = pendingAsk;
+    if (!ask) return;
+    setPendingAsk(null);
+    // 取任意一个 active run（同一时刻只会有一个 ask）
+    const runId = [...activeRunsRef.current][0];
+    if (!runId) return;
+    try {
+      await fetch(`/api/runs/${runId}/ask/${ask.askId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, value }),
+      });
+    } catch { /* ignore */ }
+  }, [pendingAsk]);
+
   const cancel = useCallback(async () => {
     // Cancel all active runs
     for (const rid of activeRunsRef.current) {
@@ -448,6 +471,8 @@ export function useRun(conversationId?: string) {
     isRunning,
     status,
     availableCommands,
+    pendingAsk,
+    resolveAsk,
     activeRunCount: activeRunsRef.current.size,
     sendMessage,
     cancel,

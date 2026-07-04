@@ -244,3 +244,102 @@ export const cmdBadgeAgent = css`
   background: color-mix(in srgb, var(--haze-color-text-secondary) 14%, transparent);
   color: var(--haze-color-text-secondary);
 `;
+
+export const askBox = css`
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--haze-color-border);
+  background: color-mix(in srgb, var(--haze-color-primary) 5%, var(--haze-color-bg));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+`;
+
+export const askMessage = css`
+  font-size: 0.875rem;
+  color: var(--haze-color-text);
+  white-space: pre-wrap;
+  line-height: 1.4;
+`;
+
+export const askOptions = css`
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+`;
+
+export const askOptionBtn = css`
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  &:hover {
+    border-color: var(--haze-color-primary);
+    background: color-mix(in srgb, var(--haze-color-primary) 8%, var(--haze-color-bg));
+  }
+`;
+
+export const askCheckbox = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  &:hover {
+    border-color: var(--haze-color-primary);
+  }
+  input {
+    margin: 0;
+    accent-color: var(--haze-color-primary);
+  }
+`;
+
+export const askInput = css`
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  &:focus {
+    outline: none;
+    border-color: var(--haze-color-primary);
+  }
+`;
+
+export const askActions = css`
+  display: flex;
+  gap: 0.5rem;
+`;
+
+export const askSubmitBtn = css`
+  padding: 0.375rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--haze-color-primary);
+  color: white;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+`;
+
+export const askCancelBtn = css`
+  padding: 0.375rem 1rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  &:hover { background: var(--haze-color-border); }
+`;
