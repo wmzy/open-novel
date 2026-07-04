@@ -5,15 +5,15 @@ describe('buildFillPrompt', () => {
   it('生成含 POV / 核心事件 / 出场角色的 prompt', () => {
     const input: FillChapterInput = {
       number: 3,
-      title: '路引',
+      title: '关卡',
       pov: '武松',
-      coreEvent: '在小镇住店时暴露——没有路引',
+      coreEvent: '在客栈因无通行凭证被盘问',
       cast: ['武松', '何九叔'],
     };
     const prompt = buildFillPrompt(input);
     expect(prompt).toContain('武松');
     expect(prompt).toContain('何九叔');
-    expect(prompt).toContain('没有路引');
+    expect(prompt).toContain('通行凭证');
     expect(prompt).toContain('主动方→被动方[类型]：动作');
     // 列出 9 种类型
     expect(prompt).toContain('冲突');
@@ -26,7 +26,7 @@ describe('buildFillPrompt', () => {
       number: 1,
       title: '独角戏',
       pov: '武松',
-      coreEvent: '磨剑',
+      coreEvent: '备战',
       cast: ['武松'],
     };
     const prompt = buildFillPrompt(input);
@@ -37,9 +37,9 @@ describe('buildFillPrompt', () => {
 describe('parseAiResponse', () => {
   it('提取符合格式的交互行（去除 AI 啰嗦的前后文）', () => {
     const aiOutput =
-      '好的，分析如下：\n武松→何九叔[冲突]：被盘问 · 何九叔→武松[善意]：放行\n以上是交互。';
+      '好的，分析如下：\n武松→何九叔[冲突]：被盘问 · 何九叔→武松[善意]：出手相助\n以上是交互。';
     const parsed = parseAiResponse(aiOutput);
-    expect(parsed).toBe('武松→何九叔[冲突]：被盘问 · 何九叔→武松[善意]：放行');
+    expect(parsed).toBe('武松→何九叔[冲突]：被盘问 · 何九叔→武松[善意]：出手相助');
   });
 
   it('AI 返回（无）时透传', () => {

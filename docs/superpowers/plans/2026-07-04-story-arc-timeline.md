@@ -52,7 +52,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseOutlineChapters, buildStoryTimeline } from '../../../src/shared/diagram-builders';
 
-const SAMPLE = `# 《示例集》详细大纲·卷一《示例卷》
+const SAMPLE = `# 《示例集》详细大纲·卷一
 
 ## 卷一总览
 
@@ -60,18 +60,18 @@ const SAMPLE = `# 《示例集》详细大纲·卷一《示例卷》
 |------|------|
 | 总字数 | 约16万字 |
 
-## 序章：序章（1章）
+## 序章
 
 #### 第1章：启程前夜
 | 项目 | 内容 |
 |------|------|
 | POV | 武松 |
-| 核心事件 | 磨剑 |
+| 核心事件 | 备战 |
 | 出场角色 | 武松（独角戏） |
 
-## 第一篇：出山
+## 第一卷
 
-#### 第2章：下山
+#### 第2章：远行
 | 项目 | 内容 |
 |------|------|
 | POV | 武松 |
@@ -92,7 +92,7 @@ describe('parseOutlineChapters', () => {
     });
     expect(chapters[1]).toEqual({
       number: 2,
-      title: '下山',
+      title: '远行',
       pov: '武松',
       cast: ['武松', '小镇百姓'],
       section: expect.any(String),
@@ -100,9 +100,9 @@ describe('parseOutlineChapters', () => {
   });
 
   it('连读章节（第16-17章）取首个章号', () => {
-    const chapters = parseOutlineChapters(`#### 第16-17章：南京\n| POV | 武松 |`);
+    const chapters = parseOutlineChapters(`#### 第16-17章：城镇\n| POV | 武松 |`);
     expect(chapters[0].number).toBe(16);
-    expect(chapters[0].title).toBe('南京');
+    expect(chapters[0].title).toBe('城镇');
   });
 
   it('无出场角色行时 cast 为空数组', () => {
@@ -215,8 +215,8 @@ import type { OutlineChapter } from '../../../src/shared/diagram-builders';
 describe('buildStoryTimeline', () => {
   const chapters: OutlineChapter[] = [
     { number: 1, title: '启程前夜', pov: '武松', cast: ['武松'], section: '第一篇 出山' },
-    { number: 2, title: '下山', pov: '武松', cast: ['武松', '小镇百姓'], section: '第一篇 出山' },
-    { number: 16, title: '南京', pov: '武松', cast: ['武松', '鲁智深'], section: '第二篇 南京' },
+    { number: 2, title: '远行', pov: '武松', cast: ['武松', '小镇百姓'], section: '第一篇 出山' },
+    { number: 16, title: '城镇', pov: '武松', cast: ['武松', '鲁智深'], section: '第二卷' },
   ];
 
   it('空数组返回 null', () => {
@@ -227,8 +227,8 @@ describe('buildStoryTimeline', () => {
     const tl = buildStoryTimeline(chapters);
     expect(tl).not.toBeNull();
     expect(tl!).toContain('timeline');
-    expect(tl!).toContain('section 第一篇 出山');
-    expect(tl!).toContain('section 第二篇 南京');
+    expect(tl!).toContain('section 第一卷');
+    expect(tl!).toContain('section 第二篇 城镇');
   });
 
   it('每个章节节点含章号 + POV + 首个出场角色', () => {
@@ -239,7 +239,7 @@ describe('buildStoryTimeline', () => {
 
   it('同一 section 的章节归到同一 section 块（不重复 section 标题）', () => {
     const tl = buildStoryTimeline(chapters)!;
-    const sectionCount = (tl.match(/section 第一篇 出山/g) || []).length;
+    const sectionCount = (tl.match(/section 第一卷/g) || []).length;
     expect(sectionCount).toBe(1);
   });
 });
@@ -826,15 +826,15 @@ describe('buildFillPrompt', () => {
   it('生成含 POV / 核心事件 / 出场角色的 prompt', () => {
     const input: FillChapterInput = {
       number: 3,
-      title: '路引',
+      title: '关卡',
       pov: '武松',
-      coreEvent: '在小镇住店时暴露——没有路引',
+      coreEvent: '在客栈因无通行凭证被盘问',
       cast: ['武松', '何九叔'],
     };
     const prompt = buildFillPrompt(input);
     expect(prompt).toContain('武松');
     expect(prompt).toContain('何九叔');
-    expect(prompt).toContain('没有路引');
+    expect(prompt).toContain('通行凭证');
     expect(prompt).toContain('主动方→被动方[类型]：动作');
     // 列出 9 种类型
     expect(prompt).toContain('冲突');
@@ -847,7 +847,7 @@ describe('buildFillPrompt', () => {
       number: 1,
       title: '独角戏',
       pov: '武松',
-      coreEvent: '磨剑',
+      coreEvent: '备战',
       cast: ['武松'],
     };
     const prompt = buildFillPrompt(input);
@@ -1486,7 +1486,7 @@ Expected: 成功
 
 - [ ] **Step 4: e2e 手动验证**
 
-启动服务，在浏览器打开 示例项目 项目，点「故事脉络」tab：
+启动服务，在浏览器打开示例项目，点「故事脉络」tab：
 1. timeline 主图渲染（卷为 section，章为节点）
 2. 展开某章，无交互字段时显示提示
 3. 点击「AI 批量生成交互」，观察 SSE 进度

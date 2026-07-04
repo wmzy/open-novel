@@ -21,21 +21,21 @@ describe('extractChapterOutline', () => {
 
 #### 第1章：启程前夜
 | POV | 武松 |
-| 核心事件 | 磨剑 |
+| 核心事件 | 备战 |
 
-#### 第2章：下山
+#### 第2章：远行
 | POV | 武松 |
-| 核心事件 | 下山 |`);
+| 核心事件 | 远行 |`);
     const block = await extractChapterOutline(dir, 1);
     expect(block).toContain('第1章');
-    expect(block).toContain('磨剑');
-    expect(block).not.toContain('下山');
+    expect(block).toContain('备战');
+    expect(block).not.toContain('远行');
   });
 
   it('matches range chapters (第16-17章)', async () => {
     await writeOutline(`#### 第16-17章：江湖初涉
 | POV | 武松 |
-| 核心事件 | 接触江湖 |`);
+| 核心事件 | 初入江湖 |`);
     expect(await extractChapterOutline(dir, 16)).toContain('江湖初涉');
     expect(await extractChapterOutline(dir, 17)).toContain('江湖初涉');
   });
@@ -71,7 +71,7 @@ describe('identifyCast', () => {
   });
 
   it('level 2: parses 出场角色 row from outline block', async () => {
-    const block = `#### 第11章：鲁智深
+    const block = `#### 第11章：相遇
 | POV | 武松 |
 | 出场角色 | 武松、鲁智深 |`;
     const cast = await identifyCast(dir, 11, block);
@@ -81,7 +81,7 @@ describe('identifyCast', () => {
   });
 
   it('level 3: name-matches against character names', async () => {
-    const block = `#### 第5章：第一剑
+    const block = `#### 第5章：初阵
 武松在渡口遇到老船工和恶霸。`;
     const names = ['武松', '鲁智深', '西门庆'];
     const cast = await identifyCast(dir, 5, block, names);
@@ -120,7 +120,7 @@ describe('buildCastLayer', () => {
 - 姓名：武松
 
 ## 出身与经历
-幼年家族优渥，七岁家道中落。
+幼年家道中落，寄人篱下。
 
 ## 驱动力三角
 - 外在目标：复仇
@@ -151,7 +151,7 @@ describe('buildCastLayer', () => {
   });
 
   it('L2: brief card for minor characters', async () => {
-    const profile = `# 鲁智深\n城镇药铺掌柜，门派二师叔。温和本性。`;
+    const profile = `# 鲁智深\n城镇掌柜，门派长辈。温和本性。`;
     await fs.writeFile(path.join(dir, '.novel', 'characters', 'profiles', '鲁智深.md'), profile);
     const layer = await buildCastLayer(dir, { pov: '武松', full: ['武松'], brief: ['鲁智深'] });
     expect(layer).toContain('鲁智深');
@@ -184,18 +184,18 @@ describe('buildCastLayer', () => {
       await fs.mkdir(path.join(dir, '.novel', 'characters', 'voices'), { recursive: true });
       await fs.writeFile(
         path.join(dir, '.novel', 'characters', 'profiles', '武松.md'),
-        '# 武松\n\n## 出身与经历\n复仇少年。',
+        '# 武松\n\n## 出身与经历\n少年。',
       );
     });
 
     it('appends voice samples when voices file exists', async () => {
       await fs.writeFile(
         path.join(dir, '.novel', 'characters', 'voices', '武松.md'),
-        '## 独白\n剑在手，心不静。\n\n## 对话\n"让开。"',
+        '## 独白\n心绪难平。\n\n## 对话\n"请让一让。"',
       );
       const layer = await buildCastLayer(dir, { pov: '武松', full: ['武松'], brief: [] });
       expect(layer).toContain('声口样本');
-      expect(layer).toContain('剑在手，心不静');
+      expect(layer).toContain('心绪难平');
     });
 
     it('skips voice when no voices file', async () => {
