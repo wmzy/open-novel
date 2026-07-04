@@ -19,6 +19,7 @@ import OutlineView from '@/web/components/views/OutlineView';
 import SceneView from '@/web/components/views/SceneView';
 import ForeshadowView from '@/web/components/views/ForeshadowView';
 import StoryArcView from '@/web/components/views/StoryArcView';
+import CharacterGraphView from '@/web/components/views/CharacterGraphView';
 import WuxiaView from '@/web/components/views/WuxiaView';
 import WritingView from '@/web/components/views/WritingView';
 import { useAgentSelection } from '@/web/hooks/useAgents';
@@ -127,6 +128,7 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId }: { activeVi
   if (activeView === 'scenes') return <SceneView projectId={projectId} />;
   if (activeView === 'foreshadow') return <ForeshadowView projectId={projectId} />;
   if (activeView === 'story-arc') return <StoryArcView projectId={projectId} />;
+  if (activeView === 'character-graph') return <CharacterGraphView projectId={projectId} />;
   if (activeView === 'wuxia') return <WuxiaView projectId={projectId} />;
   if (activeView === 'writing') return <WritingView projectId={projectId} onViewChange={onViewChange} />;
   if (activeView.startsWith('chapter-')) {
