@@ -19,6 +19,15 @@ const projectCard = css`
   &:hover .delete-btn { opacity: 1; }
 `;
 
+const projectPath = css`
+  margin-top: 0.375rem;
+  color: var(--haze-color-text-secondary);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+`;
+
 const header = css`
   display: flex;
   justify-content: space-between;
@@ -386,6 +395,9 @@ export default function HomePage() {
                 )}
                 <p style={{ marginTop: '0.5rem', color: 'var(--haze-color-text-secondary)', fontSize: '0.875rem' }}>
                   {p.chapterCount} 章 · {p.targetWords.toLocaleString()} 字
+                </p>
+                <p className={projectPath} title={p.path}>
+                  {p.path}
                 </p>
               </div>
             ))}
