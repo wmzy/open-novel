@@ -55,6 +55,10 @@ export const runs = pgTable('runs', {
   status: varchar('status', { length: 20 }).notNull().default('queued'),
   startedAt: timestamp('started_at', { withTimezone: true }),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
+  /** 区分 generate / revise / rename */
+  mode: varchar('mode', { length: 20 }).notNull().default('generate'),
+  /** 模式特定数据：revise 的 targetFile/baseSnapshot/diff；rename 的 oldName/newName/scope */
+  payload: jsonb('payload'),
   createdAt: timestamp('created_at', { withTimezone: true }).default(sql`now()`).notNull(),
 });
 
