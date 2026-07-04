@@ -4,7 +4,8 @@ import { db } from '../db/drizzle';
 import { projects } from '../db/schema';
 import { getPlugin } from '../plugins/registry';
 import { eq } from 'drizzle-orm';
-import { buildRollingSummaryContext, getStateTable } from './context-manager';
+import { buildRollingSummaryContext, getStateTable, readCharacterNames } from './context-manager';
+import { extractChapterOutline, identifyCast, buildCastLayer } from './chapter-context';
 
 export interface ComposePromptOptions {
   message: string;
@@ -322,6 +323,18 @@ async function buildWritingContextLayers(
 
   const stateLayer = await buildStateLayer(projectDir);
   if (stateLayer) sections.push(stateLayer);
+
+  // 本章大纲块
+  const outlineBlock = await extractChapterOutline(projectDir, currentChapter);
+  if (outlineBlock) {
+    sections.push(`### 本章大纲（第${currentChapter}章）\n${outlineBlock}\n\n> 严格按大纲推进。若需偏离（增删事件、调整节奏），在回复里说明原因。`);
+  }
+
+  // 本章出场角色层
+  const knownNames = await readCharacterNames(projectDir);
+  const cast = await identifyCast(projectDir, currentChapter, outlineBlock, knownNames);
+  const castLayer = await buildCastLayer(projectDir, cast);
+  if (castLayer) sections.push(castLayer);
 
   const rolling = await buildRollingSummaryContext(projectDir);
   if (rolling) {

@@ -430,6 +430,60 @@ describe('composePrompt', () => {
       // 未来伏笔也不进入置顶提醒（plantedIn=10 ≠ currentChapter=6）
       expect(prompt).not.toContain('本章须埋设的伏笔');
     });
+
+    it('injects chapter outline block in writing stage', async () => {
+      await seedWritingProject(tempDir);
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'outline-detailed.md'),
+        '#### 第2章：下山\n| POV | 林青 |\n| 核心事件 | 下山遇强敌 |',
+      );
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('本章大纲（第2章）');
+      expect(prompt).toContain('下山遇强敌');
+    });
+
+    it('injects cast layer with POV profile in writing stage', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await seedWritingProject(tempDir);
+      await fs.writeFile(
+        path.join(novel, 'outline-detailed.md'),
+        '#### 第2章：下山\n| POV | 林青 |\n| 出场角色 | 林青 |',
+      );
+      await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'characters', 'profiles', '林青.md'),
+        '# 林青\n\n## 出身与经历\n复仇少年。\n\n## 驱动力三角\n核心缺陷：太窄',
+      );
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('本章出场角色层');
+      expect(prompt).toContain('林青');
+      expect(prompt).toContain('太窄');
+    });
+
+    it('outline block precedes cast layer', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await seedWritingProject(tempDir);
+      await fs.writeFile(path.join(novel, 'outline-detailed.md'), '#### 第2章\n| POV | 林青 |');
+      await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'characters', 'profiles', '林青.md'), '# 林青\n## 出身与经历\nx');
+      const prompt = await composePrompt({
+        message: '写第二章', projectId: 'p', stage: 'writing', projectDir: tempDir,
+      });
+      const outlineIdx = prompt.indexOf('本章大纲');
+      const castIdx = prompt.indexOf('本章出场角色层');
+      expect(outlineIdx).toBeGreaterThan(-1);
+      expect(castIdx).toBeGreaterThan(outlineIdx);
+    });
   });
 
   describe('阶段不匹配检测 (Bug #4)', () => {
