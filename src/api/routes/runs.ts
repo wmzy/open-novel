@@ -375,6 +375,8 @@ runsRouter.post('/', async (c) => {
 
   // ACP 协议（omp）：不读 stdout 原始流，而是经 runAcpTurn 驱动 JSON-RPC 会话
   const isAcp = def.streamFormat === 'acp-json-rpc';
+  // ACP 正常结束后的 stopReason（omp 常驻进程需主动 kill，exit code 无意义，改用此判定成败）
+  let acpStopReason: string | null = null;
   const handler = isAcp
     ? { feed: () => {}, flush: () => {} }
     : def.streamFormat === 'claude-stream-json'
@@ -390,12 +392,17 @@ runsRouter.post('/', async (c) => {
   if (isAcp) {
     runAcpTurn(child, composedPrompt, projectDir, [], emitWithWatchdog, model)
       .then(({ stopReason }) => {
+        acpStopReason = stopReason;
         if (stopReason === 'refusal' || stopReason === 'max_turn_requests') {
           emitEvent(run, 'agent', { type: 'error', message: `ACP stop: ${stopReason}` });
         }
+        // omp 是常驻进程，会话结束后不自行退出。主动 kill 触发 child.on('close') 收尾链路。
+        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
       })
       .catch((err) => {
+        acpStopReason = 'error';
         emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' });
+        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
       });
   }
 
@@ -410,6 +417,13 @@ runsRouter.post('/', async (c) => {
   child.on('close', async (code) => {
     clearTimeout(timeoutTimer);
     handler.flush();
+
+    // ACP 模式：omp 常驻进程被 SIGTERM 终止，exit code 无意义。
+    // 用 runAcpTurn 返回的 stopReason 判定成功/失败。
+    const ACP_FAILURE_REASONS = ['refusal', 'max_turn_requests', 'error'];
+    if (isAcp) {
+      code = acpStopReason && !ACP_FAILURE_REASONS.includes(acpStopReason) ? 0 : 1;
+    }
 
     // Collect artifacts from run events (filter to agent events only)
     const agentEvents = run.events

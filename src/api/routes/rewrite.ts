@@ -100,6 +100,9 @@ rewriteRouter.post('/', async (c) => {
       ? createClaudeStreamHandler(emit, onStreamComplete)
       : createJsonEventHandler(emit);
 
+  // ACP 正常结束后的 stopReason（omp 常驻进程需主动 kill，exit code 无意义，改用此判定成败）
+  let acpStopReason: string | null = null;
+
   if (!isAcp) {
     child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
   }
@@ -107,7 +110,16 @@ rewriteRouter.post('/', async (c) => {
 
   if (isAcp) {
     runAcpTurn(child, composedPrompt, projectDir, [], emit, model)
-      .catch((err) => emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' }));
+      .then(({ stopReason }) => {
+        acpStopReason = stopReason;
+        // omp 是常驻进程，会话结束后不自行退出。主动 kill 触发 child.on('close') 收尾链路。
+        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
+      })
+      .catch((err) => {
+        acpStopReason = 'error';
+        emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' });
+        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
+      });
   }
 
   child.on('error', (err) => {
@@ -121,6 +133,12 @@ rewriteRouter.post('/', async (c) => {
   child.on('close', async (code) => {
     clearTimeout(timeoutTimer);
     handler.flush();
+
+    // ACP 模式：omp 常驻进程被 SIGTERM 终止，exit code 无意义。
+    const ACP_FAILURE_REASONS = ['refusal', 'max_turn_requests', 'error'];
+    if (isAcp) {
+      code = acpStopReason && !ACP_FAILURE_REASONS.includes(acpStopReason) ? 0 : 1;
+    }
 
     // 收集写入文件并同步到 DB
     const agentEvents = run.events
