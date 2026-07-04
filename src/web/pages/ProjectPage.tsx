@@ -20,6 +20,7 @@ import SceneView from '@/web/components/views/SceneView';
 import ForeshadowView from '@/web/components/views/ForeshadowView';
 import WuxiaView from '@/web/components/views/WuxiaView';
 import WritingView from '@/web/components/views/WritingView';
+import { useDefaultAgent } from '@/web/hooks/useAgents';
 
 const layout = css`
   display: flex;
@@ -237,6 +238,9 @@ export default function ProjectPage() {
     },
   });
 
+  // 选择首个可用 agent（claude → opencode → omp），无可用时回退 'claude'
+  const activeAgentId = useDefaultAgent();
+
   // Load preview content when file changes
   useEffect(() => {
     if (!previewFile) {
@@ -362,7 +366,7 @@ export default function ProjectPage() {
         </div>
       )}
       <div className={chatPanel} data-testid="chat-panel">
-        <ChatPanel projectId={id!} agentId="claude" skillId="novel" stage={project.currentStage} onStageChange={handleViewChange} />
+        <ChatPanel projectId={id!} agentId={activeAgentId} skillId="novel" stage={project.currentStage} onStageChange={handleViewChange} />
       </div>
     </div>
   );

@@ -13,3 +13,14 @@ export function useAgents() {
     staleTime: 30_000,
   });
 }
+
+/** 首个可用 agent（优先序 claude → opencode → omp），无可用回退 'claude'。 */
+export function useDefaultAgent(): string {
+  const { data: agents } = useAgents();
+  const order = ['claude', 'opencode', 'omp'];
+  const avail = agents?.filter((a) => a.available) ?? [];
+  for (const id of order) {
+    if (avail.some((a) => a.id === id)) return id;
+  }
+  return 'claude';
+}

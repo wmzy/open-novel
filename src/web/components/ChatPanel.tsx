@@ -288,7 +288,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
       {noAgentsAvailable && (
         <div className={agentWarning} data-testid="agent-warning">
-          <span>未检测到 AI Agent。请安装 Claude Code 或 OpenCode 以使用对话功能。
+          <span>未检测到 AI Agent。请安装 Claude Code、OpenCode 或 Oh My Pi (omp) 以使用对话功能。
             {!agentsLoading && agents && agents.length > 0 && (
               <>（已发现 {agents.map((a) => a.name).join(', ')}，但不可用）</>
             )}
