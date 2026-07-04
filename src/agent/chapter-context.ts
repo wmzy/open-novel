@@ -144,3 +144,82 @@ export async function identifyCast(
   }
   return { pov: povName, full: [...fullSet], brief: [...briefSet] };
 }
+
+const PROFILES_DIR = path.join('characters', 'profiles');
+const L1_BUDGET_PER_CHAR = 6 * 1024; // 6KB
+const LAYER_TOTAL_BUDGET = 20 * 1024; // 20KB
+
+/** L1 关键段优先级（高→低），其余段截断跳过。 */
+const KEY_SECTIONS = ['出身与经历', '驱动力三角', '性格', '语言', '基本信息', '外貌'];
+
+/** 按 ## 标题切片，提取关键段。 */
+function extractKeySections(profile: string): string {
+  const sections = profile.split(/\n(?=##\s)/);
+  const picked: string[] = [];
+  let size = 0;
+  for (const key of KEY_SECTIONS) {
+    const sec = sections.find((s) => new RegExp(`^##\\s.*${key}`).test(s));
+    if (sec) {
+      picked.push(sec);
+      size += sec.length;
+      if (size > L1_BUDGET_PER_CHAR) break;
+    }
+  }
+  if (picked.length === 0) {
+    return profile.slice(0, 2 * 1024) + `\n\n[完整档案见 …]`;
+  }
+  let result = picked.join('\n\n');
+  if (result.length > L1_BUDGET_PER_CHAR) {
+    result = result.slice(0, L1_BUDGET_PER_CHAR) + `\n\n[完整档案见 …]`;
+  }
+  return result;
+}
+
+/** L2 速查卡：首段 + 标志细节。 */
+function buildBriefCard(name: string, profile: string): string {
+  const firstPara = profile.split(/\n(?=##\s)/)[0].replace(/^#\s.*\n/, '').trim();
+  return `- **${name}**（速查）：${firstPara.slice(0, 150)}`;
+}
+
+/** 构建出场角色层。 */
+export async function buildCastLayer(projectDir: string, cast: Cast): Promise<string> {
+  const { pov, full, brief } = cast;
+  if (!pov && full.length === 0 && brief.length === 0) return '';
+
+  const sections: string[] = ['### 本章出场角色层'];
+  let totalSize = 0;
+
+  // L1: full 列表（POV 优先）
+  for (const name of full) {
+    const profilePath = path.join(projectDir, NOVEL_DIR, PROFILES_DIR, `${name}.md`);
+    let profile: string;
+    try {
+      profile = (await fs.readFile(profilePath, 'utf-8')).trim();
+    } catch {
+      continue; // 文件缺失，跳过
+    }
+    if (totalSize + profile.length > LAYER_TOTAL_BUDGET) {
+      sections.push(buildBriefCard(name, profile));
+      totalSize += 200;
+      continue;
+    }
+    const extracted = extractKeySections(profile);
+    const label = name === pov ? '（POV）' : '';
+    sections.push(`#### ${name}${label}\n${extracted}`);
+    totalSize += extracted.length;
+  }
+
+  // L2: brief 列表
+  for (const name of brief) {
+    const profilePath = path.join(projectDir, NOVEL_DIR, PROFILES_DIR, `${name}.md`);
+    let profile: string;
+    try {
+      profile = (await fs.readFile(profilePath, 'utf-8')).trim();
+    } catch {
+      continue;
+    }
+    sections.push(buildBriefCard(name, profile));
+  }
+
+  return sections.join('\n\n');
+}

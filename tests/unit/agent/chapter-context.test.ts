@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { extractChapterOutline, identifyCast } from '../../../src/agent/chapter-context';
+import { extractChapterOutline, identifyCast, buildCastLayer } from '../../../src/agent/chapter-context';
 
 describe('chapter-context', () => {
   let dir: string;
@@ -105,6 +105,78 @@ describe('identifyCast', () => {
     expect(cast.pov).toBe('');
     expect(cast.full).toEqual([]);
     expect(cast.brief).toEqual([]);
+  });
+});
+
+describe('buildCastLayer', () => {
+  beforeEach(async () => {
+    await fs.mkdir(path.join(dir, '.novel', 'characters', 'profiles'), { recursive: true });
+  });
+
+  it('L1: injects key sections of POV profile, skips verbose sections', async () => {
+    const profile = `# 武松
+
+## 基本信息
+- 姓名：武松
+
+## 出身与经历
+幼年家族优渥，七岁家道中落。
+
+## 驱动力三角
+- 外在目标：复仇
+- 核心缺陷：太窄
+
+## 性格
+沉默寤言，右手虚握。
+
+## 成长弧线
+（此处 5000 字弧线详情，不应注入）`;
+    await fs.writeFile(path.join(dir, '.novel', 'characters', 'profiles', '武松.md'), profile);
+
+    const layer = await buildCastLayer(dir, { pov: '武松', full: ['武松'], brief: [] });
+    expect(layer).toContain('武松');
+    expect(layer).toContain('出身与经历');
+    expect(layer).toContain('驱动力三角');
+    expect(layer).toContain('太窄');
+    expect(layer).not.toContain('5000 字弧线详情');
+  });
+
+  it('L1: truncates profile over 6KB budget', async () => {
+    const longSection = 'A'.repeat(7000);
+    const profile = `# 西门庆\n\n## 出身与经历\n${longSection}`;
+    await fs.writeFile(path.join(dir, '.novel', 'characters', 'profiles', '西门庆.md'), profile);
+    const layer = await buildCastLayer(dir, { pov: '', full: ['西门庆'], brief: [] });
+    expect(layer.length).toBeLessThan(7000);
+    expect(layer).toContain('完整档案见');
+  });
+
+  it('L2: brief card for minor characters', async () => {
+    const profile = `# 鲁智深\n城镇药铺掌柜，门派二师叔。温和本性。`;
+    await fs.writeFile(path.join(dir, '.novel', 'characters', 'profiles', '鲁智深.md'), profile);
+    const layer = await buildCastLayer(dir, { pov: '武松', full: ['武松'], brief: ['鲁智深'] });
+    expect(layer).toContain('鲁智深');
+    expect(layer).toContain('速查');
+  });
+
+  it('total budget: degrades to L2 when exceeding 20KB', async () => {
+    const big = 'B'.repeat(5900);
+    for (const name of ['武松', '西门庆', '世子', '顾琪']) {
+      await fs.writeFile(
+        path.join(dir, '.novel', 'characters', 'profiles', `${name}.md`),
+        `# ${name}\n\n## 出身与经历\n${big}`,
+      );
+    }
+    const layer = await buildCastLayer(dir, {
+      pov: '武松',
+      full: ['武松', '西门庆', '世子', '顾琪'],
+      brief: [],
+    });
+    expect(layer).toContain('速查');
+  });
+
+  it('skips missing profile files gracefully', async () => {
+    const layer = await buildCastLayer(dir, { pov: '不存在', full: ['不存在'], brief: [] });
+    expect(layer).not.toContain('不存在.md');
   });
 });
 });
