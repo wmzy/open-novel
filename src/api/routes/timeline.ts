@@ -27,11 +27,11 @@ timelineRouter.get('/:id/timeline', async (c) => {
   try {
     outline = await readFile(path.join(novelDir, 'outline-detailed.md'), 'utf-8');
   } catch {
-    return c.json({ timeline: null, chapters: [] });
+    return c.json({ timelines: null, chapters: [] });
   }
 
   const chapters = parseOutlineChapters(outline);
-  const timeline = buildStoryTimeline(chapters);
+  const timelines = buildStoryTimeline(chapters);
 
   // 提取每章的「角色交互」字段原文（用于前端生成 sequenceDiagram）
   const chapterInteractions = chapters.map((ch) => {
@@ -39,7 +39,7 @@ timelineRouter.get('/:id/timeline', async (c) => {
     return { number: ch.number, title: ch.title, interaction };
   });
 
-  return c.json({ timeline, chapters: chapterInteractions });
+  return c.json({ timelines, chapters: chapterInteractions });
 });
 
 /** 返回角色关系图 mermaid 源码（从 state.json.characters[].relationships 生成）。 */

@@ -86,24 +86,69 @@ describe('buildStoryTimeline', () => {
     expect(buildStoryTimeline([])).toBeNull();
   });
 
-  it('生成 timeline 源码，含 title 与 section 划分', () => {
-    const tl = buildStoryTimeline(chapters);
-    expect(tl).not.toBeNull();
-    expect(tl!).toContain('timeline');
-    expect(tl!).toContain('section 第一卷');
-    expect(tl!).toContain('section 第二卷');
+  it('短书（≤ maxPerChunk）返回单块，含 title 与 section 划分', () => {
+    const chunks = buildStoryTimeline(chapters)!;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].title).toBe('故事脉络');
+    expect(chunks[0].chart).toContain('timeline');
+    expect(chunks[0].chart).toContain('section 第一卷');
+    expect(chunks[0].chart).toContain('section 第二卷');
   });
 
   it('每个章节节点含章号 + POV', () => {
-    const tl = buildStoryTimeline(chapters);
-    expect(tl!).toContain('第1章 启程前夜');
-    expect(tl!).toContain('POV 武松');
+    const chunks = buildStoryTimeline(chapters)!;
+    expect(chunks[0].chart).toContain('第1章 启程前夜');
+    expect(chunks[0].chart).toContain('POV 武松');
   });
 
   it('同一 section 的章节归到同一 section 块（不重复 section 标题）', () => {
-    const tl = buildStoryTimeline(chapters)!;
-    const sectionCount = (tl.match(/section 第一卷/g) || []).length;
+    const chart = buildStoryTimeline(chapters)![0].chart;
+    const sectionCount = (chart.match(/section 第一卷/g) || []).length;
     expect(sectionCount).toBe(1);
+  });
+
+  it('长书按 section 边界分块，不在 section 中间切', () => {
+    // 3 个 section：S1(1-10)、S2(11-20)、S3(21-30)，maxPerChunk=12
+    const long: OutlineChapter[] = [];
+    for (let i = 1; i <= 10; i++) long.push({ number: i, title: `章${i}`, pov: '甲', cast: [], section: 'S1' });
+    for (let i = 11; i <= 20; i++) long.push({ number: i, title: `章${i}`, pov: '乙', cast: [], section: 'S2' });
+    for (let i = 21; i <= 30; i++) long.push({ number: i, title: `章${i}`, pov: '丙', cast: [], section: 'S3' });
+    const chunks = buildStoryTimeline(long, 12)!;
+    // 30 章 / 12 ≈ 3 块；切点不割裂 section
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    // 第一块应包含完整 S1（1-10），不被切在中间
+    const firstChart = chunks[0].chart;
+    expect(firstChart).toContain('第1章');
+    expect(firstChart).toContain('第10章');
+    // 每块节点数 ≤ maxPerChunk*2（硬上限）
+    for (const c of chunks) {
+      const nodeCount = (c.chart.match(/第\d+章/g) || []).length;
+      expect(nodeCount).toBeLessThanOrEqual(24);
+    }
+    // 块标题含 section 名或章号范围
+    expect(chunks[0].title).toMatch(/故事脉络/);
+  });
+
+  it('块标题用 section 名（去括号注释）', () => {
+    // 3 个 section 各 10 章，maxPerChunk=12 → 跨 section 合并
+    const long: OutlineChapter[] = [];
+    for (let i = 1; i <= 10; i++) long.push({ number: i, title: `章${i}`, pov: '甲', cast: [], section: '第一篇：出山（约4章，1.5万字）' });
+    for (let i = 11; i <= 20; i++) long.push({ number: i, title: `章${i}`, pov: '乙', cast: [], section: '第二篇：南京（约6章）' });
+    const chunks = buildStoryTimeline(long, 12)!;
+    // 第一块应含两个 section 名（去括号），用 → 连接
+    expect(chunks[0].title).toContain('第一篇：出山');
+    expect(chunks[0].title).toContain('第二篇：南京');
+    expect(chunks[0].title).not.toContain('约4章'); // 括号注释已去除
+    expect(chunks[0].title).toContain('→');
+  });
+
+  it('无 section 的章节归入同一块也能正常分块', () => {
+    const noSec: OutlineChapter[] = [];
+    for (let i = 1; i <= 30; i++) noSec.push({ number: i, title: `章${i}`, pov: '甲', cast: [], section: '' });
+    const chunks = buildStoryTimeline(noSec, 12)!;
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    // 无 section 时不应该出现 section 行
+    expect(chunks[0].chart).not.toContain('section ');
   });
 });
 

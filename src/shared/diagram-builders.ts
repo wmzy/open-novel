@@ -327,10 +327,62 @@ export function parseOutlineChapters(outline: string): OutlineChapter[] {
  * 从解析后的章节列表生成 mermaid timeline 源码。
  * section = 章节的 section 字段；节点标注章号+标题+POV。
  * 返回 null 表示无数据。
+ *
+ * 章节过多时（如 137 章）单图节点被压成点点，因此按 section 边界分块：
+ * 每块尽量接近 maxPerChunk 章，但不在 section 中间切（避免割裂同一卷/篇）。
+ * 单个 section 超大时硬上限 maxPerChunk*2 防止不切割。短书返回单块。
  */
-export function buildStoryTimeline(chapters: OutlineChapter[]): string | null {
+export interface TimelineChunk {
+  title: string;
+  chart: string;
+}
+
+const TIMELINE_MAX_PER_CHUNK = 25;
+
+export function buildStoryTimeline(chapters: OutlineChapter[], maxPerChunk = TIMELINE_MAX_PER_CHUNK): TimelineChunk[] | null {
   if (!chapters || chapters.length === 0) return null;
 
+  // 短书：整本一块
+  if (chapters.length <= maxPerChunk) {
+    return [{ title: '故事脉络', chart: buildTimelineChart(chapters) }];
+  }
+
+  // 长书：按 section 边界切块
+  const chunks: TimelineChunk[] = [];
+  let start = 0;
+  while (start < chapters.length) {
+    let end = Math.min(start + maxPerChunk - 1, chapters.length - 1);
+    // 切点落在 section 中间 → 扩展到 section 结束，避免割裂
+    const hardLimit = start + maxPerChunk * 2 - 1;
+    while (end + 1 < chapters.length && end < hardLimit
+      && (chapters[end + 1].section || '') === (chapters[end].section || '')) {
+      end++;
+    }
+    const block = chapters.slice(start, end + 1);
+    chunks.push({
+      title: buildChunkTitle(block),
+      chart: buildTimelineChart(block),
+    });
+    start = end + 1;
+  }
+
+  return chunks.length > 0 ? chunks : null;
+}
+
+/** 生成分块标题：优先用 section 名（去括号注释），无 section 时回退章号范围。 */
+function buildChunkTitle(block: OutlineChapter[]): string {
+  const sections = [...new Set(block.map((c) => c.section).filter(Boolean))];
+  if (sections.length === 0) {
+    return `故事脉络（第${block[0].number}-${block[block.length - 1].number}章）`;
+  }
+  const clean = (s: string) => s.replace(/（[^）]*）/g, '').trim().slice(0, 18);
+  const names = sections.map(clean);
+  if (names.length <= 2) return `故事脉络 · ${names.join(' → ')}`;
+  return `故事脉络 · ${names[0]} 等${names.length}篇`;
+}
+
+/** 生成单个 mermaid timeline 源码；块内保留 section 划分。 */
+function buildTimelineChart(chapters: OutlineChapter[]): string {
   const lines: string[] = ['timeline', '    title 故事脉络'];
   let lastSection = '';
 

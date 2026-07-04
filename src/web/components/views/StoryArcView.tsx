@@ -96,7 +96,7 @@ interface ChapterData {
 }
 
 interface TimelineResponse {
-  timeline: string | null;
+  timelines: { title: string; chart: string }[] | null;
   chapters: ChapterData[];
 }
 
@@ -116,7 +116,7 @@ export default function StoryArcView({ projectId }: Props) {
     queryKey: ['timeline', projectId],
     queryFn: async () => {
       const res = await fetch(`/api/projects/${projectId}/timeline`);
-      if (!res.ok) return { timeline: null, chapters: [] };
+      if (!res.ok) return { timelines: null, chapters: [] };
       return res.json();
     },
   });
@@ -178,7 +178,9 @@ export default function StoryArcView({ projectId }: Props) {
         </button>
         {fillProgress && <span className={progressText}>{fillProgress}</span>}
       </div>
-      <CollapsibleDiagram chart={data.timeline} title="全书脉络时间线" />
+      {data.timelines?.map((chunk, i) => (
+        <CollapsibleDiagram key={i} chart={chunk.chart} title={chunk.title} defaultShow={i === 0} />
+      ))}
       <div className={chapterList}>
         {data.chapters.map((ch) => {
           const expanded = expandedCh === ch.number;
