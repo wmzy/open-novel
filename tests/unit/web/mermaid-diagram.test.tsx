@@ -59,19 +59,19 @@ describe('MermaidDiagram 缩放', () => {
     });
   });
 
-  it('缩小不超过下限 30%', async () => {
+  it('缩小不低于下限 20%', async () => {
     render(<MermaidDiagram chart={'graph TD; A-->B'} />);
     await screen.findByText('100%');
     // 连续缩小直到触底
-    for (let i = 0; i < 30; i++) fireEvent.click(screen.getByLabelText('缩小'));
-    expect(screen.getByText('30%')).toBeTruthy();
+    for (let i = 0; i < 40; i++) fireEvent.click(screen.getByLabelText('缩小'));
+    expect(screen.getByText('20%')).toBeTruthy();
   });
 
-  it('放大不超过上限 300%', async () => {
+  it('放大不高于上限 1000%（矢量图支持大幅放大）', async () => {
     render(<MermaidDiagram chart={'graph TD; A-->B'} />);
     await screen.findByText('100%');
-    for (let i = 0; i < 30; i++) fireEvent.click(screen.getByLabelText('放大'));
-    expect(screen.getByText('300%')).toBeTruthy();
+    for (let i = 0; i < 40; i++) fireEvent.click(screen.getByLabelText('放大'));
+    expect(screen.getByText('1000%')).toBeTruthy();
   });
 
   it('chart 变化后重置缩放', async () => {

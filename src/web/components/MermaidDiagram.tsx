@@ -105,8 +105,9 @@ function loadMermaid() {
   return mermaidPromise;
 }
 
-const MIN_SCALE = 0.3;
-const MAX_SCALE = 3;
+// SVG 矢量图放大不失真，限制仅出于可用性（极端放大后文字巨大、平移难导航）
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 10;
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
 /**
