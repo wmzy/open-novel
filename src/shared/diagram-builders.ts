@@ -197,3 +197,94 @@ export function buildPovTimeline(meta: OutlineMeta): string | null {
 
   return lines.join('\n');
 }
+
+// ── ⑤ 故事脉络时间线 ──
+
+export interface OutlineChapter {
+  number: number;
+  title: string;
+  pov: string;
+  /** 出场角色名（已去括号批注）；无出场角色行时为空数组 */
+  cast: string[];
+  /** 该章所属 section 标题（最近的 ## 标题） */
+  section: string;
+}
+
+/** 清理出场角色名：去括号批注、按顿号/逗号切分、去群像词缀。 */
+function parseCastList(raw: string): string[] {
+  return raw
+    .replace(/[（(][^)）]*[)）]/g, '') // 去括号批注
+    .split(/[、，,]/)
+    .map((s) => s.trim())
+    .filter((s) => s && !/(群像|路人|背景)$/.test(s)); // 去掉"…群像"等非具名
+}
+
+/**
+ * 解析大纲全文，提取所有章节的结构化信息。
+ * 章节锚点：`#### 第N章：标题` 或 `#### 第N-M章：标题`（连读章节取首章号）。
+ * section：最近的上一个 `## ` 标题。
+ */
+export function parseOutlineChapters(outline: string): OutlineChapter[] {
+  if (!outline) return [];
+  const lines = outline.split('\n');
+  const chapters: OutlineChapter[] = [];
+  let currentSection = '';
+
+  const anchorRe = /^####\s+第([\d]+)(?:-[\d]+)?章[：:]?\s*(.*)$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const secMatch = lines[i].match(/^##\s+(.+)$/);
+    if (secMatch) {
+      currentSection = secMatch[1].trim();
+      continue;
+    }
+    const anchorMatch = lines[i].match(anchorRe);
+    if (!anchorMatch) continue;
+
+    const number = parseInt(anchorMatch[1], 10);
+    const title = anchorMatch[2].trim();
+    // 向下扫描表格行找 POV 和出场角色（到下一个 #### 或 ### 之前）
+    let pov = '';
+    let castRaw = '';
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^#{3,4}\s/.test(lines[j])) break;
+      const povMatch = lines[j].match(/^\|\s*POV\s*\|\s*(.+?)\s*\|/);
+      if (povMatch) pov = povMatch[1].trim();
+      const castMatch = lines[j].match(/^\|\s*出场角色\s*\|\s*(.+?)\s*\|/);
+      if (castMatch) castRaw = castMatch[1].trim();
+    }
+
+    chapters.push({
+      number,
+      title,
+      pov,
+      cast: parseCastList(castRaw),
+      section: currentSection,
+    });
+  }
+
+  return chapters;
+}
+
+/**
+ * 从解析后的章节列表生成 mermaid timeline 源码。
+ * section = 章节的 section 字段；节点标注章号+标题+POV。
+ * 返回 null 表示无数据。
+ */
+export function buildStoryTimeline(chapters: OutlineChapter[]): string | null {
+  if (!chapters || chapters.length === 0) return null;
+
+  const lines: string[] = ['timeline', '    title 故事脉络'];
+  let lastSection = '';
+
+  for (const ch of chapters) {
+    if (ch.section && ch.section !== lastSection) {
+      lines.push(`    section ${sanitize(ch.section, 30)}`);
+      lastSection = ch.section;
+    }
+    const povLabel = ch.pov ? `POV ${sanitize(ch.pov, 10)}` : 'POV ?';
+    lines.push(`        第${ch.number}章 ${sanitize(ch.title, 20)} : ${povLabel}`);
+  }
+
+  return lines.join('\n');
+}
