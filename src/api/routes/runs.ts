@@ -223,7 +223,8 @@ const runsRouter = new Hono();
 
 runsRouter.post('/', async (c) => {
   const body = await c.req.json();
-  const { projectId, agentId, skillId, stage, message, conversationId, model } = body;
+  const { projectId, agentId, skillId, stage, message, conversationId, model,
+          mode = 'generate', targetFile, revisionNote } = body;
 
   const def = getAgentDef(agentId);
   if (!def) return c.json({ error: 'Agent not found' }, 404);
@@ -258,6 +259,20 @@ runsRouter.post('/', async (c) => {
 
   // Compose prompt with project context, skill, and conversation history
   const projectDir = await resolveProjectDir(projectId);
+
+  // revise 模式：读取目标文件全文作为上下文 + baseSnapshot（run-local 快照，用于 close handler 生成 diff）
+  let reviseContent: string | undefined;
+  let baseSnapshot: string | undefined;
+  if (mode === 'revise' && targetFile) {
+    const fullPath = path.isAbsolute(targetFile) ? targetFile : path.join(projectDir, targetFile);
+    try {
+      reviseContent = await readFile(fullPath, 'utf-8');
+      baseSnapshot = reviseContent;
+    } catch {
+      return c.json({ error: `Target file not found: ${targetFile}` }, 404);
+    }
+  }
+
   const composedPrompt = await composePrompt({
     message,
     projectId,
@@ -265,6 +280,10 @@ runsRouter.post('/', async (c) => {
     stage,
     projectDir,
     history: history.length > 0 ? history : undefined,
+    mode,
+    reviseTarget: targetFile,
+    reviseNote: revisionNote,
+    reviseContent,
   });
 
   /**
@@ -280,8 +299,17 @@ runsRouter.post('/', async (c) => {
   const run = createRun({ projectId, agentId, skillId, stage });
   run.status = 'running';
 
-  // Store run in DB
-  void db.insert(runsTable).values({ id: run.id, conversationId: convId, agent: agentId, status: 'running' }).execute();
+  // Store run in DB（mode + payload 区分修订/重命名运行）
+  void db.insert(runsTable).values({
+    id: run.id,
+    conversationId: convId,
+    agent: agentId,
+    status: 'running',
+    mode,
+    payload: mode === 'revise' && targetFile
+      ? { targetFile, revisionNote, baseSnapshot }
+      : null,
+  }).execute();
 
   // Launch agent
   const { child } = launchAgent(def, composedPrompt, projectDir, [], model);
@@ -413,11 +441,34 @@ runsRouter.post('/', async (c) => {
     // Create git snapshot
     await createSnapshot(projectDir, `Run ${run.id.slice(0, 8)}: ${writtenPaths.size} files modified`).catch(() => {});
 
-    // Update run record
-    await db.update(runsTable).set({
+    // revise 模式：生成 run-local diff 并 emit revision-applied 事件
+    let reviseDiff: string | undefined;
+    if (code === 0 && mode === 'revise' && targetFile && baseSnapshot !== undefined) {
+      try {
+        const fullPath = path.isAbsolute(targetFile) ? targetFile : path.join(projectDir, targetFile);
+        const newContent = await readFile(fullPath, 'utf-8');
+        const { createUnifiedDiff, summarizeDiff } = await import('../../shared/diff-utils');
+        reviseDiff = createUnifiedDiff(baseSnapshot, newContent, targetFile);
+        const summary = summarizeDiff(reviseDiff);
+        emitEvent(run, 'agent', {
+          type: 'revision-applied',
+          targetFile,
+          addedLines: summary.addedLines,
+          removedLines: summary.removedLines,
+          diffPreview: reviseDiff.slice(0, 2000),
+        });
+      } catch { /* diff 生成失败不阻断收尾 */ }
+    }
+
+    // Update run record（revise 模式附带 diff 进 payload）
+    const updateSet: Record<string, unknown> = {
       status: code === 0 ? 'succeeded' : 'failed',
       finishedAt: new Date(),
-    }).where(eq(runsTable.id, run.id)).execute();
+    };
+    if (reviseDiff !== undefined) {
+      updateSet.payload = { targetFile, revisionNote, baseSnapshot, diff: reviseDiff };
+    }
+    await db.update(runsTable).set(updateSet).where(eq(runsTable.id, run.id)).execute();
 
     // P1: 零产出自动重试 — writing 阶段产出 0 个文件时自动重试一次。
     // 根因：agent 有时读上下文后空转退出（~30%概率），不写任何文件。
