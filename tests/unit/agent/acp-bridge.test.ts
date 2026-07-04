@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertSessionUpdate, extractAcpModelInfo } from '@/agent/acp-bridge';
+import { convertSessionUpdate, extractAcpModelInfo, isAcpFailure } from '@/agent/acp-bridge';
 import type { StreamEvent } from '@/agent/types';
 
 describe('convertSessionUpdate', () => {
@@ -205,5 +205,46 @@ describe('extractAcpModelInfo', () => {
     expect(extractAcpModelInfo([
       { id: 'model', name: 'Model', type: 'boolean', category: 'model', currentValue: true },
     ] as any)).toBeNull();
+  });
+});
+
+/**
+ * isAcpFailure：判定 ACP 会话的 stopReason 是否为显式失败。
+ *
+ * 核心语义：只有 refusal / max_turn_requests / error 是显式失败；
+ * null（close 在 runAcpTurn resolve 前触发，如 timeout/进程退出）按非失败处理，
+ * 避免误丢已产生的 agent 响应。
+ */
+describe('isAcpFailure', () => {
+  it('null（未决态）不算失败——close 競态时不误丢响应', () => {
+    expect(isAcpFailure(null)).toBe(false);
+  });
+
+  it('undefined 不算失败', () => {
+    expect(isAcpFailure(undefined)).toBe(false);
+  });
+
+  it('end_turn 是正常成功', () => {
+    expect(isAcpFailure('end_turn')).toBe(false);
+  });
+
+  it('max_tokens 不算失败（有输出）', () => {
+    expect(isAcpFailure('max_tokens')).toBe(false);
+  });
+
+  it('stopped 不算失败', () => {
+    expect(isAcpFailure('stopped')).toBe(false);
+  });
+
+  it('refusal 是显式失败', () => {
+    expect(isAcpFailure('refusal')).toBe(true);
+  });
+
+  it('max_turn_requests 是显式失败', () => {
+    expect(isAcpFailure('max_turn_requests')).toBe(true);
+  });
+
+  it('error 是显式失败', () => {
+    expect(isAcpFailure('error')).toBe(true);
   });
 });

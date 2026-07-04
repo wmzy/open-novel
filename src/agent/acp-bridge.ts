@@ -198,6 +198,17 @@ export function convertSessionUpdate(update: SessionUpdate): StreamEvent[] {
 }
 
 /**
+ * 判定 ACP 会话的 stopReason 是否为显式失败。
+ *
+ * 只有 refusal / max_turn_requests / error 是失败；null（close 在 runAcpTurn resolve 前
+ * 触发，如 timeout kill / 进程自行退出）与正常 stopReason（end_turn / max_tokens / stopped）
+ * 都不算失败。这样 close 竞态时不会误丢已产生的 agent 响应。
+ */
+export function isAcpFailure(stopReason: string | null | undefined): boolean {
+  return stopReason === 'refusal' || stopReason === 'max_turn_requests' || stopReason === 'error';
+}
+
+/**
  * 在已 spawn 的 omp acp 子进程上运行一轮 prompt。
  *
  * 流程：initialize → session/new → session/prompt，同时读 session/update 通知流转为 StreamEvent。

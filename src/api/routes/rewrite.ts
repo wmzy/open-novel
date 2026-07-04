@@ -6,7 +6,7 @@ import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
-import { runAcpTurn } from '../../agent/acp-bridge';
+import { runAcpTurn, isAcpFailure } from '../../agent/acp-bridge';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { ensureContextArtifacts } from '../../agent/context-manager';
 import { createSnapshot } from '../../agent/snapshot';
@@ -135,9 +135,9 @@ rewriteRouter.post('/', async (c) => {
     handler.flush();
 
     // ACP 模式：omp 常驻进程被 SIGTERM 终止，exit code 无意义。
-    const ACP_FAILURE_REASONS = ['refusal', 'max_turn_requests', 'error'];
+    // 只有显式失败才算失败；null（close 競态）按成功处理。
     if (isAcp) {
-      code = acpStopReason && !ACP_FAILURE_REASONS.includes(acpStopReason) ? 0 : 1;
+      code = isAcpFailure(acpStopReason) ? 1 : 0;
     }
 
     // 收集写入文件并同步到 DB

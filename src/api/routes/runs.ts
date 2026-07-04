@@ -8,7 +8,7 @@ import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
-import { runAcpTurn } from '../../agent/acp-bridge';
+import { runAcpTurn, isAcpFailure } from '../../agent/acp-bridge';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { detectAiPatterns, detectDegradation, buildExcludeGrams } from '../../agent/quality-checker';
 import type { AgentEvent, StreamEvent } from '../../agent/types';
@@ -419,10 +419,11 @@ runsRouter.post('/', async (c) => {
     handler.flush();
 
     // ACP 模式：omp 常驻进程被 SIGTERM 终止，exit code 无意义。
-    // 用 runAcpTurn 返回的 stopReason 判定成功/失败。
-    const ACP_FAILURE_REASONS = ['refusal', 'max_turn_requests', 'error'];
+    // 用 stopReason 判定：只有显式失败（refusal/max_turn_requests/error）才算失败；
+    // null（close 在 runAcpTurn resolve 前触发，如 timeout/进程退出）按成功处理，
+    // 避免误丢已产生的 agent 响应。
     if (isAcp) {
-      code = acpStopReason && !ACP_FAILURE_REASONS.includes(acpStopReason) ? 0 : 1;
+      code = isAcpFailure(acpStopReason) ? 1 : 0;
     }
 
     // Collect artifacts from run events (filter to agent events only)
@@ -443,14 +444,18 @@ runsRouter.post('/', async (c) => {
 
     // Persist assistant message (authoritative — frontend no longer persists).
     // Even if the SSE client disconnected, the message is durably stored here.
-    if (code === 0 && agentEvents.length > 0) {
+    // 失败的 run（code !== 0）只要有 agent 输出也持久化，加标记前缀，避免用户「丢失」已有响应。
+    if (agentEvents.length > 0) {
       const { content: assistantContent, events: agentEventList } = transformStreamEvents(agentEvents);
       if (assistantContent || agentEventList.length > 0) {
+        const failed = code !== 0;
         await db.insert(messages).values({
           id: generateId('msg_'),
           conversationId: convId,
           role: 'assistant',
-          content: assistantContent || '(无文本输出)',
+          content: failed
+            ? `[执行异常${acpStopReason ? `(${acpStopReason})` : ''}] ${assistantContent || '(无文本输出)'}`
+            : assistantContent || '(无文本输出)',
           events: agentEventList,
           artifacts: writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null,
         }).catch(() => {});
