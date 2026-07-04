@@ -2,11 +2,54 @@ import { useEffect, useRef, useState } from 'react';
 import { css } from '@linaria/core';
 
 const wrap = css`
+  position: relative;
   background: var(--haze-color-bg-secondary);
   border: 1px solid var(--haze-color-border);
   border-radius: 8px;
   padding: 1rem;
   overflow-x: auto;
+`;
+
+const svgWrap = css`
+  overflow: hidden;
+  user-select: none;
+`;
+
+const controls = css`
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  background: var(--haze-color-bg);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  padding: 0.15rem;
+  font-size: 0.72rem;
+  z-index: 1;
+`;
+
+const ctrlBtn = css`
+  background: none;
+  border: none;
+  color: var(--haze-color-text-secondary);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  line-height: 1;
+  font-size: 0.85rem;
+  &:hover {
+    color: var(--haze-color-text);
+    background: var(--haze-color-bg-secondary);
+  }
+`;
+
+const scaleLabel = css`
+  color: var(--haze-color-text-secondary);
+  min-width: 2.6rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 `;
 
 const msg = css`
@@ -62,17 +105,31 @@ function loadMermaid() {
   return mermaidPromise;
 }
 
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 3;
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+
 /**
- * 渲染 mermaid 源码为 SVG。
+ * 渲染 mermaid 源码为 SVG，支持缩放与拖拽平移。
+ * - 缩放：右上角控件 −/[百分比]/+/⟲；范围 30%–300%
+ * - 平移：scale>1 时拖拽平移（pointer capture，拖出元素仍跟踪）
+ * - scale=1 保留原有 overflow-x:auto（宽图水平滚动）
  * 动态加载 mermaid，渲染失败时降级为提示。
  */
 export function MermaidDiagram({ chart }: { chart: string }) {
   const elRef = useRef<HTMLDivElement>(null);
+  const svgElRef = useRef<SVGSVGElement | null>(null);
   const [state, setState] = useState<'loading' | 'done' | 'error'>('loading');
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setState('loading');
+    setScale(1);
+    setPan({ x: 0, y: 0 });
 
     loadMermaid().then(async (mermaid) => {
       if (cancelled) return;
@@ -82,6 +139,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
         if (cancelled) return;
         if (elRef.current) {
           elRef.current.innerHTML = svg;
+          svgElRef.current = elRef.current.querySelector('svg');
         }
         setState('done');
       } catch {
@@ -94,13 +152,60 @@ export function MermaidDiagram({ chart }: { chart: string }) {
     };
   }, [chart]);
 
+  // 应用 transform 到 SVG（transform-origin 0 0，从左上角缩放）
+  useEffect(() => {
+    const svg = svgElRef.current;
+    if (!svg) return;
+    svg.style.transformOrigin = '0 0';
+    svg.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${scale})`;
+  }, [scale, pan, state]);
+
+  const zoomIn = () => setScale((s) => clamp(+(s * 1.2).toFixed(3), MIN_SCALE, MAX_SCALE));
+  const zoomOut = () => setScale((s) => clamp(+(s / 1.2).toFixed(3), MIN_SCALE, MAX_SCALE));
+  const reset = () => {
+    setScale(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  // 拖拽平移：仅 scale>1 时启用
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (scale <= 1) return;
+    dragRef.current = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y };
+    setDragging(true);
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setPan({ x: d.px + (e.clientX - d.sx), y: d.py + (e.clientY - d.sy) });
+  };
+  const onPointerUp = () => {
+    dragRef.current = null;
+    setDragging(false);
+  };
+
   if (state === 'error') {
     return <div className={msg}>图表数据格式异常或数据不足</div>;
   }
   return (
     <div className={wrap}>
+      {state === 'done' && (
+        <div className={controls}>
+          <button type="button" className={ctrlBtn} onClick={zoomOut} aria-label="缩小">−</button>
+          <span className={scaleLabel}>{Math.round(scale * 100)}%</span>
+          <button type="button" className={ctrlBtn} onClick={zoomIn} aria-label="放大">+</button>
+          <button type="button" className={ctrlBtn} onClick={reset} aria-label="重置">⟲</button>
+        </div>
+      )}
       {state === 'loading' && <div className={msg}>渲染中…</div>}
-      <div ref={elRef} />
+      <div
+        ref={elRef}
+        className={svgWrap}
+        style={{ cursor: scale > 1 ? (dragging ? 'grabbing' : 'grab') : 'default' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      />
     </div>
   );
 }
