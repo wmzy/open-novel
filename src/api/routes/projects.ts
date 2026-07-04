@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
-import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
@@ -10,6 +10,7 @@ import { getPlugin } from '../../plugins/registry';
 import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
+import { detectChapters, type ChunkSource } from '../../shared/text-chunker';
 import { gitSync } from '../../agent/snapshot';
 import {
   TEMPLATE_GENERATORS,
@@ -117,6 +118,91 @@ projectsRouter.post('/import', async (c) => {
 
   return c.json({ project }, 201);
 });
+
+// Import raw text: reverse-decompose into a new .novel/ project
+projectsRouter.post('/import-text', async (c) => {
+  const body = await c.req.json();
+  const userPath = path.resolve(body.path);
+
+  // 校验路径存在
+  if (!existsSync(userPath)) {
+    return c.json({ error: '路径不存在' }, 400);
+  }
+
+  // 项目根目录：文件输入取其父目录，目录输入即自身。
+  const stat = statSync(userPath);
+  const projectRoot = stat.isDirectory() ? userPath : path.dirname(userPath);
+
+  // 早判 .novel/ 是否已存在（先于文本收集，避免空 .novel/ 目录误报「未找到」）
+  const novelDir = path.join(projectRoot, '.novel');
+  if (existsSync(novelDir)) {
+    return c.json({ error: '该目录已是 open-novel 项目，请用「打开项目」' }, 400);
+  }
+
+  // 收集文本内容
+  const source: ChunkSource = stat.isDirectory()
+    ? { kind: 'dir', files: collectTextFiles(userPath) }
+    : { kind: 'file', content: readFileSync(userPath, 'utf-8'), filename: path.basename(userPath) };
+
+  if (source.kind === 'dir' && source.files.length === 0) {
+    return c.json({ error: '未找到 .txt 或 .md 文件' }, 400);
+  }
+
+  // 切章
+  const chapters = detectChapters(source);
+  if (chapters.length === 0) {
+    return c.json({ error: '未检测到有效文本' }, 400);
+  }
+
+  // 创建 .novel/ 骨架
+  mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
+  mkdirSync(path.join(novelDir, 'characters', 'profiles'), { recursive: true });
+
+  // 写标准化章节文件
+  for (const ch of chapters) {
+    const header = ch.title && ch.title !== `第${ch.number}章`
+      ? `# 第${ch.number}章 ${ch.title}`
+      : `# 第${ch.number}章`;
+    writeFileSync(
+      path.join(novelDir, 'chapters', `第${ch.number}章.md`),
+      `${header}\n\n${ch.content}`,
+    );
+  }
+
+  // 写初始 config.json（待 agent 补全）
+  const baseName = stat.isDirectory() ? path.basename(userPath) : path.basename(userPath).replace(/\.(txt|md)$/i, '');
+  writeFileSync(
+    path.join(novelDir, 'config.json'),
+    JSON.stringify({
+      title: body.title || baseName,
+      genre: body.genre || 'general',
+      perspective: 'third-person',
+      chapterCount: chapters.length,
+      targetWords: chapters.length * 5000,
+    }, null, 2),
+  );
+
+  // 注册 DB 记录（path 存项目根目录，与「打开项目」一致）
+  const id = generateId('proj_');
+  const [project] = await db.insert(projects).values({
+    id,
+    title: body.title || baseName,
+    path: projectRoot,
+    genre: body.genre || 'general',
+    targetWords: chapters.length * 5000,
+    chapterCount: chapters.length,
+    perspective: 'third-person',
+  }).returning();
+
+  return c.json({ project }, 201);
+});
+
+/** 收集目录下所有 .txt/.md 文件的 { name, content }。 */
+function collectTextFiles(dir: string): { name: string; content: string }[] {
+  return readdirSync(dir)
+    .filter((f) => /\.(txt|md)$/i.test(f))
+    .map((f) => ({ name: f, content: readFileSync(path.join(dir, f), 'utf-8') }));
+}
 
 projectsRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
