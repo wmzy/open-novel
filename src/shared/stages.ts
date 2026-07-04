@@ -52,5 +52,6 @@ export const ALL_VIEWS = [
   { id: 'dashboard', label: '总览' },
   ...STAGES.map((s) => ({ id: s.viewId, label: s.label })),
   { id: 'foreshadow', label: '伏笔' },
+  { id: 'story-arc', label: '故事脉络' },
   { id: 'wuxia', label: '武侠' },
 ];
