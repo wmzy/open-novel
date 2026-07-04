@@ -288,3 +288,73 @@ export function buildStoryTimeline(chapters: OutlineChapter[]): string | null {
 
   return lines.join('\n');
 }
+
+/** 单条角色交互。 */
+export interface CharacterInteraction {
+  from: string;
+  to: string;
+  /** 交互类型（冲突/合作/对话/试探/对决/善意/背叛/重逢/离别，或其他自定义词） */
+  type: string;
+  action: string;
+}
+
+/**
+ * 解析大纲「角色交互」字段为结构化交互列表。
+ * 格式：`主动方→被动方[类型]：动作`，多条用 ` · ` 分隔。
+ * 格式错的条目跳过，不抛异常。
+ */
+export function parseInteractionField(field: string): CharacterInteraction[] {
+  if (!field || field.trim() === '（无）' || !field.trim()) return [];
+
+  const items = field.split(/\s*·\s*/);
+  const result: CharacterInteraction[] = [];
+  // 正则：主动方→被动方[类型]：动作；容忍全角/半角冒号
+  const re = /^(.+?)→(.+?)\[(.+?)\][：:]\s*(.+)$/;
+
+  for (const item of items) {
+    const m = item.trim().match(re);
+    if (m) {
+      result.push({
+        from: m[1].trim(),
+        to: m[2].trim(),
+        type: m[3].trim(),
+        action: m[4].trim(),
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 从交互列表生成 mermaid sequenceDiagram 源码。
+ * participant 去重；每条交互生成箭头 + Note over 标注类型。
+ * 返回 null 表示无交互数据。
+ */
+export function buildSequenceDiagram(interactions: CharacterInteraction[]): string | null {
+  if (!interactions || interactions.length === 0) return null;
+
+  // participant 去重，保持首次出现顺序
+  const seen = new Set<string>();
+  const participants: string[] = [];
+  for (const it of interactions) {
+    for (const name of [it.from, it.to]) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        participants.push(name);
+      }
+    }
+  }
+
+  const lines: string[] = ['sequenceDiagram'];
+  for (const p of participants) {
+    lines.push(`    participant ${sanitize(p, 20)}`);
+  }
+
+  for (const it of interactions) {
+    lines.push(`    ${sanitize(it.from, 20)}->>${sanitize(it.to, 20)}: ${sanitize(it.action, 30)}`);
+    lines.push(`    Note over ${sanitize(it.from, 20)},${sanitize(it.to, 20)}: ${sanitize(it.type, 10)}`);
+  }
+
+  return lines.join('\n');
+}

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { parseOutlineChapters, buildStoryTimeline } from '../../../src/shared/diagram-builders';
+import {
+  parseOutlineChapters,
+  buildStoryTimeline,
+  parseInteractionField,
+  buildSequenceDiagram,
+} from '../../../src/shared/diagram-builders';
 import type { OutlineChapter } from '../../../src/shared/diagram-builders';
 
 const SAMPLE = `# 《示例集》详细大纲·卷一《示例卷》
@@ -99,5 +104,74 @@ describe('buildStoryTimeline', () => {
     const tl = buildStoryTimeline(chapters)!;
     const sectionCount = (tl.match(/section 第一篇 出山/g) || []).length;
     expect(sectionCount).toBe(1);
+  });
+});
+
+describe('parseInteractionField', () => {
+  it('解析单条交互', () => {
+    const result = parseInteractionField('武松→何九叔[冲突]：被盘问');
+    expect(result).toEqual([
+      { from: '武松', to: '何九叔', type: '冲突', action: '被盘问' },
+    ]);
+  });
+
+  it('解析多条交互（ · 分隔）', () => {
+    const result = parseInteractionField('武松→何九叔[冲突]：被盘问 · 何九叔→武松[善意]：出手相助');
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({ from: '何九叔', to: '武松', type: '善意', action: '出手相助' });
+  });
+
+  it('空字符串返回空数组', () => {
+    expect(parseInteractionField('')).toEqual([]);
+  });
+
+  it('（无）返回空数组', () => {
+    expect(parseInteractionField('（无）')).toEqual([]);
+  });
+
+  it('格式错的整条跳过，不抛异常', () => {
+    const result = parseInteractionField('武松→何九叔[冲突]：被盘问 · 乱七八糟的文本');
+    expect(result).toHaveLength(1);
+  });
+
+  it('类型不在枚举内也接受（宽松匹配，只做结构校验）', () => {
+    const result = parseInteractionField('A→B[自定义]：某事');
+    expect(result).toHaveLength(1);
+    expect(result[0].type).toBe('自定义');
+  });
+});
+
+describe('buildSequenceDiagram', () => {
+  it('空交互返回 null', () => {
+    expect(buildSequenceDiagram([])).toBeNull();
+  });
+
+  it('生成 sequenceDiagram 源码，含 participant 声明与箭头', () => {
+    const interactions = [
+      { from: '武松', to: '何九叔', type: '冲突', action: '被盘问' },
+      { from: '何九叔', to: '武松', type: '善意', action: '出手相助' },
+    ];
+    const sd = buildSequenceDiagram(interactions);
+    expect(sd).not.toBeNull();
+    expect(sd!).toContain('sequenceDiagram');
+    expect(sd!).toContain('participant 武松');
+    expect(sd!).toContain('participant 何九叔');
+    expect(sd!).toContain('武松->>何九叔: 被盘问');
+  });
+
+  it('participant 去重（同一角色多次出现只声明一次）', () => {
+    const interactions = [
+      { from: '武松', to: '何九叔', type: '冲突', action: 'a' },
+      { from: '何九叔', to: '武松', type: '善意', action: 'b' },
+    ];
+    const sd = buildSequenceDiagram(interactions)!;
+    const participantCount = (sd.match(/participant 武松/g) || []).length;
+    expect(participantCount).toBe(1);
+  });
+
+  it('每条交互生成 Note over 标注类型', () => {
+    const interactions = [{ from: 'A', to: 'B', type: '对决', action: 'x' }];
+    const sd = buildSequenceDiagram(interactions)!;
+    expect(sd).toContain('Note over A,B: 对决');
   });
 });
