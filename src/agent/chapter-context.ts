@@ -205,8 +205,16 @@ export async function buildCastLayer(projectDir: string, cast: Cast): Promise<st
     }
     const extracted = extractKeySections(profile);
     const label = name === pov ? '（POV）' : '';
-    sections.push(`#### ${name}${label}\n${extracted}`);
-    totalSize += extracted.length;
+    // 声口样本（可选资产，文件存在时附入）
+    const voicesPath = path.join(projectDir, NOVEL_DIR, 'characters', 'voices', `${name}.md`);
+    let voiceBlock = '';
+    try {
+      const voices = (await fs.readFile(voicesPath, 'utf-8')).trim();
+      if (voices) voiceBlock = `\n\n**声口样本**\n${voices}`;
+    } catch { /* 可选资产，缺失即跳过 */ }
+    const block = `${extracted}${voiceBlock}`;
+    sections.push(`#### ${name}${label}\n${block}`);
+    totalSize += block.length;
   }
 
   // L2: brief 列表

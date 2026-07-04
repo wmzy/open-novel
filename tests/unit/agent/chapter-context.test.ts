@@ -178,5 +178,30 @@ describe('buildCastLayer', () => {
     const layer = await buildCastLayer(dir, { pov: '不存在', full: ['不存在'], brief: [] });
     expect(layer).not.toContain('不存在.md');
   });
+
+  describe('voice samples', () => {
+    beforeEach(async () => {
+      await fs.mkdir(path.join(dir, '.novel', 'characters', 'voices'), { recursive: true });
+      await fs.writeFile(
+        path.join(dir, '.novel', 'characters', 'profiles', '武松.md'),
+        '# 武松\n\n## 出身与经历\n复仇少年。',
+      );
+    });
+
+    it('appends voice samples when voices file exists', async () => {
+      await fs.writeFile(
+        path.join(dir, '.novel', 'characters', 'voices', '武松.md'),
+        '## 独白\n剑在手，心不静。\n\n## 对话\n"让开。"',
+      );
+      const layer = await buildCastLayer(dir, { pov: '武松', full: ['武松'], brief: [] });
+      expect(layer).toContain('声口样本');
+      expect(layer).toContain('剑在手，心不静');
+    });
+
+    it('skips voice when no voices file', async () => {
+      const layer = await buildCastLayer(dir, { pov: '武松', full: ['武松'], brief: [] });
+      expect(layer).not.toContain('声口样本');
+    });
+  });
 });
 });
