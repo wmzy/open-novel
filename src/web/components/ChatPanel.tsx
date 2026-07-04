@@ -84,7 +84,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   };
 
   const handleSend = () => {
-    if (!input.trim() || !agentAvailable) return;
+    if (!input.trim() || !agentAvailable || isRunning) return;
     sendMessage({
       projectId,
       agentId,

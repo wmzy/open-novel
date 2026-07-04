@@ -152,6 +152,16 @@ export function useRun(conversationId?: string) {
             switch (frame.event) {
               case 'agent':
                 handleAgentEvent(data);
+                // Agent-level error (crash, quota exhausted) ends the stream
+                if (data.type === 'error') {
+                  setMessages((prev) => {
+                    const updated = [...prev];
+                    const last = updated[updated.length - 1];
+                    if (last?.role === 'assistant') last.endedAt = Date.now();
+                    return updated;
+                  });
+                  streamEnded = true;
+                }
                 break;
               case 'artifacts':
                 setMessages((prev) => {
