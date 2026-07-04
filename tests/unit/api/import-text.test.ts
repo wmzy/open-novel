@@ -107,4 +107,24 @@ describe('POST /api/projects/import-text', () => {
     const data = await res.json();
     expect(data.error).toContain('未找到');
   });
+
+  it('返回 runId（agent 驱动入口）', async () => {
+    const novelPath = path.join(tmpDir, 'book.txt');
+    fs.writeFileSync(novelPath, '第一章 开始\n内容A\n\n第二章 结束\n内容B');
+
+    const res = await apiApp.request('/api/projects/import-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: novelPath, agentId: 'claude' }),
+    });
+    // 骨架创建 + DB 记录成功，agent run 已注册
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.project).toBeDefined();
+    createdIds.push(data.project.id);
+    expect(data.runId).toBeDefined();
+    // runId 是 UUID 字符串（RunSession.id 为裸 randomUUID）
+    expect(typeof data.runId).toBe('string');
+    expect(data.runId.length).toBeGreaterThan(10);
+  });
 });

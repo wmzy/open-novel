@@ -11,6 +11,12 @@ import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
 import { detectChapters, type ChunkSource } from '../../shared/text-chunker';
+import { createRun, emitEvent, finishRun } from '../../agent/run';
+import { launchAgent } from '../../agent/launch';
+import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
+import { buildReverseDecomposePrompt } from '../../agent/reverse-decomposer';
+import { getAgentDef } from '../../agent/registry';
+import type { StreamEvent } from '../../agent/types';
 import { gitSync } from '../../agent/snapshot';
 import {
   TEMPLATE_GENERATORS,
@@ -194,7 +200,46 @@ projectsRouter.post('/import-text', async (c) => {
     perspective: 'third-person',
   }).returning();
 
-  return c.json({ project }, 201);
+  // 启动 agent 逆向拆解（非阻塞）。不预检可用性——与 timeline /fill 一致：
+  // def 存在即注册 run，launch 失败则 run 标记 failed，不阻塞响应。
+  const agentId = body.agentId || 'claude';
+  const def = getAgentDef(agentId);
+  let runId: string | undefined;
+  if (def) {
+    const run = createRun({ projectId: id, agentId, skillId: 'novel', stage: 'import' });
+    runId = run.id;
+
+    const prompt = buildReverseDecomposePrompt({
+      projectDir: projectRoot,
+      chapterCount: chapters.length,
+      title: body.title,
+      genre: body.genre,
+    });
+
+    try {
+      const { child } = launchAgent(def, prompt, projectRoot, [], undefined);
+      run.child = child;
+      run.status = 'running';
+
+      const onEvent = (event: StreamEvent) => emitEvent(run, 'agent', event);
+      const handler = def.streamFormat === 'claude-stream-json'
+        ? createClaudeStreamHandler(onEvent)
+        : createJsonEventHandler(onEvent);
+      child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
+      child.stderr?.on('data', () => {});
+      child.on('close', (code) => {
+        handler.flush();
+        finishRun(run, code === 0 ? 'succeeded' : 'failed');
+      });
+      child.on('error', () => finishRun(run, 'failed'));
+    } catch {
+      // launch 失败（如 agent 二进制不在 PATH）：仍返回 project，run 标记 failed
+      run.status = 'failed';
+      run.error = `agent ${agentId} launch failed`;
+    }
+  }
+
+  return c.json({ project, runId }, 201);
 });
 
 /** 收集目录下所有 .txt/.md 文件的 { name, content }。 */
