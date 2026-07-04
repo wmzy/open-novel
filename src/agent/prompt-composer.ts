@@ -54,7 +54,9 @@ actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章场景脚手架（主动 Scene / 被动 Sequel 配对）。不落盘预览可用 GET /api/projects/{projectId}/templates/scenes。以生成的脚手架为起点并加以打磨。
 场景表完成后，保存到 .novel/scenes.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
 
-  writing: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。将章节保存到 .novel/chapters/ 目录。
+  writing: `**写章前**：本章大纲与出场角色档案已注入上方上下文。无需再 Read 这些文件——直接基于注入内容写作。仅在需要查阅未注入细节（如某角色完整弧线、某武学体系全貌）时才 Read。
+
+为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。将章节保存到 .novel/chapters/ 目录。
 
 **元叙事禁令**：正文内严禁出现章节编号引用（如「第15章」「第十二章」等）。章节编号只能出现在文件首行标题（如「# 第3章 令牌」），绝不能在散文叙事中出现。角色不会知道自己身处「第几章」。
 

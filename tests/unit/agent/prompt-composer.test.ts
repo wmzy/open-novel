@@ -31,7 +31,7 @@ const STAGE_FEATURES: Record<string, string> = {
   characters: '撰写详细的角色档案',
   outline: '创建详细的故事大纲',
   scenes: '将大纲拆解为详细场景',
-  writing: '为小说撰写真正的散文正文',
+  writing: '本章大纲与出场角色档案已注入上方上下文',
   drafting: '为小说撰写真正的散文正文',
   revision: '审阅和改进已有内容',
   polish: '最终润色',
