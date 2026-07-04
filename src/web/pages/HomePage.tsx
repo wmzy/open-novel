@@ -129,11 +129,6 @@ export default function HomePage() {
   const [page, setPage] = useState(1);
   const [showImport, setShowImport] = useState(false);
   const [importPath, setImportPath] = useState('');
-  const [showImportText, setShowImportText] = useState(false);
-  const [importTextPath, setImportTextPath] = useState('');
-  const [importTextTargetDir, setImportTextTargetDir] = useState('');
-  const [importTextTitle, setImportTextTitle] = useState('');
-  const [importTextGenre, setImportTextGenre] = useState('');
 
   const filtered = useMemo(() => {
     if (!projects) return [];
@@ -202,43 +197,6 @@ export default function HomePage() {
     }
   };
 
-  const handleImportText = async () => {
-    if (!importTextPath.trim()) {
-      toast.error('请输入源文本路径');
-      return;
-    }
-    if (!importTextTargetDir.trim()) {
-      toast.error('请指定新项目目标目录');
-      return;
-    }
-    try {
-      const res = await fetch('/api/projects/import-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: importTextPath.trim(),
-          targetDir: importTextTargetDir.trim(),
-          title: importTextTitle.trim() || undefined,
-          genre: importTextGenre || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setShowImportText(false);
-        setImportTextPath('');
-        setImportTextTargetDir('');
-        setImportTextTitle('');
-        setImportTextGenre('');
-        toast.success('已开始导入，agent 正在分析');
-        navigate(`/projects/${data.project.id}`);
-      } else {
-        toast.error(data.error || '导入失败');
-      }
-    } catch {
-      toast.error('导入失败');
-    }
-  };
-
   return (
     <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
       <NavHeader />
@@ -250,7 +208,6 @@ export default function HomePage() {
         </div>
         <button className={primaryBtn} onClick={() => setShowCreate(true)}>新建项目</button>
         <button className={primaryBtn} onClick={() => setShowImport(true)} style={{ background: 'var(--haze-color-bg-secondary)', color: 'var(--haze-color-text)' }}>打开项目</button>
-        <button className={primaryBtn} onClick={() => setShowImportText(true)}>导入项目</button>
       </div>
 
       {showCreate && (
@@ -319,77 +276,6 @@ export default function HomePage() {
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
             <button className={primaryBtn} onClick={handleImport}>打开</button>
             <button onClick={() => { setShowImport(false); setImportPath(''); }}>取消</button>
-          </div>
-        </div>
-      )}
-
-      {showImportText && (
-        <div className={card} style={{ marginBottom: '1rem' }}>
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
-                源文本路径（.txt/.md 文件或包含此类文件的目录，只读）
-              </label>
-              <input
-                className={input}
-                placeholder="/home/user/novels/raw-book.txt 或目录路径"
-                value={importTextPath}
-                onChange={(e) => setImportTextPath(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleImportText()}
-                style={{ width: '100%' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
-                新项目目标目录（.novel/ 将创建于此，目录不存在会自动新建）
-              </label>
-              <input
-                className={input}
-                placeholder="/home/user/novels/new-project"
-                value={importTextTargetDir}
-                onChange={(e) => setImportTextTargetDir(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleImportText()}
-                style={{ width: '100%' }}
-              />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
-                  标题（可选，留空自动识别）
-                </label>
-                <input
-                  className={input}
-                  placeholder="自动识别"
-                  value={importTextTitle}
-                  onChange={(e) => setImportTextTitle(e.target.value)}
-                  style={{ width: '100%' }}
-                />
-              </div>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
-                  类型（可选，留空自动识别）
-                </label>
-                <select
-                  className={input}
-                  value={importTextGenre}
-                  onChange={(e) => setImportTextGenre(e.target.value)}
-                  style={{ width: '100%' }}
-                >
-                  <option value="">自动识别</option>
-                  <option value="general">通用</option>
-                  <option value="wuxia">武侠</option>
-                  <option value="fantasy">奇幻</option>
-                  <option value="scifi">科幻</option>
-                  <option value="romance">言情</option>
-                  <option value="mystery">悬疑</option>
-                  <option value="reality">现实</option>
-                </select>
-              </div>
-            </div>
-          </div>
-          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-            <button className={primaryBtn} onClick={handleImportText}>开始导入</button>
-            <button onClick={() => { setShowImportText(false); setImportTextPath(''); setImportTextTargetDir(''); }}>取消</button>
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import { useRun } from '@/web/hooks/useRun';
 import { useModels } from '@/web/hooks/useModels';
 import { useConversations } from '@/web/hooks/useConversations';
@@ -91,8 +92,41 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     setIsPinned(distanceFromBottom < 80);
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim() || !agentAvailable || isRunning) return;
+
+    // /import <path> 拦截：切章写入当前项目后发起 decompose run
+    const importMatch = input.trim().match(/^\/import\s+(.+)$/);
+    if (importMatch) {
+      const sourcePath = importMatch[1].trim();
+      try {
+        const res = await fetch(`/api/projects/${projectId}/import-source`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourcePath }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          toast.error(data.error || '导入失败');
+          return;
+        }
+        toast.success(`已切分为 ${data.chapterCount} 章，开始逆向拆书`);
+      } catch {
+        toast.error('导入失败');
+        return;
+      }
+      setInput('');
+      sendMessage({
+        projectId,
+        agentId,
+        skillId,
+        stage: 'decompose',
+        message: '对已导入的源文本进行逆向拆书',
+        model: selectedModel !== 'default' ? selectedModel : undefined,
+      });
+      return;
+    }
+
     sendMessage({
       projectId,
       agentId,
@@ -144,6 +178,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     { name: '/revision', description: '进入修改阶段', source: 'app', action: () => { onStageChange?.('revision'); sendMessage({ projectId, agentId, skillId, stage: 'revision', message: '切换到修改阶段' }); } },
     { name: '/polish', description: '进入润色阶段', source: 'app', action: () => { onStageChange?.('polish'); sendMessage({ projectId, agentId, skillId, stage: 'polish', message: '切换到润色阶段' }); } },
     { name: '/new', description: '开始新对话', source: 'app', action: () => { setActiveConversationId(null); resetConversation(); } },
+    { name: '/import', description: '导入源文本并逆向拆书（/import <文件或目录路径>）', source: 'app' },
     { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage, message: last.content }); } },
   ];
 

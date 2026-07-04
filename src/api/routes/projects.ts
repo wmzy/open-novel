@@ -11,12 +11,6 @@ import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
 import { detectChapters, type ChunkSource } from '../../shared/text-chunker';
-import { createRun, emitEvent, finishRun } from '../../agent/run';
-import { launchAgent } from '../../agent/launch';
-import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
-import { buildReverseDecomposePrompt } from '../../agent/reverse-decomposer';
-import { getAgentDef } from '../../agent/registry';
-import type { StreamEvent } from '../../agent/types';
 import { gitSync } from '../../agent/snapshot';
 import {
   TEMPLATE_GENERATORS,
@@ -125,28 +119,28 @@ projectsRouter.post('/import', async (c) => {
   return c.json({ project }, 201);
 });
 
-// Import raw text: reverse-decompose into a new .novel/ project.
-// 源文本只读，必填 targetDir 指定新项目目标目录，.novel/ 建于 targetDir 下。
-projectsRouter.post('/import-text', async (c) => {
-  const body = await c.req.json();
-  const userPath = path.resolve(body.path);
+// Import source text into an existing project: chunk + write standardized chapters.
+// 逆向拆书的文件准备阶段；agent 拆解由 /api/runs (stage=decompose) 驱动。
+projectsRouter.post('/:id/import-source', async (c) => {
+  const id = c.req.param('id');
+  const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+  if (!project) return c.json({ error: '项目不存在' }, 404);
 
-  // 校验源路径存在
-  if (!existsSync(userPath)) {
+  const body = await c.req.json();
+  const sourcePath = path.resolve(body.sourcePath);
+
+  if (!existsSync(sourcePath)) {
     return c.json({ error: '源路径不存在' }, 400);
   }
 
-  // targetDir 必填：新项目目标目录，.novel/ 将建于其下
-  if (!body.targetDir || !String(body.targetDir).trim()) {
-    return c.json({ error: '请指定目标目录' }, 400);
-  }
-  const targetDir = path.resolve(String(body.targetDir).trim());
+  const projectDir = project.path;
+  const novelDir = path.join(projectDir, '.novel');
 
-  // 收集源文本（只读，不改动源所在目录）
-  const stat = statSync(userPath);
+  // 收集源文本
+  const stat = statSync(sourcePath);
   const source: ChunkSource = stat.isDirectory()
-    ? { kind: 'dir', files: collectTextFiles(userPath) }
-    : { kind: 'file', content: readFileSync(userPath, 'utf-8'), filename: path.basename(userPath) };
+    ? { kind: 'dir', files: collectTextFiles(sourcePath) }
+    : { kind: 'file', content: readFileSync(sourcePath, 'utf-8'), filename: path.basename(sourcePath) };
 
   if (source.kind === 'dir' && source.files.length === 0) {
     return c.json({ error: '未找到 .txt 或 .md 文件' }, 400);
@@ -158,18 +152,8 @@ projectsRouter.post('/import-text', async (c) => {
     return c.json({ error: '未检测到有效文本' }, 400);
   }
 
-  // 若 targetDir 已存在且已是 open-novel 项目，拒绝
-  const novelDir = path.join(targetDir, '.novel');
-  if (existsSync(novelDir)) {
-    return c.json({ error: '目标目录已是 open-novel 项目，请用「打开项目」' }, 400);
-  }
-
-  // 创建 targetDir（若不存在）与 .novel/ 骨架
-  mkdirSync(targetDir, { recursive: true });
-  mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
-  mkdirSync(path.join(novelDir, 'characters', 'profiles'), { recursive: true });
-
   // 写标准化章节文件
+  mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
   for (const ch of chapters) {
     const header = ch.title && ch.title !== `第${ch.number}章`
       ? `# 第${ch.number}章 ${ch.title}`
@@ -180,71 +164,22 @@ projectsRouter.post('/import-text', async (c) => {
     );
   }
 
-  // 写初始 config.json（待 agent 补全）
-  const baseName = stat.isDirectory() ? path.basename(userPath) : path.basename(userPath).replace(/\.(txt|md)$/i, '');
-  writeFileSync(
-    path.join(novelDir, 'config.json'),
-    JSON.stringify({
-      title: body.title || baseName,
-      genre: body.genre || 'general',
-      perspective: 'third-person',
-      chapterCount: chapters.length,
-      targetWords: chapters.length * 5000,
-    }, null, 2),
-  );
+  // 更新 config.json
+  const configPath = path.join(novelDir, 'config.json');
+  let config: Record<string, unknown> = {};
+  try {
+    config = JSON.parse(readFileSync(configPath, 'utf-8'));
+  } catch {}
+  config.chapterCount = chapters.length;
+  config.targetWords = chapters.length * 5000;
+  writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-  // 注册 DB 记录（path 存 targetDir，与「打开项目」一致）
-  const id = generateId('proj_');
-  const [project] = await db.insert(projects).values({
-    id,
-    title: body.title || baseName,
-    path: targetDir,
-    genre: body.genre || 'general',
-    targetWords: chapters.length * 5000,
-    chapterCount: chapters.length,
-    perspective: 'third-person',
-  }).returning();
+  // 更新 DB
+  await db.update(projects)
+    .set({ chapterCount: chapters.length, targetWords: chapters.length * 5000 })
+    .where(eq(projects.id, id));
 
-  // 启动 agent 逆向拆解（非阻塞）。不预检可用性——与 timeline /fill 一致：
-  // def 存在即注册 run，launch 失败则 run 标记 failed，不阻塞响应。
-  const agentId = body.agentId || 'claude';
-  const def = getAgentDef(agentId);
-  let runId: string | undefined;
-  if (def) {
-    const run = createRun({ projectId: id, agentId, skillId: 'novel', stage: 'import' });
-    runId = run.id;
-
-    const prompt = buildReverseDecomposePrompt({
-      projectDir: targetDir,
-      chapterCount: chapters.length,
-      title: body.title,
-      genre: body.genre,
-    });
-
-    try {
-      const { child } = launchAgent(def, prompt, targetDir, [], undefined);
-      run.child = child;
-      run.status = 'running';
-
-      const onEvent = (event: StreamEvent) => emitEvent(run, 'agent', event);
-      const handler = def.streamFormat === 'claude-stream-json'
-        ? createClaudeStreamHandler(onEvent)
-        : createJsonEventHandler(onEvent);
-      child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
-      child.stderr?.on('data', () => {});
-      child.on('close', (code) => {
-        handler.flush();
-        finishRun(run, code === 0 ? 'succeeded' : 'failed');
-      });
-      child.on('error', () => finishRun(run, 'failed'));
-    } catch {
-      // launch 失败（如 agent 二进制不在 PATH）：仍返回 project，run 标记 failed
-      run.status = 'failed';
-      run.error = `agent ${agentId} launch failed`;
-    }
-  }
-
-  return c.json({ project, runId }, 201);
+  return c.json({ chapterCount: chapters.length }, 200);
 });
 
 /** 收集目录下所有 .txt/.md 文件的 { name, content }。 */

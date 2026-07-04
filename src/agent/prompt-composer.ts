@@ -6,6 +6,7 @@ import { getPlugin } from '../plugins/registry';
 import { eq } from 'drizzle-orm';
 import { buildRollingSummaryContext, getStateTable, readCharacterNames } from './context-manager';
 import { extractChapterOutline, identifyCast, buildCastLayer } from './chapter-context';
+import { buildReverseDecomposePrompt } from './reverse-decomposer';
 
 export interface ComposePromptOptions {
   message: string;
@@ -430,7 +431,12 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
   const currentStage = stage || 'concept';
   const stageInstructions = isRevise
     ? buildReviseInstructions(reviseContent!, reviseNote!)
-    : STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
+    : currentStage === 'decompose'
+      ? buildReverseDecomposePrompt({
+          projectDir,
+          chapterCount: projectMeta?.chapterCount ?? 0,
+        })
+      : STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
 
   // Compose the full prompt
   const parts: string[] = [];
