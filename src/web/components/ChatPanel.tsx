@@ -5,6 +5,7 @@ import { useConversations } from '@/web/hooks/useConversations';
 import { useAgents } from '@/web/hooks/useAgents';
 import { useFileAutocomplete } from '@/web/hooks/useFileAutocomplete';
 import AgentMessage from './AgentMessage';
+import RevisionDiffPanel from './RevisionDiffPanel';
 import {
   panel, toolbar, select, iconBtn, messages, statusStrip, statusDot,
   inputArea, textarea, sendBtn, stopBtn, jumpBtn, emptyState,
@@ -227,26 +228,35 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           </div>
         )}
         {chatMessages.map((msg, i) => (
-          <AgentMessage
-            key={i}
-            role={msg.role}
-            content={msg.content}
-            events={msg.events}
-            startedAt={msg.startedAt}
-            endedAt={msg.endedAt}
-            usage={msg.usage}
-            error={msg.error}
-            artifacts={msg.artifacts}
-            onResend={msg.role === 'user' ? (content) => {
-              setInput(content);
-              textareaRef.current?.focus();
-            } : undefined}
-            onReply={msg.role === 'assistant' ? (content) => {
-              const quote = content.split('\n').map((line) => `> ${line}`).join('\n');
-              setInput(`Regarding:\n${quote}\n\n`);
-              textareaRef.current?.focus();
-            } : undefined}
-          />
+          <div key={i}>
+            <AgentMessage
+              role={msg.role}
+              content={msg.content}
+              events={msg.events}
+              startedAt={msg.startedAt}
+              endedAt={msg.endedAt}
+              usage={msg.usage}
+              error={msg.error}
+              artifacts={msg.artifacts}
+              onResend={msg.role === 'user' ? (content) => {
+                setInput(content);
+                textareaRef.current?.focus();
+              } : undefined}
+              onReply={msg.role === 'assistant' ? (content) => {
+                const quote = content.split('\n').map((line) => `> ${line}`).join('\n');
+                setInput(`Regarding:\n${quote}\n\n`);
+                textareaRef.current?.focus();
+              } : undefined}
+            />
+            {msg.revisionDiff && msg.revisionDiff.diff && (
+              <RevisionDiffPanel
+                targetFile={msg.revisionDiff.targetFile}
+                diff={msg.revisionDiff.diff}
+                addedLines={msg.revisionDiff.addedLines}
+                removedLines={msg.revisionDiff.removedLines}
+              />
+            )}
+          </div>
         ))}
         <div ref={bottomRef} />
       </div>

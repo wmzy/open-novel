@@ -11,6 +11,8 @@ export interface ChatMessage {
   usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
   error?: string;
   artifacts?: { count: number; paths: string[] };
+  /** revise run 成功后携带的修订 diff（由 revision-applied 事件填充）。 */
+  revisionDiff?: { targetFile: string; diff: string; addedLines: number; removedLines: number };
 }
 
 
@@ -375,6 +377,15 @@ export function useRun(conversationId?: string) {
         }
         case 'raw': {
           last.events = [...events, { kind: 'raw', line: String(event.line || '') }];
+          break;
+        }
+        case 'revision-applied': {
+          last.revisionDiff = {
+            targetFile: String(event.targetFile || ''),
+            diff: String(event.diffPreview || ''),
+            addedLines: Number(event.addedLines || 0),
+            removedLines: Number(event.removedLines || 0),
+          };
           break;
         }
       }
