@@ -5,7 +5,8 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import pino from 'pino';
 import app from '../api-app';
-import { ensureDbReady } from '../db/drizzle';
+import { ensureDbReady, closeDb } from '../db/drizzle';
+import { startPeriodicBackup } from '../db/backup';
 import { initPlugins } from '../plugins/registry';
 import { config } from '../config';
 import { nodeRequestToFetchRequest, writeFetchResponse } from './request-adapter';
@@ -45,6 +46,10 @@ const logger = pino({ name: 'open-novel', level: config.logLevel });
 await ensureDbReady();
 initPlugins();
 
+// Periodic DB backup — protects against crash-induced WAL corruption.
+// Backups go to ./data/backups/, pruned to the 10 most recent.
+startPeriodicBackup();
+
 const server = createServer(async (req, res) => {
   try {
     // nodeRequestToFetchRequest injects the trusted `x-internal-remote-addr`
@@ -67,3 +72,34 @@ const server = createServer(async (req, res) => {
 server.listen(config.port, config.host, () => {
   logger.info({ host: config.host, port: config.port }, `open-novel listening on http://${config.host}:${config.port}`);
 });
+
+// ── Graceful shutdown ──────────────────────────────────────────────
+// Without this, SIGTERM/SIGINT kills the process before PGlite can flush
+// its WAL, leaving the data directory in an inconsistent state. The next
+// startup then aborts with `RuntimeError: Aborted()`.
+//
+// Sequence: close DB (flush WAL) → close HTTP → exit.
+// We do NOT backup on shutdown — dumpDataDir is heavy and can hang during
+// process teardown. Backups are handled by the periodic timer.
+let shuttingDown = false;
+async function gracefulShutdown(signal: string) {
+  if (shuttingDown) return; // Second signal forces immediate exit.
+  shuttingDown = true;
+  logger.info({ signal }, 'shutting down…');
+
+  // 1. Stop accepting new connections.
+  server.close();
+
+  // 2. Let PGlite flush WAL and close the data directory.
+  //    Race with a timeout so a hung close cannot block shutdown forever.
+  await Promise.race([
+    closeDb(),
+    new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+  ]);
+
+  logger.info('shutdown complete');
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

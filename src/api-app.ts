@@ -20,6 +20,7 @@ import exportRouter from './api/routes/export';
 import checkRouter from './api/routes/check';
 import rewriteRouter from './api/routes/rewrite';
 import namingRouter from './api/routes/naming';
+import backupRouter from './api/routes/backup';
 
 const app = new Hono();
 
@@ -86,6 +87,7 @@ app.route('/api/agents', agentsRouter);
 app.route('/api/runs', runsRouter);
 app.route('/api/plugins', pluginsRouter);
 app.route('/api/conversations', conversationsRouter);
+app.route('/api/backup', backupRouter);
 
 // File serving endpoint
 app.get('/api/projects/:id/files/*', async (c) => {
