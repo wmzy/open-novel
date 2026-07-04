@@ -125,27 +125,25 @@ projectsRouter.post('/import', async (c) => {
   return c.json({ project }, 201);
 });
 
-// Import raw text: reverse-decompose into a new .novel/ project
+// Import raw text: reverse-decompose into a new .novel/ project.
+// 源文本只读，必填 targetDir 指定新项目目标目录，.novel/ 建于 targetDir 下。
 projectsRouter.post('/import-text', async (c) => {
   const body = await c.req.json();
   const userPath = path.resolve(body.path);
 
-  // 校验路径存在
+  // 校验源路径存在
   if (!existsSync(userPath)) {
-    return c.json({ error: '路径不存在' }, 400);
+    return c.json({ error: '源路径不存在' }, 400);
   }
 
-  // 项目根目录：文件输入取其父目录，目录输入即自身。
+  // targetDir 必填：新项目目标目录，.novel/ 将建于其下
+  if (!body.targetDir || !String(body.targetDir).trim()) {
+    return c.json({ error: '请指定目标目录' }, 400);
+  }
+  const targetDir = path.resolve(String(body.targetDir).trim());
+
+  // 收集源文本（只读，不改动源所在目录）
   const stat = statSync(userPath);
-  const projectRoot = stat.isDirectory() ? userPath : path.dirname(userPath);
-
-  // 早判 .novel/ 是否已存在（先于文本收集，避免空 .novel/ 目录误报「未找到」）
-  const novelDir = path.join(projectRoot, '.novel');
-  if (existsSync(novelDir)) {
-    return c.json({ error: '该目录已是 open-novel 项目，请用「打开项目」' }, 400);
-  }
-
-  // 收集文本内容
   const source: ChunkSource = stat.isDirectory()
     ? { kind: 'dir', files: collectTextFiles(userPath) }
     : { kind: 'file', content: readFileSync(userPath, 'utf-8'), filename: path.basename(userPath) };
@@ -160,7 +158,14 @@ projectsRouter.post('/import-text', async (c) => {
     return c.json({ error: '未检测到有效文本' }, 400);
   }
 
-  // 创建 .novel/ 骨架
+  // 若 targetDir 已存在且已是 open-novel 项目，拒绝
+  const novelDir = path.join(targetDir, '.novel');
+  if (existsSync(novelDir)) {
+    return c.json({ error: '目标目录已是 open-novel 项目，请用「打开项目」' }, 400);
+  }
+
+  // 创建 targetDir（若不存在）与 .novel/ 骨架
+  mkdirSync(targetDir, { recursive: true });
   mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
   mkdirSync(path.join(novelDir, 'characters', 'profiles'), { recursive: true });
 
@@ -188,12 +193,12 @@ projectsRouter.post('/import-text', async (c) => {
     }, null, 2),
   );
 
-  // 注册 DB 记录（path 存项目根目录，与「打开项目」一致）
+  // 注册 DB 记录（path 存 targetDir，与「打开项目」一致）
   const id = generateId('proj_');
   const [project] = await db.insert(projects).values({
     id,
     title: body.title || baseName,
-    path: projectRoot,
+    path: targetDir,
     genre: body.genre || 'general',
     targetWords: chapters.length * 5000,
     chapterCount: chapters.length,
@@ -210,14 +215,14 @@ projectsRouter.post('/import-text', async (c) => {
     runId = run.id;
 
     const prompt = buildReverseDecomposePrompt({
-      projectDir: projectRoot,
+      projectDir: targetDir,
       chapterCount: chapters.length,
       title: body.title,
       genre: body.genre,
     });
 
     try {
-      const { child } = launchAgent(def, prompt, projectRoot, [], undefined);
+      const { child } = launchAgent(def, prompt, targetDir, [], undefined);
       run.child = child;
       run.status = 'running';
 

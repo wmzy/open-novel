@@ -131,6 +131,7 @@ export default function HomePage() {
   const [importPath, setImportPath] = useState('');
   const [showImportText, setShowImportText] = useState(false);
   const [importTextPath, setImportTextPath] = useState('');
+  const [importTextTargetDir, setImportTextTargetDir] = useState('');
   const [importTextTitle, setImportTextTitle] = useState('');
   const [importTextGenre, setImportTextGenre] = useState('');
 
@@ -206,12 +207,17 @@ export default function HomePage() {
       toast.error('请输入源文本路径');
       return;
     }
+    if (!importTextTargetDir.trim()) {
+      toast.error('请指定新项目目标目录');
+      return;
+    }
     try {
       const res = await fetch('/api/projects/import-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           path: importTextPath.trim(),
+          targetDir: importTextTargetDir.trim(),
           title: importTextTitle.trim() || undefined,
           genre: importTextGenre || undefined,
         }),
@@ -220,9 +226,10 @@ export default function HomePage() {
       if (res.ok) {
         setShowImportText(false);
         setImportTextPath('');
+        setImportTextTargetDir('');
         setImportTextTitle('');
         setImportTextGenre('');
-        toast.success('已开始拆书，agent 正在分析');
+        toast.success('已开始导入，agent 正在分析');
         navigate(`/projects/${data.project.id}`);
       } else {
         toast.error(data.error || '导入失败');
@@ -321,13 +328,26 @@ export default function HomePage() {
           <div style={{ display: 'grid', gap: '0.75rem' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
-                源文本路径（.txt/.md 文件或包含此类文件的目录）
+                源文本路径（.txt/.md 文件或包含此类文件的目录，只读）
               </label>
               <input
                 className={input}
-                placeholder="/home/user/novels/my-book.txt 或目录路径"
+                placeholder="/home/user/novels/raw-book.txt 或目录路径"
                 value={importTextPath}
                 onChange={(e) => setImportTextPath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleImportText()}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
+                新项目目标目录（.novel/ 将创建于此，目录不存在会自动新建）
+              </label>
+              <input
+                className={input}
+                placeholder="/home/user/novels/new-project"
+                value={importTextTargetDir}
+                onChange={(e) => setImportTextTargetDir(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleImportText()}
                 style={{ width: '100%' }}
               />
@@ -368,8 +388,8 @@ export default function HomePage() {
             </div>
           </div>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-            <button className={primaryBtn} onClick={handleImportText}>开始拆书</button>
-            <button onClick={() => { setShowImportText(false); setImportTextPath(''); }}>取消</button>
+            <button className={primaryBtn} onClick={handleImportText}>开始导入</button>
+            <button onClick={() => { setShowImportText(false); setImportTextPath(''); setImportTextTargetDir(''); }}>取消</button>
           </div>
         </div>
       )}

@@ -9,7 +9,7 @@ import { projects } from '../../../src/db/schema';
 
 /**
  * POST /api/projects/import-text 逆向拆书入口端点测试。
- * 聚焦契约：路径校验、章节切分、.novel/ 骨架创建、config.json 落盘、DB 注册。
+ * 契约：源文本只读，必填 targetDir 指定新项目目标目录，.novel/ 建于 targetDir 下。
  */
 describe('POST /api/projects/import-text', () => {
   let tmpDir: string;
@@ -28,25 +28,42 @@ describe('POST /api/projects/import-text', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('路径不存在返回 400', async () => {
+  it('源路径不存在返回 400', async () => {
     const res = await apiApp.request('/api/projects/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: '/nonexistent/path/that/does/not/exist' }),
+      body: JSON.stringify({
+        path: '/nonexistent/path/that/does/not/exist',
+        targetDir: path.join(tmpDir, 'out'),
+      }),
     });
     expect(res.status).toBe(400);
     const data = await res.json();
     expect(data.error).toContain('不存在');
   });
 
-  it('成功切章并创建 .novel/ 骨架', async () => {
+  it('未提供 targetDir 返回 400', async () => {
     const novelPath = path.join(tmpDir, 'mynovel.txt');
-    fs.writeFileSync(novelPath, '第一章 开始\n内容A\n\n第二章 结束\n内容B');
-
+    fs.writeFileSync(novelPath, '第一章 开始\n内容A');
     const res = await apiApp.request('/api/projects/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: novelPath }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toContain('目标目录');
+  });
+
+  it('成功切章并在 targetDir 创建 .novel/ 骨架', async () => {
+    const novelPath = path.join(tmpDir, 'mynovel.txt');
+    fs.writeFileSync(novelPath, '第一章 开始\n内容A\n\n第二章 结束\n内容B');
+    const targetDir = path.join(tmpDir, 'new-project');
+
+    const res = await apiApp.request('/api/projects/import-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: novelPath, targetDir }),
     });
     expect(res.status).toBe(201);
     const data = await res.json();
@@ -54,54 +71,81 @@ describe('POST /api/projects/import-text', () => {
     expect(data.project.id).toMatch(/^proj_/);
     createdIds.push(data.project.id);
 
-    // 章节文件已标准化
-    const dir = path.dirname(novelPath);
-    const ch1 = fs.readFileSync(path.join(dir, '.novel/chapters/第1章.md'), 'utf-8');
+    // .novel/ 建在 targetDir 下，不是源文件所在目录
+    const ch1 = fs.readFileSync(path.join(targetDir, '.novel/chapters/第1章.md'), 'utf-8');
     expect(ch1).toContain('开始');
-    const ch2 = fs.readFileSync(path.join(dir, '.novel/chapters/第2章.md'), 'utf-8');
+    const ch2 = fs.readFileSync(path.join(targetDir, '.novel/chapters/第2章.md'), 'utf-8');
     expect(ch2).toContain('结束');
 
-    // config.json 已创建
-    const config = JSON.parse(fs.readFileSync(path.join(dir, '.novel/config.json'), 'utf-8'));
+    // 源文本所在目录不应被改动（无 .novel/）
+    expect(fs.existsSync(path.join(tmpDir, '.novel'))).toBe(false);
+
+    const config = JSON.parse(fs.readFileSync(path.join(targetDir, '.novel/config.json'), 'utf-8'));
     expect(config.chapterCount).toBe(2);
   });
 
-  it('目录已有 .novel/ 返回 400', async () => {
-    fs.mkdirSync(path.join(tmpDir, '.novel'), { recursive: true });
+  it('targetDir 已有 .novel/ 返回 400', async () => {
+    const novelPath = path.join(tmpDir, 'mynovel.txt');
+    fs.writeFileSync(novelPath, '第一章 开始\n内容A');
+    const targetDir = path.join(tmpDir, 'new-project');
+    fs.mkdirSync(path.join(targetDir, '.novel'), { recursive: true });
 
     const res = await apiApp.request('/api/projects/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: tmpDir }),
+      body: JSON.stringify({ path: novelPath, targetDir }),
     });
     expect(res.status).toBe(400);
     const data = await res.json();
     expect(data.error).toContain('已是');
   });
 
-  it('目录输入：多文件按文件名排序切章', async () => {
-    fs.writeFileSync(path.join(tmpDir, '2.md'), '第二章内容');
-    fs.writeFileSync(path.join(tmpDir, '1.md'), '第一章内容');
+  it('targetDir 不存在时自动创建', async () => {
+    const novelPath = path.join(tmpDir, 'mynovel.txt');
+    fs.writeFileSync(novelPath, '第一章 开始\n内容A');
+    const targetDir = path.join(tmpDir, 'nested', 'deep', 'new-project');
 
     const res = await apiApp.request('/api/projects/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: tmpDir }),
+      body: JSON.stringify({ path: novelPath, targetDir }),
     });
     expect(res.status).toBe(201);
     const data = await res.json();
     createdIds.push(data.project.id);
-    const ch1 = fs.readFileSync(path.join(tmpDir, '.novel/chapters/第1章.md'), 'utf-8');
-    expect(ch1).toContain('第一章内容');
+    expect(fs.existsSync(path.join(targetDir, '.novel/config.json'))).toBe(true);
   });
 
-  it('无文本文件返回 400', async () => {
-    fs.writeFileSync(path.join(tmpDir, 'image.png'), 'binary');
+  it('目录输入：多文件按文件名排序切章', async () => {
+    const srcDir = path.join(tmpDir, 'src');
+    fs.mkdirSync(srcDir);
+    fs.writeFileSync(path.join(srcDir, '2.md'), '第二章内容');
+    fs.writeFileSync(path.join(srcDir, '1.md'), '第一章内容');
+    const targetDir = path.join(tmpDir, 'new-project');
 
     const res = await apiApp.request('/api/projects/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: tmpDir }),
+      body: JSON.stringify({ path: srcDir, targetDir }),
+    });
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    createdIds.push(data.project.id);
+    const ch1 = fs.readFileSync(path.join(targetDir, '.novel/chapters/第1章.md'), 'utf-8');
+    expect(ch1).toContain('第一章内容');
+    // 源目录未被改动
+    expect(fs.existsSync(path.join(srcDir, '.novel'))).toBe(false);
+  });
+
+  it('无文本文件返回 400', async () => {
+    const srcDir = path.join(tmpDir, 'src');
+    fs.mkdirSync(srcDir);
+    fs.writeFileSync(path.join(srcDir, 'image.png'), 'binary');
+
+    const res = await apiApp.request('/api/projects/import-text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: srcDir, targetDir: path.join(tmpDir, 'out') }),
     });
     expect(res.status).toBe(400);
     const data = await res.json();
@@ -111,19 +155,22 @@ describe('POST /api/projects/import-text', () => {
   it('返回 runId（agent 驱动入口）', async () => {
     const novelPath = path.join(tmpDir, 'book.txt');
     fs.writeFileSync(novelPath, '第一章 开始\n内容A\n\n第二章 结束\n内容B');
+    const targetDir = path.join(tmpDir, 'new-project');
 
     const res = await apiApp.request('/api/projects/import-text', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: novelPath, agentId: 'claude' }),
+      body: JSON.stringify({
+        path: novelPath,
+        targetDir,
+        agentId: 'claude',
+      }),
     });
-    // 骨架创建 + DB 记录成功，agent run 已注册
     expect(res.status).toBe(201);
     const data = await res.json();
     expect(data.project).toBeDefined();
     createdIds.push(data.project.id);
     expect(data.runId).toBeDefined();
-    // runId 是 UUID 字符串（RunSession.id 为裸 randomUUID）
     expect(typeof data.runId).toBe('string');
     expect(data.runId.length).toBeGreaterThan(10);
   });
