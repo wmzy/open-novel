@@ -119,7 +119,7 @@ const rewriteSummary = css`
   &:hover { color: var(--haze-color-text); }
 `;
 
-function ViewRouter({ activeView, projectId, onViewChange, agentId }: { activeView: string; projectId: string; onViewChange: (view: string) => void; agentId: string }) {
+function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: { activeView: string; projectId: string; onViewChange: (view: string) => void; agentId: string; skillId: string }) {
   if (activeView === 'dashboard') return <DashboardView projectId={projectId} />;
   if (activeView === 'concept') return <ConceptView projectId={projectId} />;
   if (activeView === 'world') return <WorldView projectId={projectId} />;
@@ -136,11 +136,11 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId }: { activeVi
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <EditorPanel projectId={projectId} chapterNum={num} agentId={agentId} />
+          <EditorPanel projectId={projectId} chapterNum={num} agentId={agentId} skillId={skillId} />
         </div>
         <details className={rewriteDetails}>
           <summary className={rewriteSummary}>✍️ 局部重写工作台</summary>
-          <RewritePanel projectId={projectId} chapterNum={num} agentId={agentId} />
+          <RewritePanel projectId={projectId} chapterNum={num} agentId={agentId} skillId={skillId} />
         </details>
         <details className={rewriteDetails}>
           <summary className={rewriteSummary}>🔍 质量检查面板</summary>
@@ -356,7 +356,7 @@ export default function ProjectPage() {
           </div>
         </div>
         <div className={content}>
-          <ViewRouter activeView={activeView} projectId={id!} onViewChange={handleViewChange} agentId={activeAgentId} />
+          <ViewRouter activeView={activeView} projectId={id!} onViewChange={handleViewChange} agentId={activeAgentId} skillId={project.skillId} />
         </div>
       </div>
       {showPreview && (
@@ -370,7 +370,7 @@ export default function ProjectPage() {
         </div>
       )}
       <div className={chatPanel} data-testid="chat-panel">
-        <ChatPanel projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId="novel" stage={project.currentStage} onStageChange={handleViewChange} />
+        <ChatPanel projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleViewChange} />
       </div>
     </div>
   );

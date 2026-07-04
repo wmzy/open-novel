@@ -7,6 +7,7 @@ import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { getPlugin } from '../../plugins/registry';
+import { resolveSkillId } from '../../shared/skill-id';
 import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
@@ -193,7 +194,7 @@ projectsRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) return c.json({ error: 'Not found' }, 404);
-  return c.json({ project });
+  return c.json({ project: { ...project, skillId: resolveSkillId(project.genre) } });
 });
 
 projectsRouter.patch('/:id', async (c) => {
