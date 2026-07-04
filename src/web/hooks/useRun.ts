@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { AgentEvent } from '@/agent/types';
+import type { AgentEvent, AgentCommand } from '@/agent/types';
 import { consumeSseStream, MAX_RECONNECT_ATTEMPTS } from './sse-stream';
 
 export interface ChatMessage {
@@ -21,6 +21,7 @@ export function useRun(conversationId?: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState<string>('');
+  const [availableCommands, setAvailableCommands] = useState<AgentCommand[]>([]);
   const activeRunsRef = useRef(new Set<string>());
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string | null>(conversationId || null);
@@ -289,6 +290,12 @@ export function useRun(conversationId?: string) {
   function handleAgentEvent(event: Record<string, unknown>) {
     const type = event.type as string;
 
+    // commands 是临时 UI 状态，不挂到消息上
+    if (type === 'commands') {
+      setAvailableCommands((event.commands as AgentCommand[]) ?? []);
+      return;
+    }
+
     // Handle text/thinking deltas with batching
     if (type === 'text_delta') {
       const delta = String(event.delta || '');
@@ -440,6 +447,7 @@ export function useRun(conversationId?: string) {
     messages,
     isRunning,
     status,
+    availableCommands,
     activeRunCount: activeRunsRef.current.size,
     sendMessage,
     cancel,

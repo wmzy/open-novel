@@ -223,3 +223,24 @@ export const autocompleteDesc = css`
   text-overflow: ellipsis;
   white-space: nowrap;
 `;
+
+export const cmdBadge = css`
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.0625rem 0.3rem;
+  border-radius: 0.25rem;
+  margin-left: auto;
+  white-space: nowrap;
+`;
+
+export const cmdBadgeApp = css`
+  background: color-mix(in srgb, var(--haze-color-primary) 14%, transparent);
+  color: var(--haze-color-primary);
+`;
+
+export const cmdBadgeAgent = css`
+  background: color-mix(in srgb, var(--haze-color-text-secondary) 14%, transparent);
+  color: var(--haze-color-text-secondary);
+`;

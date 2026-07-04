@@ -14,6 +14,7 @@ import {
   type ContentChunk,
   type ToolCall,
   type ToolCallUpdate,
+  type AvailableCommandsUpdate,
 } from '@agentclientprotocol/sdk';
 import type { ChildProcess } from 'node:child_process';
 import type { StreamEvent } from './types';
@@ -71,9 +72,21 @@ export function convertSessionUpdate(update: SessionUpdate): StreamEvent[] {
       }
       break;
     }
+    case 'available_commands_update': {
+      const acu = update as AvailableCommandsUpdate;
+      events.push({
+        type: 'commands',
+        commands: acu.availableCommands.map((c) => ({
+          name: c.name,
+          description: c.description,
+          inputHint: c.input?.hint ?? undefined,
+        })),
+      });
+      break;
+    }
     default:
       // plan / plan_update / plan_removed / usage_update / user_message_chunk /
-      // available_commands_update / current_mode_update / config_option_update / session_info_update
+      // current_mode_update / config_option_update / session_info_update
       break;
   }
   return events;

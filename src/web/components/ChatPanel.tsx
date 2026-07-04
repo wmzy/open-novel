@@ -10,13 +10,14 @@ import {
   panel, toolbar, select, iconBtn, messages, statusStrip, statusDot,
   inputArea, textarea, sendBtn, stopBtn, jumpBtn, emptyState,
   agentWarning, agentBadge, autocompleteDropdown, autocompleteItem,
-  autocompleteCmd, autocompleteDesc,
+  autocompleteCmd, autocompleteDesc, cmdBadge, cmdBadgeApp, cmdBadgeAgent,
 } from './ChatPanel.styles';
 
 interface Command {
   name: string;
   description: string;
-  action: () => void;
+  action?: () => void;
+  source?: 'app' | 'agent';
 }
 
 interface Props {
@@ -48,7 +49,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   // File autocomplete for @ mentions
   const fileAutocomplete = useFileAutocomplete(projectId);
 
-  const { messages: chatMessages, isRunning, status, activeRunCount, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+  const { messages: chatMessages, isRunning, status, activeRunCount, availableCommands, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
 
   // Sync conversationId from hook back to state after a run completes
   useEffect(() => {
@@ -131,15 +132,26 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     }
   };
 
-  const commands: Command[] = [
-    { name: '/concept', description: '进入概念阶段', action: () => { onStageChange?.('concept'); sendMessage({ projectId, agentId, skillId, stage: 'concept', message: '切换到概念阶段' }); } },
-    { name: '/outline', description: '进入大纲阶段', action: () => { onStageChange?.('outline'); sendMessage({ projectId, agentId, skillId, stage: 'outline', message: '切换到大纲阶段' }); } },
-    { name: '/draft', description: '进入写作阶段', action: () => { onStageChange?.('drafting'); sendMessage({ projectId, agentId, skillId, stage: 'drafting', message: '切换到写作阶段' }); } },
-    { name: '/revision', description: '进入修改阶段', action: () => { onStageChange?.('revision'); sendMessage({ projectId, agentId, skillId, stage: 'revision', message: '切换到修改阶段' }); } },
-    { name: '/polish', description: '进入润色阶段', action: () => { onStageChange?.('polish'); sendMessage({ projectId, agentId, skillId, stage: 'polish', message: '切换到润色阶段' }); } },
-    { name: '/new', description: '开始新对话', action: () => { setActiveConversationId(null); resetConversation(); } },
-    { name: '/retry', description: '重试上一条消息', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage, message: last.content }); } },
+  const localCommands: Command[] = [
+    { name: '/concept', description: '进入概念阶段', source: 'app', action: () => { onStageChange?.('concept'); sendMessage({ projectId, agentId, skillId, stage: 'concept', message: '切换到概念阶段' }); } },
+    { name: '/outline', description: '进入大纲阶段', source: 'app', action: () => { onStageChange?.('outline'); sendMessage({ projectId, agentId, skillId, stage: 'outline', message: '切换到大纲阶段' }); } },
+    { name: '/draft', description: '进入写作阶段', source: 'app', action: () => { onStageChange?.('drafting'); sendMessage({ projectId, agentId, skillId, stage: 'drafting', message: '切换到写作阶段' }); } },
+    { name: '/revision', description: '进入修改阶段', source: 'app', action: () => { onStageChange?.('revision'); sendMessage({ projectId, agentId, skillId, stage: 'revision', message: '切换到修改阶段' }); } },
+    { name: '/polish', description: '进入润色阶段', source: 'app', action: () => { onStageChange?.('polish'); sendMessage({ projectId, agentId, skillId, stage: 'polish', message: '切换到润色阶段' }); } },
+    { name: '/new', description: '开始新对话', source: 'app', action: () => { setActiveConversationId(null); resetConversation(); } },
+    { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage, message: last.content }); } },
   ];
+
+  // Agent 端 slash command（omp 经 ACP available_commands_update 推送，无 action → 填入输入框发给 agent）
+  const agentCommands: Command[] = availableCommands.map((c) => ({
+    name: `/${c.name}`,
+    description: c.description + (c.inputHint ? ` ${c.inputHint}` : ''),
+    source: 'agent',
+  }));
+
+  // app 命令优先于同名 agent 命令
+  const localNames = new Set(localCommands.map((c) => c.name));
+  const commands: Command[] = [...localCommands, ...agentCommands.filter((c) => !localNames.has(c.name))];
 
   const filteredCommands = showCommands
     ? commands.filter((c) => c.name.startsWith(input.split(' ')[0].toLowerCase()))
@@ -150,9 +162,15 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   }, [showCommands, input]);
 
   const selectCommand = (cmd: Command) => {
-    setInput('');
     setShowCommands(false);
-    cmd.action();
+    if (cmd.action) {
+      setInput('');
+      cmd.action();
+    } else {
+      // agent 命令：填入输入框，让用户补参数后发送给 agent
+      setInput(cmd.name + ' ');
+      textareaRef.current?.focus();
+    }
   };
 
   const handleNewChat = () => {
@@ -336,6 +354,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
               >
                 <span className={autocompleteCmd}>{cmd.name}</span>
                 <span className={autocompleteDesc}>{cmd.description}</span>
+                <span className={`${cmdBadge} ${cmd.source === 'agent' ? cmdBadgeAgent : cmdBadgeApp}`}>
+                  {cmd.source === 'agent' ? 'agent' : 'app'}
+                </span>
               </div>
             ))}
           </div>

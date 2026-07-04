@@ -39,7 +39,15 @@ export type StreamEvent =
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { type: 'usage'; usage?: unknown; costUsd?: number | null }
   | { type: 'error'; message: string }
+  | { type: 'commands'; commands: AgentCommand[] }
   | { type: 'raw'; line: string };
+
+/** Agent slash command (simplified from ACP AvailableCommand) */
+export type AgentCommand = {
+  name: string;
+  description: string;
+  inputHint?: string;
+};
 
 /** Persisted agent events on messages (used by frontend) */
 export type AgentEvent =

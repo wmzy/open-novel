@@ -96,4 +96,23 @@ describe('convertSessionUpdate', () => {
     expect(convertSessionUpdate({ sessionUpdate: 'plan' } as any)).toEqual([]);
     expect(convertSessionUpdate({ sessionUpdate: 'usage_update' } as any)).toEqual([]);
   });
+
+  it('把 available_commands_update 转为 commands 事件', () => {
+    const events = convertSessionUpdate({
+      sessionUpdate: 'available_commands_update',
+      availableCommands: [
+        { name: 'compact', description: '压缩对话历史', input: { hint: '[mode]' } },
+        { name: 'model', description: '切换模型' },
+      ],
+    } as any);
+    expect(events).toEqual<StreamEvent[]>([
+      {
+        type: 'commands',
+        commands: [
+          { name: 'compact', description: '压缩对话历史', inputHint: '[mode]' },
+          { name: 'model', description: '切换模型', inputHint: undefined },
+        ],
+      },
+    ]);
+  });
 });
