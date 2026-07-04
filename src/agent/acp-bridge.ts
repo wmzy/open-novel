@@ -15,11 +15,57 @@ import {
   type ToolCall,
   type ToolCallUpdate,
   type AvailableCommandsUpdate,
+  type SessionConfigOption,
 } from '@agentclientprotocol/sdk';
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { StreamEvent, AgentCommand } from './types';
+import type { StreamEvent, AgentCommand, RuntimeModelOption } from './types';
 
 type EventSink = (event: StreamEvent) => void;
+
+/** 从 ACP configOptions 提取的模型信息。纯函数返回，便于测试。 */
+export type AcpModelInfo = {
+  models: RuntimeModelOption[];
+  /** 用于 session/set_config_option 的 configId（omp 为 "model"）。 */
+  configId: string | null;
+  /** agent 当前选中的模型 id。 */
+  currentModelId: string | null;
+};
+
+/**
+ * 从 ACP NewSessionResponse.configOptions 提取模型列表与切换所需的 configId。
+ *
+ * 纯函数，便于单测。识别 category 为 `model` 或 `model_config` 的 select 项，
+ * 支持扁平 options 和分组 options（group/name 展开格式）。
+ *
+ * 参考实现：open-design apps/daemon/src/acp.ts findModelConfigOption + normalizeModels。
+ */
+export function extractAcpModelInfo(
+  configOptions: SessionConfigOption[] | null | undefined,
+): AcpModelInfo | null {
+  if (!configOptions || configOptions.length === 0) return null;
+
+  const modelOption = configOptions.find(
+    (o) => (o.category === 'model' || o.category === 'model_config') && o.type === 'select',
+  );
+  if (!modelOption || modelOption.type !== 'select') return null;
+
+  const models: RuntimeModelOption[] = [];
+  for (const opt of modelOption.options) {
+    if ('value' in opt && 'name' in opt) {
+      models.push({ id: opt.value, label: opt.name });
+    } else if ('group' in opt && 'options' in opt) {
+      for (const sub of opt.options) {
+        models.push({ id: sub.value, label: `${opt.name} / ${sub.name}` });
+      }
+    }
+  }
+
+  return {
+    models,
+    configId: modelOption.id,
+    currentModelId: modelOption.currentValue,
+  };
+}
 
 /**
  * 把单个 ACP SessionUpdate 转换为 open-novel StreamEvent 数组。
@@ -106,6 +152,7 @@ export async function runAcpTurn(
   cwd: string,
   extraDirs: string[],
   onEvent: EventSink,
+  model?: string,
 ): Promise<{ stopReason: string }> {
   if (!child.stdin || !child.stdout) {
     throw new Error('ACP child process missing stdin/stdout pipes');
@@ -133,6 +180,20 @@ export async function runAcpTurn(
     const builder = ctx.buildSession(cwd);
     if (extraDirs.length > 0) builder.withAdditionalDirectories(extraDirs);
     const session = await builder.start();
+
+    // 切换模型：ACP configOptions 里 category=model 的 select 项
+    // omp 的 configId 为 "model"，通过 session/set_config_option 切换。
+    // model='default'/undefined 时不切换，agent 使用自身当前模型。
+    if (model && model !== 'default') {
+      const info = extractAcpModelInfo(session.newSessionResponse.configOptions);
+      if (info?.configId) {
+        await ctx.request('session/set_config_option', {
+          sessionId: session.sessionId,
+          configId: info.configId,
+          value: model,
+        });
+      }
+    }
 
     // prompt() 异步等响应；通知通过 nextUpdate() 并行读
     const promptPromise = session.prompt(prompt).catch(() => null);
@@ -210,6 +271,53 @@ export async function probeAcpCommands(
 
     settled = true;
     return commands;
+  } finally {
+    clearTimeout(timer);
+    cleanup();
+  }
+}
+
+/**
+ * 起一个短命 omp acp 会话，拉取 agent 支持的模型列表。
+ *
+ * configOptions 随 session/new 响应返回（无需等通知），拿到后立即 kill。
+ * 适用于所有实现 ACP configOptions (category=model) 的 agent，不需 per-agent 定制。
+ */
+export async function probeAcpModels(
+  bin: string,
+  cwd: string,
+  extraDirs: string[] = [],
+  timeoutMs = 8000,
+): Promise<RuntimeModelOption[]> {
+  const child = spawn(bin, ['acp'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  let settled = false;
+
+  const cleanup = () => {
+    if (!child.killed && child.exitCode === null) child.kill('SIGKILL');
+  };
+
+  const timer = setTimeout(() => {
+    if (!settled) { settled = true; cleanup(); }
+  }, timeoutMs);
+
+  try {
+    if (!child.stdin || !child.stdout) throw new Error('probe: missing stdio');
+    const writable = Writable.toWeb(child.stdin);
+    const readable = Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
+    const transport = ndJsonStream(writable, readable);
+    const app = client({ name: 'open-novel' });
+
+    const models = await app.connectWith(transport, async (ctx) => {
+      const builder = ctx.buildSession(cwd);
+      if (extraDirs.length > 0) builder.withAdditionalDirectories(extraDirs);
+      const session = await builder.start();
+      // configOptions 随 session/new 响应返回，无需循环等通知
+      const info = extractAcpModelInfo(session.newSessionResponse.configOptions);
+      return info?.models ?? [];
+    });
+
+    settled = true;
+    return models;
   } finally {
     clearTimeout(timer);
     cleanup();

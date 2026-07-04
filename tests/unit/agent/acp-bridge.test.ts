@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { convertSessionUpdate } from '@/agent/acp-bridge';
+import { convertSessionUpdate, extractAcpModelInfo } from '@/agent/acp-bridge';
 import type { StreamEvent } from '@/agent/types';
 
 describe('convertSessionUpdate', () => {
@@ -114,5 +114,96 @@ describe('convertSessionUpdate', () => {
         ],
       },
     ]);
+  });
+});
+
+describe('extractAcpModelInfo', () => {
+  it('从 category=model 的 select 提取模型列表', () => {
+    const info = extractAcpModelInfo([
+      {
+        id: 'mode',
+        name: 'Mode',
+        type: 'select',
+        category: 'mode',
+        currentValue: 'agent',
+        options: [{ value: 'agent', name: 'Agent' }],
+      },
+      {
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        category: 'model',
+        currentValue: 'sensenova/deepseek-v4-flash',
+        options: [
+          { value: 'sensenova/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+          { value: 'zhipu/glm-5.2', name: 'GLM 5.2' },
+        ],
+      },
+    ] as any);
+    expect(info).not.toBeNull();
+    expect(info!.configId).toBe('model');
+    expect(info!.currentModelId).toBe('sensenova/deepseek-v4-flash');
+    expect(info!.models).toEqual([
+      { id: 'sensenova/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+      { id: 'zhipu/glm-5.2', label: 'GLM 5.2' },
+    ]);
+  });
+
+  it('也识别 category=model_config', () => {
+    const info = extractAcpModelInfo([
+      {
+        id: 'mdl',
+        name: 'Model',
+        type: 'select',
+        category: 'model_config',
+        currentValue: 'a',
+        options: [{ value: 'a', name: 'A' }],
+      },
+    ] as any);
+    expect(info?.configId).toBe('mdl');
+  });
+
+  it('展开分组的 options（group/name 格式）', () => {
+    const info = extractAcpModelInfo([
+      {
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        category: 'model',
+        currentValue: 'anthropic/sonnet',
+        options: [
+          {
+            group: 'anthropic',
+            name: 'Anthropic',
+            options: [
+              { value: 'anthropic/sonnet', name: 'Sonnet' },
+              { value: 'anthropic/opus', name: 'Opus' },
+            ],
+          },
+        ],
+      },
+    ] as any);
+    expect(info?.models).toEqual([
+      { id: 'anthropic/sonnet', label: 'Anthropic / Sonnet' },
+      { id: 'anthropic/opus', label: 'Anthropic / Opus' },
+    ]);
+  });
+
+  it('无 model category 时返回 null', () => {
+    expect(extractAcpModelInfo([
+      { id: 'mode', name: 'Mode', type: 'select', category: 'mode', currentValue: 'a', options: [] },
+    ] as any)).toBeNull();
+  });
+
+  it('configOptions 为 null/空时返回 null', () => {
+    expect(extractAcpModelInfo(null)).toBeNull();
+    expect(extractAcpModelInfo([])).toBeNull();
+    expect(extractAcpModelInfo(undefined)).toBeNull();
+  });
+
+  it('忽略 boolean 类型的 config option', () => {
+    expect(extractAcpModelInfo([
+      { id: 'model', name: 'Model', type: 'boolean', category: 'model', currentValue: true },
+    ] as any)).toBeNull();
   });
 });

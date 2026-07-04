@@ -106,7 +106,7 @@ rewriteRouter.post('/', async (c) => {
   child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
 
   if (isAcp) {
-    runAcpTurn(child, composedPrompt, projectDir, [], emit)
+    runAcpTurn(child, composedPrompt, projectDir, [], emit, model)
       .catch((err) => emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' }));
   }
 

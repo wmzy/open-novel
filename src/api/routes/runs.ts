@@ -388,7 +388,7 @@ runsRouter.post('/', async (c) => {
 
   // ACP: 驱动协议会话，事件经 emitWithWatchdog 注入
   if (isAcp) {
-    runAcpTurn(child, composedPrompt, projectDir, [], emitWithWatchdog)
+    runAcpTurn(child, composedPrompt, projectDir, [], emitWithWatchdog, model)
       .then(({ stopReason }) => {
         if (stopReason === 'refusal' || stopReason === 'max_turn_requests') {
           emitEvent(run, 'agent', { type: 'error', message: `ACP stop: ${stopReason}` });
