@@ -1,6 +1,6 @@
 # 写作定向上下文注入与角色体系增强 实现计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 让写作阶段 prompt 自动注入本章大纲块与出场角色档案（分级），打通"人物冰山→水面"的管道，消除扁平化的技术根源。
 
@@ -33,7 +33,7 @@
 - Create: `src/agent/chapter-context.ts`
 - Create: `tests/unit/agent/chapter-context.test.ts`
 
-- [ ] **Step 1: 写失败测试——单章提取**
+- [x] **Step 1: 写失败测试——单章提取**
 
 ```typescript
 // tests/unit/agent/chapter-context.test.ts
@@ -96,12 +96,12 @@ describe('extractChapterOutline', () => {
 });
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts`
 Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `extractChapterOutline`**
+- [x] **Step 3: 实现 `extractChapterOutline`**
 
 ```typescript
 // src/agent/chapter-context.ts
@@ -167,12 +167,12 @@ export async function extractChapterOutline(
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agent/chapter-context.ts tests/unit/agent/chapter-context.test.ts
@@ -189,7 +189,7 @@ git commit -m "feat: extractChapterOutline 大纲块提取"
 
 **背景**：现有 `readCharacterNames` 只匹配 `- 姓名：xxx` 字段格式。示例项目 的 profiles.md 是表格索引（`| 角色 | 文件 |`），现有实现返回空数组——第 3 级回退会失效。
 
-- [ ] **Step 1: 写失败测试——表格索引解析**
+- [x] **Step 1: 写失败测试——表格索引解析**
 
 在 `tests/unit/agent/context-manager.test.ts` 末尾追加：
 
@@ -227,12 +227,12 @@ describe('readCharacterNames (table index)', () => {
 
 > 注：需在测试文件顶部 import 区补 `readCharacterNames`，并在 `tempDir` 的 beforeEach 中确保 `.novel/characters` 已创建（或测试内自行 mkdir）。
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm vitest run tests/unit/agent/context-manager.test.ts -t "table index"`
 Expected: FAIL — `readCharacterNames` 未导出 / 表格格式返回空
 
-- [ ] **Step 3: 改进 `readCharacterNames` 并导出**
+- [x] **Step 3: 改进 `readCharacterNames` 并导出**
 
 修改 `src/agent/context-manager.ts`：
 
@@ -265,17 +265,17 @@ export async function readCharacterNames(projectDir: string): Promise<string[]> 
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/unit/agent/context-manager.test.ts -t "table index"`
 Expected: PASS
 
-- [ ] **Step 5: 运行全量 context-manager 测试防止回归**
+- [x] **Step 5: 运行全量 context-manager 测试防止回归**
 
 Run: `pnpm vitest run tests/unit/agent/context-manager.test.ts`
 Expected: PASS (all)
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add src/agent/context-manager.ts tests/unit/agent/context-manager.test.ts
@@ -290,7 +290,7 @@ git commit -m "feat: readCharacterNames 支持表格索引格式并导出"
 - Modify: `src/agent/chapter-context.ts`
 - Modify: `tests/unit/agent/chapter-context.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `chapter-context.test.ts` 追加：
 
@@ -349,12 +349,12 @@ describe('identifyCast', () => {
 });
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts -t identifyCast`
 Expected: FAIL — `identifyCast` not exported
 
-- [ ] **Step 3: 实现 `identifyCast`**
+- [x] **Step 3: 实现 `identifyCast`**
 
 在 `src/agent/chapter-context.ts` 追加：
 
@@ -438,12 +438,12 @@ export async function identifyCast(
 
 > 注：`readNovelFile` 在 context-manager 是私有的。chapter-context.ts 内已有自己的 `readNovelFile`（Task 1 定义），复用本模块的即可。删去上面 `import { readNovelFile as _rnf }` 这行（误加），保留 `import { parseOutlineMeta }`。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts -t identifyCast`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agent/chapter-context.ts tests/unit/agent/chapter-context.test.ts
@@ -458,7 +458,7 @@ git commit -m "feat: identifyCast 出场角色三级回退识别"
 - Modify: `src/agent/chapter-context.ts`
 - Modify: `tests/unit/agent/chapter-context.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加：
 
@@ -542,12 +542,12 @@ describe('buildCastLayer', () => {
 });
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts -t buildCastLayer`
 Expected: FAIL — `buildCastLayer` not exported
 
-- [ ] **Step 3: 实现 `buildCastLayer`**
+- [x] **Step 3: 实现 `buildCastLayer`**
 
 在 `src/agent/chapter-context.ts` 追加：
 
@@ -635,12 +635,12 @@ export async function buildCastLayer(projectDir: string, cast: Cast): Promise<st
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts -t buildCastLayer`
 Expected: PASS (5 tests)
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agent/chapter-context.ts tests/unit/agent/chapter-context.test.ts
@@ -655,7 +655,7 @@ git commit -m "feat: buildCastLayer 分级注入与 token 预算控制"
 - Modify: `src/agent/prompt-composer.ts`（`buildWritingContextLayers` 与 import）
 - Modify: `tests/unit/agent/prompt-composer.test.ts`
 
-- [ ] **Step 1: 写失败测试——写作阶段注入大纲块与角色层**
+- [x] **Step 1: 写失败测试——写作阶段注入大纲块与角色层**
 
 在 `prompt-composer.test.ts` 的写作阶段相关 describe（或新增 `describe('writing context layers', ...)`）中追加：
 
@@ -717,12 +717,12 @@ it('outline block precedes cast layer', async () => {
 });
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm vitest run tests/unit/agent/prompt-composer.test.ts -t "writing context"`
 Expected: FAIL — prompt 不含"本章大纲"
 
-- [ ] **Step 3: 修改 `buildWritingContextLayers`**
+- [x] **Step 3: 修改 `buildWritingContextLayers`**
 
 在 `src/agent/prompt-composer.ts`：
 
@@ -775,17 +775,17 @@ async function buildWritingContextLayers(
 }
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/unit/agent/prompt-composer.test.ts`
 Expected: PASS (含新测试)
 
-- [ ] **Step 5: 运行全量 agent 测试防止回归**
+- [x] **Step 5: 运行全量 agent 测试防止回归**
 
 Run: `pnpm vitest run tests/unit/agent/`
 Expected: PASS
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add src/agent/prompt-composer.ts tests/unit/agent/prompt-composer.test.ts
@@ -800,7 +800,7 @@ git commit -m "feat: 写作阶段注入本章大纲块与出场角色层"
 - Modify: `src/agent/prompt-composer.ts`（`STAGE_INSTRUCTIONS.writing`，约 :60-72）
 - Modify: `tests/unit/agent/prompt-composer.test.ts`（STAGE_FEATURES.writing 断言）
 
-- [ ] **Step 1: 更新测试特征文本**
+- [x] **Step 1: 更新测试特征文本**
 
 在 `prompt-composer.test.ts` 的 `STAGE_FEATURES` 中，将 writing 的特征改为新指令首句：
 
@@ -808,12 +808,12 @@ git commit -m "feat: 写作阶段注入本章大纲块与出场角色层"
 writing: '本章大纲与出场角色档案已注入上方上下文',
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm vitest run tests/unit/agent/prompt-composer.test.ts -t "injects writing"`
 Expected: FAIL — 仍含旧特征
 
-- [ ] **Step 3: 修改 `STAGE_INSTRUCTIONS.writing`**
+- [x] **Step 3: 修改 `STAGE_INSTRUCTIONS.writing`**
 
 在 `src/agent/prompt-composer.ts` 的 `writing` 指令字符串开头追加（在"为小说撰写真正的散文正文"之前）：
 
@@ -824,12 +824,12 @@ writing: `**写章前**：本章大纲与出场角色档案已注入上方上下
 （… 后续维持原文 …）`,
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/unit/agent/prompt-composer.test.ts -t "stage instruction"`
 Expected: PASS
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agent/prompt-composer.ts tests/unit/agent/prompt-composer.test.ts
@@ -844,7 +844,7 @@ git commit -m "feat: writing 指令增'写章前档案已注入'指引"
 - Modify: `src/agent/chapter-context.ts`（`buildCastLayer` 追加声口附录）
 - Modify: `tests/unit/agent/chapter-context.test.ts`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加：
 
@@ -876,12 +876,12 @@ describe('buildCastLayer voice samples', () => {
 });
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts -t "voice samples"`
 Expected: FAIL — 不含"声口样本"
 
-- [ ] **Step 3: 修改 `buildCastLayer` 追加声口**
+- [x] **Step 3: 修改 `buildCastLayer` 追加声口**
 
 在 `src/agent/chapter-context.ts` 的 `buildCastLayer` 中，L1 注入 profile 后、追加到 sections 前，插入声口读取：
 
@@ -899,12 +899,12 @@ sections.push(`#### ${name}${label}\n${block}`);
 totalSize += block.length;
 ```
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `pnpm vitest run tests/unit/agent/chapter-context.test.ts -t "voice samples"`
 Expected: PASS (2 tests)
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/agent/chapter-context.ts tests/unit/agent/chapter-context.test.ts
@@ -918,26 +918,26 @@ git commit -m "feat: 声口库可选注入（L1 角色）"
 **Files:**
 - Delete: `src/prompts/compose.ts`
 
-- [ ] **Step 1: 确认零引用**
+- [x] **Step 1: 确认零引用**
 
 Run: `grep -rn "prompts/compose" src/ tests/ --include="*.ts"` 
 Expected: 无输出（零引用）
 
-- [ ] **Step 2: 删除文件**
+- [x] **Step 2: 删除文件**
 
 Run: `rm src/prompts/compose.ts`
 
-- [ ] **Step 3: 运行全量测试确认无回归**
+- [x] **Step 3: 运行全量测试确认无回归**
 
 Run: `pnpm vitest run`
 Expected: PASS (全部)
 
-- [ ] **Step 4: 类型检查**
+- [x] **Step 4: 类型检查**
 
 Run: `pnpm tsc --noEmit`
 Expected: 无错误
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git rm src/prompts/compose.ts
@@ -951,7 +951,7 @@ git commit -m "chore: 删除死代码 compose.ts（零调用点）"
 **Files:**
 - Modify: `docs/工具使用指南.md`（第 4.2 节）
 
-- [ ] **Step 1: 更新分层表格**
+- [x] **Step 1: 更新分层表格**
 
 将第 4.2 节"上下文分层"表格从四层改为六层，新增两行：
 
@@ -966,7 +966,7 @@ git commit -m "chore: 删除死代码 compose.ts（零调用点）"
 | 活跃伏笔 | foreshadow.json | 待兑现的伏笔提醒 | status=pending/planted |
 ```
 
-- [ ] **Step 2: 更新批量写作示例**
+- [x] **Step 2: 更新批量写作示例**
 
 移除"用户每章手打'先读 outline、读 scenes、读 state'"的说明，替换为：
 
@@ -986,7 +986,7 @@ curl -X POST http://localhost:3006/api/runs \
   }'
 ```
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 git add docs/工具使用指南.md

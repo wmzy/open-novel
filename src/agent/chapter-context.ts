@@ -150,7 +150,7 @@ const L1_BUDGET_PER_CHAR = 6 * 1024; // 6KB
 const LAYER_TOTAL_BUDGET = 20 * 1024; // 20KB
 
 /** L1 关键段优先级（高→低），其余段截断跳过。 */
-const KEY_SECTIONS = ['出身与经历', '驱动力三角', '性格', '语言', '基本信息', '外貌'];
+const KEY_SECTIONS = ['出身与经历', '时间线', '驱动力三角', '性格', '语言', '基本信息', '外貌'];
 
 /** 按 ## 标题切片，提取关键段。 */
 function extractKeySections(profile: string): string {
