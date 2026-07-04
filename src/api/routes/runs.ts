@@ -426,8 +426,12 @@ runsRouter.post('/', async (c) => {
       code = isAcpFailure(acpStopReason) ? 1 : 0;
     }
 
-    // Collect artifacts from run events (filter to agent events only)
-    const agentEvents = run.events
+    // 从 eventStore（DB 完整存储）读取全部事件，而非 run.events（200 条滑动窗口）。
+    // enrich/逆向等场景 omp 大量调用工具，tool_call/tool_result 事件会把早期
+    // agent 文本输出挤出内存窗口，导致消息持久化只拿到尾部片段。
+    await eventStore.flush(run.id);
+    const allEvents = await eventStore.replay(run.id, 0, run.events);
+    const agentEvents = allEvents
       .filter((e) => e.event === 'agent')
       .map((e) => e.data as Record<string, unknown>);
     const writtenPaths = collectWrittenPaths(agentEvents);

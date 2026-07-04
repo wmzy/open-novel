@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { createRun, emitEvent, finishRun, cancelRun } from '../../agent/run';
+import { eventStore } from '../../agent/event-store';
 import { composePrompt } from '../../agent/prompt-composer';
 import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
@@ -140,8 +141,11 @@ rewriteRouter.post('/', async (c) => {
       code = isAcpFailure(acpStopReason) ? 1 : 0;
     }
 
-    // 收集写入文件并同步到 DB
-    const agentEvents = run.events
+    // 从 eventStore（DB 完整存储）读取全部事件，而非 run.events（200 条滑动窗口）。
+    // 理由同 runs.ts：大量 tool 事件会把早期 agent 文本挤出窗口。
+    await eventStore.flush(run.id);
+    const allEvents = await eventStore.replay(run.id, 0, run.events);
+    const agentEvents = allEvents
       .filter((e) => e.event === 'agent')
       .map((e) => e.data as Record<string, unknown>);
     const writtenPaths = collectWrittenPaths(agentEvents);
