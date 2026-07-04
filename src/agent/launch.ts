@@ -26,11 +26,18 @@ export function launchAgent(
 
   mkdirSync(cwd, { recursive: true });
 
+  // ACP 协议需要 stdin/stdout 双向 pipe；prompt 由调用方经协议发
+  const useStdinPipe = def.usesAcp || def.promptViaStdin;
   const child = spawn(bin, args, {
     cwd,
     env,
-    stdio: [def.promptViaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    stdio: [useStdinPipe ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
+
+  if (def.usesAcp) {
+    // ACP: 不向 stdin write prompt；runAcpTurn 会经 JSON-RPC 发送
+    return { child, stdin: child.stdin };
+  }
 
   if (def.promptViaStdin && def.promptInputFormat === 'stream-json' && child.stdin) {
     const msg = JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } });

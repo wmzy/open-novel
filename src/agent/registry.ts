@@ -44,9 +44,27 @@ export const opencodeAgentDef: RuntimeAgentDef = {
   installUrl: 'https://github.com/opencode-ai/opencode',
 };
 
+export const ompAgentDef: RuntimeAgentDef = {
+  id: 'omp',
+  name: 'Oh My Pi',
+  bin: 'omp',
+  fallbackBins: ['oh-my-pi'],
+  versionArgs: ['--version'],
+  fallbackModels: [{ id: 'default', label: '默认（由 omp 配置）' }],
+  buildArgs: (_prompt, _extraAllowedDirs = [], _options = {}) => {
+    // omp 作为 ACP server 启动；prompt 通过 ACP 协议传递，不经 CLI/buildArgs。
+    return ['acp'];
+  },
+  streamFormat: 'acp-json-rpc',
+  usesAcp: true,
+  installUrl: 'https://github.com/can1357/oh-my-pi',
+  docsUrl: 'https://agentclientprotocol.com/',
+};
+
 export const AGENT_DEFS: RuntimeAgentDef[] = [
   claudeAgentDef,
   opencodeAgentDef,
+  ompAgentDef,
 ];
 
 export function getAgentDef(id: string): RuntimeAgentDef | null {

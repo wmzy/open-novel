@@ -6,6 +6,7 @@ import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
+import { runAcpTurn } from '../../agent/acp-bridge';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { ensureContextArtifacts } from '../../agent/context-manager';
 import { createSnapshot } from '../../agent/snapshot';
@@ -91,12 +92,23 @@ rewriteRouter.post('/', async (c) => {
   const onStreamComplete = () => {
     if (child.stdin && !child.stdin.destroyed) child.stdin.end();
   };
-  const handler = def.streamFormat === 'claude-stream-json'
-    ? createClaudeStreamHandler((event) => emitEvent(run, 'agent', event), onStreamComplete)
-    : createJsonEventHandler((event) => emitEvent(run, 'agent', event));
+  const emit = (event: any) => emitEvent(run, 'agent', event);
+  const isAcp = def.streamFormat === 'acp-json-rpc';
+  const handler = isAcp
+    ? { feed: () => {}, flush: () => {} }
+    : def.streamFormat === 'claude-stream-json'
+      ? createClaudeStreamHandler(emit, onStreamComplete)
+      : createJsonEventHandler(emit);
 
-  child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
+  if (!isAcp) {
+    child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
+  }
   child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
+
+  if (isAcp) {
+    runAcpTurn(child, composedPrompt, projectDir, [], emit)
+      .catch((err) => emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' }));
+  }
 
   child.on('error', (err) => {
     clearTimeout(timeoutTimer);

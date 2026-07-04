@@ -2,6 +2,8 @@ export type RuntimeModelOption = { id: string; label: string };
 
 export type RuntimeBuildOptions = {
   model?: string | null;
+  /** 用于 ACP 协议：prompt 由调用方经协议传，launchAgent 不 write。 */
+  promptDeferred?: boolean;
 };
 
 export type RuntimeAgentDef = {
@@ -15,6 +17,8 @@ export type RuntimeAgentDef = {
   fallbackBins?: string[];
   promptViaStdin?: boolean;
   promptInputFormat?: 'text' | 'stream-json';
+  /** ACP 协议：stdin/stdout 双向 JSON-RPC，prompt 由 runAcpTurn 经协议发。 */
+  usesAcp?: boolean;
   installUrl?: string;
   docsUrl?: string;
 };

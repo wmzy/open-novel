@@ -8,6 +8,7 @@ import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
+import { runAcpTurn } from '../../agent/acp-bridge';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { detectAiPatterns, detectDegradation, buildExcludeGrams } from '../../agent/quality-checker';
 import type { AgentEvent, StreamEvent } from '../../agent/types';
@@ -372,12 +373,31 @@ runsRouter.post('/', async (c) => {
     emitEvent(run, 'agent', event);
   };
 
-  const handler = def.streamFormat === 'claude-stream-json'
-    ? createClaudeStreamHandler(emitWithWatchdog, onStreamComplete)
-    : createJsonEventHandler(emitWithWatchdog);
+  // ACP 协议（omp）：不读 stdout 原始流，而是经 runAcpTurn 驱动 JSON-RPC 会话
+  const isAcp = def.streamFormat === 'acp-json-rpc';
+  const handler = isAcp
+    ? { feed: () => {}, flush: () => {} }
+    : def.streamFormat === 'claude-stream-json'
+      ? createClaudeStreamHandler(emitWithWatchdog, onStreamComplete)
+      : createJsonEventHandler(emitWithWatchdog);
 
-  child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
+  if (!isAcp) {
+    child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
+  }
   child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
+
+  // ACP: 驱动协议会话，事件经 emitWithWatchdog 注入
+  if (isAcp) {
+    runAcpTurn(child, composedPrompt, projectDir, [], emitWithWatchdog)
+      .then(({ stopReason }) => {
+        if (stopReason === 'refusal' || stopReason === 'max_turn_requests') {
+          emitEvent(run, 'agent', { type: 'error', message: `ACP stop: ${stopReason}` });
+        }
+      })
+      .catch((err) => {
+        emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' });
+      });
+  }
 
   child.on('error', (err) => {
     clearTimeout(timeoutTimer);
