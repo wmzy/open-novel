@@ -16,8 +16,12 @@ import {
   TEMPLATE_FILE_PATHS,
   type TemplateGenOptions,
 } from '../../shared/template-generator';
+import timelineRouter from './timeline';
 
 const projectsRouter = new Hono();
+
+// 故事脉络子路由（/:id/timeline 等）
+projectsRouter.route('/', timelineRouter);
 
 projectsRouter.get('/', async (c) => {
   const all = await db.select().from(projects).orderBy(desc(projects.createdAt));
@@ -308,6 +312,34 @@ projectsRouter.get('/:id/files', async (c) => {
     return c.json({ path: normalizedPath, content });
   } catch {
     return c.json({ error: 'File not found' }, 404);
+  }
+});
+
+// Write file content to project (.novel 目录下)
+projectsRouter.put('/:id/files', async (c) => {
+  const projectId = c.req.param('id');
+  const body = await c.req.json();
+  const filePath = body.path as string;
+  const content = body.content as string;
+  if (!filePath || typeof content !== 'string') {
+    return c.json({ error: 'path and content are required' }, 400);
+  }
+
+  const projectDir = await resolveNovelDir(projectId);
+  const normalizedPath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
+  const fullPath = path.resolve(projectDir, normalizedPath);
+
+  // Security: ensure path is within project directory (prevent path traversal)
+  if (!fullPath.startsWith(projectDir + path.sep) && fullPath !== projectDir) {
+    return c.json({ error: 'Invalid path' }, 400);
+  }
+
+  try {
+    mkdirSync(path.dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, content, 'utf-8');
+    return c.json({ ok: true, path: normalizedPath });
+  } catch {
+    return c.json({ error: 'Write failed' }, 500);
   }
 });
 
