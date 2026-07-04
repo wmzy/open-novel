@@ -20,6 +20,7 @@ import exportRouter from './api/routes/export';
 import checkRouter from './api/routes/check';
 import rewriteRouter from './api/routes/rewrite';
 import namingRouter from './api/routes/naming';
+import renameRouter from './api/routes/rename';
 import backupRouter from './api/routes/backup';
 
 const app = new Hono();
@@ -82,6 +83,7 @@ app.route('/api/projects/:projectId/export', exportRouter);
 app.route('/api/projects/:projectId/check', checkRouter);
 app.route('/api/projects/:projectId/rewrite', rewriteRouter);
 app.route('/api/projects/:projectId/naming', namingRouter);
+app.route('/api/projects/:projectId/rename', renameRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);
 app.route('/api/runs', runsRouter);
