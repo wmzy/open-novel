@@ -16,8 +16,8 @@ import {
   type ToolCallUpdate,
   type AvailableCommandsUpdate,
 } from '@agentclientprotocol/sdk';
-import type { ChildProcess } from 'node:child_process';
-import type { StreamEvent } from './types';
+import { spawn, type ChildProcess } from 'node:child_process';
+import type { StreamEvent, AgentCommand } from './types';
 
 type EventSink = (event: StreamEvent) => void;
 
@@ -153,4 +153,65 @@ export async function runAcpTurn(
   });
 
   return { stopReason };
+}
+
+/**
+ * 起一个短命 omp acp 会话，只为了拿 bootstrap 阶段推送的 available_commands_update。
+ *
+ * 用于首屏预取 agent slash command 列表（无需用户先发消息）。
+ * 拿到命令或超时后立即 kill 子进程；不发送任何 prompt。
+ */
+export async function probeAcpCommands(
+  bin: string,
+  cwd: string,
+  extraDirs: string[] = [],
+  timeoutMs = 5000,
+): Promise<AgentCommand[]> {
+  const child = spawn(bin, ['acp'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+  let settled = false;
+
+  const cleanup = () => {
+    if (!child.killed && child.exitCode === null) child.kill('SIGKILL');
+  };
+
+  const timer = setTimeout(() => {
+    if (!settled) { settled = true; cleanup(); }
+  }, timeoutMs);
+
+  try {
+    if (!child.stdin || !child.stdout) throw new Error('probe: missing stdio');
+    const writable = Writable.toWeb(child.stdin);
+    const readable = Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
+    const transport = ndJsonStream(writable, readable);
+    const app = client({ name: 'open-novel' });
+
+    const commands = await app.connectWith(transport, async (ctx) => {
+      const builder = ctx.buildSession(cwd);
+      if (extraDirs.length > 0) builder.withAdditionalDirectories(extraDirs);
+      const session = await builder.start();
+
+      // omp 在 session/new 后延迟推送 available_commands_update；循环读直到拿到或超时
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const msg = await session.nextUpdate();
+        if (msg.kind === 'stop') break;
+        const u = msg.update as SessionUpdate;
+        if (u.sessionUpdate === 'available_commands_update') {
+          const acu = u as AvailableCommandsUpdate;
+          return acu.availableCommands.map((c) => ({
+            name: c.name,
+            description: c.description,
+            inputHint: c.input?.hint ?? undefined,
+          }));
+        }
+      }
+      return [];
+    });
+
+    settled = true;
+    return commands;
+  } finally {
+    clearTimeout(timer);
+    cleanup();
+  }
 }

@@ -3,6 +3,7 @@ import { useRun } from '@/web/hooks/useRun';
 import { useModels } from '@/web/hooks/useModels';
 import { useConversations } from '@/web/hooks/useConversations';
 import { useAgents } from '@/web/hooks/useAgents';
+import { useAgentCommands } from '@/web/hooks/useAgentCommands';
 import { useFileAutocomplete } from '@/web/hooks/useFileAutocomplete';
 import AgentMessage from './AgentMessage';
 import RevisionDiffPanel from './RevisionDiffPanel';
@@ -50,6 +51,10 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const fileAutocomplete = useFileAutocomplete(projectId);
 
   const { messages: chatMessages, isRunning, status, activeRunCount, availableCommands, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+
+  // 首屏预取 agent 命令（无需先发消息）；run 中实时推送会覆盖
+  const { data: prefetchedCommands } = useAgentCommands(agentId);
+  const effectiveCommands = availableCommands.length > 0 ? availableCommands : (prefetchedCommands ?? []);
 
   // Sync conversationId from hook back to state after a run completes
   useEffect(() => {
@@ -143,7 +148,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   ];
 
   // Agent 端 slash command（omp 经 ACP available_commands_update 推送，无 action → 填入输入框发给 agent）
-  const agentCommands: Command[] = availableCommands.map((c) => ({
+  const agentCommands: Command[] = effectiveCommands.map((c) => ({
     name: `/${c.name}`,
     description: c.description + (c.inputHint ? ` ${c.inputHint}` : ''),
     source: 'agent',
