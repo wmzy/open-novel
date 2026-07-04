@@ -118,7 +118,7 @@ export default function OutlineView({ projectId }: Props) {
   });
   const meta = parseOutlineMeta(metaData);
   const arcDiagram = meta ? buildArcDiagram(meta) : null;
-  const povTimeline = meta ? buildPovTimeline(meta) : null;
+  const povChunks = meta ? buildPovTimeline(meta) : null;
 
   const toggle = (i: number) => {
     setCollapsed((prev) => {
@@ -167,7 +167,9 @@ export default function OutlineView({ projectId }: Props) {
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
       <CollapsibleDiagram chart={arcDiagram} title="三幕节奏" />
-      <CollapsibleDiagram chart={povTimeline} title="视点轮换" />
+      {povChunks?.map((chunk, i) => (
+        <CollapsibleDiagram key={i} chart={chunk.chart} title={chunk.title} defaultShow={i === 0} />
+      ))}
       <div className={chapterList}>{sections.map(renderChapter)}</div>
     </div>
   );

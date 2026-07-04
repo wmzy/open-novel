@@ -237,10 +237,10 @@ const toggleBar = css`
 
 /**
  * 可折叠图表：chart 为 null 时整体不渲染（数据不足）。
- * 各视图传入 builder 生成的 mermaid 源码即可。
+ * defaultShow 控制初始展开状态（默认 true）；视点轮换分块时首块展开、其余折叠。
  */
-export function CollapsibleDiagram({ chart, title }: { chart: string | null; title: string }) {
-  const [show, setShow] = useState(true);
+export function CollapsibleDiagram({ chart, title, defaultShow = true }: { chart: string | null; title: string; defaultShow?: boolean }) {
+  const [show, setShow] = useState(defaultShow);
   if (!chart) return null;
   return (
     <div className={diagramWrap}>

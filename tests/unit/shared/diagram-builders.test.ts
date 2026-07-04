@@ -130,7 +130,11 @@ describe('buildPovTimeline', () => {
     expect(buildPovTimeline(meta)).toBeNull();
   });
 
-  it('正常 pov 生成时间线并着色', () => {
+  it('无 chapters 返回 null', () => {
+    expect(buildPovTimeline({ actBreaks: [2, 4], chapters: [] })).toBeNull();
+  });
+
+  it('短书（≤30章）返回单块，标题含范围', () => {
     const meta: OutlineMeta = {
       actBreaks: [2, 4],
       chapters: [
@@ -140,13 +144,61 @@ describe('buildPovTimeline', () => {
         { chapter: 4, pov: '林冲' },
       ],
     };
-    const tl = buildPovTimeline(meta);
-    expect(tl).not.toBeNull();
-    expect(tl!).toContain('graph LR');
-    expect(tl!).toContain('ch1');
-    expect(tl!).toContain('ch1 --> ch2');
+    const chunks = buildPovTimeline(meta)!;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].title).toBe('视点轮换（1-4章）');
+    expect(chunks[0].chart).toContain('graph LR');
+    expect(chunks[0].chart).toContain('ch1');
+    expect(chunks[0].chart).toContain('ch1 --> ch2');
     // 两个 pov → 两组 classDef
-    expect((tl!.match(/classDef/g) || []).length).toBe(2);
+    expect((chunks[0].chart.match(/classDef/g) || []).length).toBe(2);
+  });
+
+  it('长书按三幕断点分块，每块不超过 maxPerChunk', () => {
+    // 50 章，断点 [15, 30]，三幕：1-15 / 16-30 / 31-50
+    const meta: OutlineMeta = {
+      actBreaks: [15, 30],
+      chapters: Array.from({ length: 50 }, (_, i) => ({ chapter: i + 1, pov: i % 2 === 0 ? '甲' : '乙' })),
+    };
+    const chunks = buildPovTimeline(meta, 10)!;
+    // 第一幕 15章→2块(10+5)，第二幕 15章→2块，第三幕 20章→2块 = 6块
+    expect(chunks).toHaveLength(6);
+    expect(chunks[0].title).toBe('第一幕（1-10章）');
+    expect(chunks[1].title).toBe('第一幕（11-15章）');
+    expect(chunks[2].title).toBe('第二幕（16-25章）');
+    expect(chunks[5].title).toBe('第三幕（41-50章）');
+    // 每块节点数 ≤ maxPerChunk
+    for (const c of chunks) {
+      const nodeCount = (c.chart.match(/^    ch\d+\(/gm) || []).length;
+      expect(nodeCount).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it('着色全局一致——同一角色在所有块中颜色索引相同', () => {
+    const meta: OutlineMeta = {
+      actBreaks: [10, 20],
+      chapters: Array.from({ length: 40 }, (_, i) => ({ chapter: i + 1, pov: ['甲', '乙', '丙'][i % 3] })),
+    };
+    const chunks = buildPovTimeline(meta, 10)!;
+    // 甲在所有块中应为 pov0（fill:#0ea5e9）
+    for (const c of chunks) {
+      if (c.chart.includes('pov0')) {
+        expect(c.chart).toContain('fill:#0ea5e9');
+      }
+    }
+  });
+
+  it('某幕断点越界（超过实际章数）时安全过滤', () => {
+    // 只有 20 章，但 actBreaks=[50,80] 越界
+    const meta: OutlineMeta = {
+      actBreaks: [50, 80],
+      chapters: Array.from({ length: 20 }, (_, i) => ({ chapter: i + 1, pov: '甲' })),
+    };
+    const chunks = buildPovTimeline(meta)!;
+    // 20 章 ≤ 30 → 单块
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].chart).toContain('ch1');
+    expect(chunks[0].chart).toContain('ch20');
   });
 });
 

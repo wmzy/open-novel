@@ -171,29 +171,86 @@ const POV_COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#14b
 /**
  * 从 outline-meta chapters 派生视点轮换图：每章一个节点，按视点角色着色。
  * 一眼看出某角色是否长期缺席、视点切换是否有节奏。
+ *
+ * 章节过多时（如 358 章）单图节点被压得极小，因此按三幕断点分块：
+ * 优先按 actBreaks 分 1–3 幕，单幕超过 maxPerChapter 再按块切分。
+ * 每块一张图，着色全局一致（同一角色在所有块中颜色相同）。
+ * 短书（总章数 ≤ maxPerChapter）返回单块。
  */
-export function buildPovTimeline(meta: OutlineMeta): string | null {
+export interface PovChartChunk {
+  title: string;
+  chart: string;
+}
+
+const POV_MAX_PER_CHUNK = 30;
+
+export function buildPovTimeline(meta: OutlineMeta, maxPerChunk = POV_MAX_PER_CHUNK): PovChartChunk[] | null {
   if (!meta?.chapters?.length) return null;
 
   const povs = [...new Set(meta.chapters.map((c) => c.pov).filter(Boolean))];
   if (povs.length === 0) return null;
 
+  // 全局 pov → 颜色索引（分块后同一角色颜色一致）
+  const povIndex = new Map(povs.map((p, i) => [p, i]));
+
+  const lastChapter = meta.chapters[meta.chapters.length - 1].chapter;
+
+  // 幕区间（章号范围），过滤掉越界的空区间
+  const actRanges = [
+    { name: '第一幕', from: 1, to: meta.actBreaks[0] },
+    { name: '第二幕', from: meta.actBreaks[0] + 1, to: meta.actBreaks[1] },
+    { name: '第三幕', from: meta.actBreaks[1] + 1, to: lastChapter },
+  ].filter((a) => a.from <= a.to && a.from <= lastChapter);
+
+  // 短书：整本一块
+  if (meta.chapters.length <= maxPerChunk) {
+    return [{ title: `视点轮换（${meta.chapters[0].chapter}-${lastChapter}章）`, chart: buildPovChart(meta.chapters, povIndex) }];
+  }
+
+  // 分幕分块
+  const chunks: PovChartChunk[] = [];
+  for (const act of actRanges) {
+    const actChapters = meta.chapters.filter((c) => c.chapter >= act.from && c.chapter <= act.to);
+    if (actChapters.length === 0) continue;
+
+    if (actChapters.length <= maxPerChunk) {
+      chunks.push({
+        title: `${act.name}（${act.from}-${Math.min(act.to, lastChapter)}章）`,
+        chart: buildPovChart(actChapters, povIndex),
+      });
+    } else {
+      for (let i = 0; i < actChapters.length; i += maxPerChunk) {
+        const block = actChapters.slice(i, i + maxPerChunk);
+        chunks.push({
+          title: `${act.name}（${block[0].chapter}-${block[block.length - 1].chapter}章）`,
+          chart: buildPovChart(block, povIndex),
+        });
+      }
+    }
+  }
+
+  return chunks.length > 0 ? chunks : null;
+}
+
+/** 生成单个视点轮换图的 mermaid 源码；颜色用全局索引保证跨块一致。 */
+function buildPovChart(chapters: Array<{ chapter: number; pov: string }>, povIndex: Map<string, number>): string {
   const lines: string[] = ['graph LR'];
 
-  for (const ch of meta.chapters) {
+  for (const ch of chapters) {
     lines.push(`    ch${ch.chapter}("${ch.chapter}\\n${sanitize(ch.pov, 8)}")`);
   }
-  for (let i = 0; i < meta.chapters.length - 1; i++) {
-    lines.push(`    ch${meta.chapters[i].chapter} --> ch${meta.chapters[i + 1].chapter}`);
+  for (let i = 0; i < chapters.length - 1; i++) {
+    lines.push(`    ch${chapters[i].chapter} --> ch${chapters[i + 1].chapter}`);
   }
 
-  // 按视点角色着色
-  povs.forEach((pov, i) => {
-    const color = POV_COLORS[i % POV_COLORS.length];
-    const ids = meta.chapters.filter((c) => c.pov === pov).map((c) => `ch${c.chapter}`);
-    lines.push(`    classDef pov${i} fill:${color},color:#fff,stroke:none;`);
-    lines.push(`    class ${ids.join(',')} pov${i};`);
-  });
+  for (const pov of povIndex.keys()) {
+    const idx = povIndex.get(pov)!;
+    const ids = chapters.filter((c) => c.pov === pov).map((c) => `ch${c.chapter}`);
+    if (ids.length === 0) continue;
+    const color = POV_COLORS[idx % POV_COLORS.length];
+    lines.push(`    classDef pov${idx} fill:${color},color:#fff,stroke:none;`);
+    lines.push(`    class ${ids.join(',')} pov${idx};`);
+  }
 
   return lines.join('\n');
 }
