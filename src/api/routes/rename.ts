@@ -10,10 +10,22 @@ import { syncFilesToDb } from '../../agent/artifacts';
 const renameRouter = new Hono();
 
 /**
- * 解析 .novel/characters/profiles.md 中的角色全名列表。
- * 复用 naming 路由相同的标题正则，去掉括号批注。
+ * 加载项目中所有角色全名列表，用于子串冲突检测。
+ * 优先从 state.json.characters[].name 读取（权威结构化数据源）；
+ * state.json 缺失时回退到 profiles.md 的 ## 标题（去括号批注 + 序号前缀）。
  */
 async function loadAllCharacterNames(projectDir: string): Promise<string[]> {
+  // 1. 优先读 state.json
+  try {
+    const stateRaw = await readFile(path.join(projectDir, '.novel', 'state.json'), 'utf-8');
+    const state = JSON.parse(stateRaw) as { characters?: Array<{ name?: string }> };
+    const names = (state.characters || [])
+      .map((c) => c.name)
+      .filter((n): n is string => typeof n === 'string' && n.length >= 2);
+    if (names.length > 0) return names;
+  } catch { /* fall through to profiles.md */ }
+
+  // 2. 回退：profiles.md 标题
   try {
     const content = await readFile(
       path.join(projectDir, '.novel', 'characters', 'profiles.md'),
@@ -57,6 +69,14 @@ renameRouter.post('/', async (c) => {
   const { oldName, newName, scope } = body;
   if (!oldName || !newName) {
     return c.json({ error: 'oldName and newName are required' }, 400);
+  }
+  // CJK 无词边界：单字替换会误伤所有含该字的词（如 "韩" → 命中 "吴用"/"韩国"/"韩信"）。
+  // 强制要求 oldName 是完整全名（≥2 字），这是 spec §4.3 "只替换精确全名" 的硬约束。
+  if (oldName.length < 2) {
+    return c.json(
+      { error: 'oldName 必须是完整全名（至少 2 个字符），不接受单字替换以避免误伤' },
+      400,
+    );
   }
 
   let projectDir: string;

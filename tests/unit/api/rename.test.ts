@@ -90,4 +90,15 @@ describe('POST /api/projects/:projectId/rename', () => {
     expect(body.error).toBe('precheck_failed');
     expect(body.substringConflicts).toContain('宋清');
   });
+
+  it('单字 oldName 被拒绝（避免误伤）', async () => {
+    const res = await apiApp.request(`/api/projects/${projectId}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oldName: '沈', newName: '林' }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain('完整全名');
+  });
 });

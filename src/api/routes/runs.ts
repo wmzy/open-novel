@@ -264,13 +264,19 @@ runsRouter.post('/', async (c) => {
   let reviseContent: string | undefined;
   let baseSnapshot: string | undefined;
   if (mode === 'revise' && targetFile) {
-    const fullPath = path.isAbsolute(targetFile) ? targetFile : path.join(projectDir, targetFile);
-    try {
-      reviseContent = await readFile(fullPath, 'utf-8');
-      baseSnapshot = reviseContent;
-    } catch {
+    // targetFile 相对 .novel/（如 "chapters/第3章.md"）；尝试两种解析以兼容绝对/带前缀路径
+    const candidates = path.isAbsolute(targetFile)
+      ? [targetFile]
+      : [path.join(projectDir, '.novel', targetFile), path.join(projectDir, targetFile)];
+    let resolved: string | null = null;
+    for (const cand of candidates) {
+      try { await readFile(cand, 'utf-8'); resolved = cand; break; } catch {}
+    }
+    if (!resolved) {
       return c.json({ error: `Target file not found: ${targetFile}` }, 404);
     }
+    reviseContent = await readFile(resolved, 'utf-8');
+    baseSnapshot = reviseContent;
   }
 
   const composedPrompt = await composePrompt({
@@ -445,18 +451,26 @@ runsRouter.post('/', async (c) => {
     let reviseDiff: string | undefined;
     if (code === 0 && mode === 'revise' && targetFile && baseSnapshot !== undefined) {
       try {
-        const fullPath = path.isAbsolute(targetFile) ? targetFile : path.join(projectDir, targetFile);
-        const newContent = await readFile(fullPath, 'utf-8');
-        const { createUnifiedDiff, summarizeDiff } = await import('../../shared/diff-utils');
-        reviseDiff = createUnifiedDiff(baseSnapshot, newContent, targetFile);
-        const summary = summarizeDiff(reviseDiff);
-        emitEvent(run, 'agent', {
-          type: 'revision-applied',
-          targetFile,
-          addedLines: summary.addedLines,
-          removedLines: summary.removedLines,
-          diffPreview: reviseDiff.slice(0, 2000),
-        });
+        // 与启动时相同的解析逻辑（.novel 前缀兼容）
+        const candidates = path.isAbsolute(targetFile)
+          ? [targetFile]
+          : [path.join(projectDir, '.novel', targetFile), path.join(projectDir, targetFile)];
+        let newContent: string | null = null;
+        for (const cand of candidates) {
+          try { newContent = await readFile(cand, 'utf-8'); break; } catch {}
+        }
+        if (newContent !== null) {
+          const { createUnifiedDiff, summarizeDiff } = await import('../../shared/diff-utils');
+          reviseDiff = createUnifiedDiff(baseSnapshot, newContent, targetFile);
+          const summary = summarizeDiff(reviseDiff);
+          emitEvent(run, 'agent', {
+            type: 'revision-applied',
+            targetFile,
+            addedLines: summary.addedLines,
+            removedLines: summary.removedLines,
+            diffPreview: reviseDiff.slice(0, 2000),
+          });
+        }
       } catch { /* diff 生成失败不阻断收尾 */ }
     }
 

@@ -188,7 +188,7 @@ export default function WritingView({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   projectId,
-                  agentId: 'claude-code',
+                  agentId: 'claude',
                   stage: 'writing',
                   message: data.revisionNote,
                   mode: 'revise',
