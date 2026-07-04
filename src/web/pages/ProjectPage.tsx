@@ -20,7 +20,7 @@ import SceneView from '@/web/components/views/SceneView';
 import ForeshadowView from '@/web/components/views/ForeshadowView';
 import WuxiaView from '@/web/components/views/WuxiaView';
 import WritingView from '@/web/components/views/WritingView';
-import { useDefaultAgent } from '@/web/hooks/useAgents';
+import { useAgentSelection } from '@/web/hooks/useAgents';
 
 const layout = css`
   display: flex;
@@ -117,7 +117,7 @@ const rewriteSummary = css`
   &:hover { color: var(--haze-color-text); }
 `;
 
-function ViewRouter({ activeView, projectId, onViewChange }: { activeView: string; projectId: string; onViewChange: (view: string) => void }) {
+function ViewRouter({ activeView, projectId, onViewChange, agentId }: { activeView: string; projectId: string; onViewChange: (view: string) => void; agentId: string }) {
   if (activeView === 'dashboard') return <DashboardView projectId={projectId} />;
   if (activeView === 'concept') return <ConceptView projectId={projectId} />;
   if (activeView === 'world') return <WorldView projectId={projectId} />;
@@ -132,11 +132,11 @@ function ViewRouter({ activeView, projectId, onViewChange }: { activeView: strin
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-          <EditorPanel projectId={projectId} chapterNum={num} />
+          <EditorPanel projectId={projectId} chapterNum={num} agentId={agentId} />
         </div>
         <details className={rewriteDetails}>
           <summary className={rewriteSummary}>✍️ 局部重写工作台</summary>
-          <RewritePanel projectId={projectId} chapterNum={num} />
+          <RewritePanel projectId={projectId} chapterNum={num} agentId={agentId} />
         </details>
         <details className={rewriteDetails}>
           <summary className={rewriteSummary}>🔍 质量检查面板</summary>
@@ -238,8 +238,8 @@ export default function ProjectPage() {
     },
   });
 
-  // 选择首个可用 agent（claude → opencode → omp），无可用时回退 'claude'
-  const activeAgentId = useDefaultAgent();
+  // 用户可选 agent，持久化到 localStorage；setAgentId 传给 ChatPanel
+  const [activeAgentId, setActiveAgentId] = useAgentSelection();
 
   // Load preview content when file changes
   useEffect(() => {
@@ -352,7 +352,7 @@ export default function ProjectPage() {
           </div>
         </div>
         <div className={content}>
-          <ViewRouter activeView={activeView} projectId={id!} onViewChange={handleViewChange} />
+          <ViewRouter activeView={activeView} projectId={id!} onViewChange={handleViewChange} agentId={activeAgentId} />
         </div>
       </div>
       {showPreview && (
@@ -366,7 +366,7 @@ export default function ProjectPage() {
         </div>
       )}
       <div className={chatPanel} data-testid="chat-panel">
-        <ChatPanel projectId={id!} agentId={activeAgentId} skillId="novel" stage={project.currentStage} onStageChange={handleViewChange} />
+        <ChatPanel projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId="novel" stage={project.currentStage} onStageChange={handleViewChange} />
       </div>
     </div>
   );

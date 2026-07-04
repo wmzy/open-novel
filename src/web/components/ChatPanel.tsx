@@ -25,6 +25,7 @@ interface Props {
   skillId: string;
   stage: string;
   onStageChange?: (stage: string) => void;
+  onAgentChange?: (agentId: string) => void;
 }
 
 const DEFAULT_MODELS = [
@@ -33,7 +34,7 @@ const DEFAULT_MODELS = [
   { id: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
 ];
 
-export default function ChatPanel({ projectId, agentId, skillId, stage, onStageChange }: Props) {
+export default function ChatPanel({ projectId, agentId, skillId, stage, onStageChange, onAgentChange }: Props) {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -211,7 +212,24 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           </svg>
         </button>
 
-        {currentAgent && (
+        {onAgentChange && agents && agents.filter((a) => a.available).length > 0 && (
+          <select
+            className={select}
+            value={agentId}
+            onChange={(e) => {
+              onAgentChange(e.target.value);
+              setSelectedModel('default');
+            }}
+            disabled={isRunning}
+            title="选择 AI Agent"
+          >
+            {agents.filter((a) => a.available).map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        )}
+
+        {!onAgentChange && currentAgent && (
           <span className={agentBadge} title={`${currentAgent.name}${currentAgent.version ? ` v${currentAgent.version}` : ''}`}>
             {currentAgent.name.charAt(0).toUpperCase()}
           </span>

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { css } from '@linaria/core';
 import { useState } from 'react';
 import RevisionDialog from '../RevisionDialog';
-import { useDefaultAgent } from '@/web/hooks/useAgents';
+import { useAgentSelection } from '@/web/hooks/useAgents';
 
 interface ChapterRow {
   id: string;
@@ -118,7 +118,7 @@ export default function WritingView({
   onViewChange: (view: string) => void;
 }) {
   const [reviseChapter, setReviseChapter] = useState<number | null>(null);
-  const agentId = useDefaultAgent();
+  const [agentId] = useAgentSelection();
   const { data: chapters } = useQuery<ChapterRow[]>({
     queryKey: ['chapters', projectId],
     queryFn: async () => {
