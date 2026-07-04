@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { css } from '@linaria/core';
 
-const wrap = css`
+const diagramFrame = css`
   position: relative;
   background: var(--haze-color-bg-secondary);
   border: 1px solid var(--haze-color-border);
   border-radius: 8px;
+`;
+
+const scrollArea = css`
+  overflow: auto;
+  max-height: 80vh;
+  min-height: 240px;
   padding: 1rem;
-  overflow-x: auto;
 `;
 
 const svgWrap = css`
@@ -98,6 +103,8 @@ function loadMermaid() {
           taskTextOutsideColor: '#e2e8f0',
         },
         gantt: { useWidth: 900 },
+        flowchart: { useMaxWidth: false },
+        sequence: { useMaxWidth: false },
       });
       return mermaid;
     });
@@ -114,7 +121,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), h
  * 渲染 mermaid 源码为 SVG，支持缩放与拖拽平移。
  * - 缩放：右上角控件 −/[百分比]/+/⟲；范围 30%–300%
  * - 平移：scale>1 时拖拽平移（pointer capture，拖出元素仍跟踪）
- * - scale=1 保留原有 overflow-x:auto（宽图水平滚动）
+ * - 图按原始尺寸渲染（解除 mermaid max-width:100% 压缩），超出视区时滚动区域双向滚动
  * 动态加载 mermaid，渲染失败时降级为提示。
  */
 export function MermaidDiagram({ chart }: { chart: string }) {
@@ -140,7 +147,18 @@ export function MermaidDiagram({ chart }: { chart: string }) {
         if (cancelled) return;
         if (elRef.current) {
           elRef.current.innerHTML = svg;
-          svgElRef.current = elRef.current.querySelector('svg');
+          const svgEl = elRef.current.querySelector('svg');
+          if (svgEl) {
+            svgElRef.current = svgEl;
+            // 从 viewBox 提取原始宽度，设固定 width + 解除 max-width:100%
+            // 避免宽图被压缩到容器宽度内（节点压成点）
+            const vb = svgEl.getAttribute('viewBox');
+            if (vb) {
+              const w = Number(vb.split(/\s+/)[2]);
+              if (w > 0) svgEl.style.width = `${w}px`;
+            }
+            svgEl.style.maxWidth = 'none';
+          }
         }
         setState('done');
       } catch {
@@ -189,7 +207,7 @@ export function MermaidDiagram({ chart }: { chart: string }) {
     return <div className={msg}>图表数据格式异常或数据不足</div>;
   }
   return (
-    <div className={wrap}>
+    <div className={diagramFrame}>
       {state === 'done' && (
         <div className={controls}>
           <button type="button" className={ctrlBtn} onClick={zoomOut} aria-label="缩小">−</button>
@@ -198,15 +216,17 @@ export function MermaidDiagram({ chart }: { chart: string }) {
           <button type="button" className={ctrlBtn} onClick={reset} aria-label="重置">⟲</button>
         </div>
       )}
-      {state === 'loading' && <div className={msg}>渲染中…</div>}
-      <div
-        ref={elRef}
-        className={svgWrap}
-        style={{ cursor: scale > 1 ? (dragging ? 'grabbing' : 'grab') : 'default' }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-      />
+      <div className={scrollArea}>
+        {state === 'loading' && <div className={msg}>渲染中…</div>}
+        <div
+          ref={elRef}
+          className={svgWrap}
+          style={{ cursor: scale > 1 ? (dragging ? 'grabbing' : 'grab') : 'default' }}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+        />
+      </div>
     </div>
   );
 }

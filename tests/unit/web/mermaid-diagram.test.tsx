@@ -91,4 +91,16 @@ describe('MermaidDiagram 缩放', () => {
       expect(screen.getByText('图表数据格式异常或数据不足')).toBeTruthy();
     });
   });
+
+  it('从 viewBox 提取原始宽度，设固定 width 避免被 max-width 压缩', async () => {
+    const mermaid = (await import('mermaid')).default;
+    vi.mocked(mermaid.render).mockResolvedValueOnce({
+      svg: '<svg viewBox="0 0 2400 600"><rect /></svg>',
+    });
+    const { container } = render(<MermaidDiagram chart={'graph LR; A-->B'} />);
+    await screen.findByText('100%');
+    const svg = container.querySelector('svg') as SVGSVGElement;
+    expect(svg.style.width).toBe('2400px');
+    expect(svg.style.maxWidth).toBe('none');
+  });
 });
