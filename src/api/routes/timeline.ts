@@ -6,6 +6,7 @@ import { resolveNovelDir } from '../../shared/project-dir';
 import {
   parseOutlineChapters,
   buildStoryTimeline,
+  buildRelationshipGraph,
   type OutlineChapter,
 } from '../../shared/diagram-builders';
 import { getAgentDef } from '../../agent/registry';
@@ -39,6 +40,25 @@ timelineRouter.get('/:id/timeline', async (c) => {
   });
 
   return c.json({ timeline, chapters: chapterInteractions });
+});
+
+/** 返回角色关系图 mermaid 源码（从 state.json.characters[].relationships 生成）。 */
+timelineRouter.get('/:id/character-graph', async (c) => {
+  const novelDir = await resolveNovelDir(c.req.param('id'));
+  let stateRaw: string;
+  try {
+    stateRaw = await readFile(path.join(novelDir, 'state.json'), 'utf-8');
+  } catch {
+    return c.json({ graph: null });
+  }
+  const parsed = JSON.parse(stateRaw) as {
+    characters?: Array<{ name?: string; relationships?: Record<string, string> }>;
+  };
+  const chars = (parsed.characters || [])
+    .filter((ch): ch is { name: string; relationships: Record<string, string> } =>
+      typeof ch.name === 'string' && !!ch.relationships)
+    .map((ch) => ({ name: ch.name, relationships: ch.relationships }));
+  return c.json({ graph: buildRelationshipGraph(chars) });
 });
 
 /** 从大纲全文提取第 N 章某字段值（如「角色交互」「核心事件」「出场角色」），无则返回空串。 */
