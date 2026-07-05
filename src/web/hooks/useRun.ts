@@ -58,6 +58,12 @@ export function useRun(conversationId?: string) {
     stage: string;
     message: string;
     model?: string;
+    /** 运行模式：generate（默认）或 revise（修订已有文件）。 */
+    mode?: 'generate' | 'revise';
+    /** revise 模式：目标文件相对 .novel/ 的路径。 */
+    targetFile?: string;
+    /** revise 模式：用户修订意见（后端注入 prompt）。 */
+    revisionNote?: string;
   }) => {
     // Add user message
     setMessages((prev) => [...prev, { role: 'user', content: params.message }]);
