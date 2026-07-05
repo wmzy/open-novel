@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
 import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildRelationshipGraph } from '../../../shared/diagram-builders';
 import NamingPanel from '../NamingPanel';
 import type { CSSProperties } from 'react';
+import { useFileRevision } from '@/web/hooks/useFileRevision';
 
 interface Props {
   projectId: string;
@@ -114,6 +115,7 @@ export default function CharacterView({ projectId }: Props) {
   });
   const relGraph = stateData?.characters ? buildRelationshipGraph(stateData.characters) : null;
   const [viewMode, setViewMode] = useViewMode();
+  const revision = useFileRevision({ projectId, targetFile: 'characters/profiles.md', stage: 'characters' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -132,6 +134,7 @@ export default function CharacterView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>角色</h3>
+        <button className={reviseBtn} onClick={() => revision.openDialog()}>✎ 修订</button>
         <button
           className={namingToggleBtn}
           onClick={() => setShowNaming((v) => !v)}
@@ -178,6 +181,7 @@ export default function CharacterView({ projectId }: Props) {
           );
         })}
       </div>
+      {revision.dialog}
     </div>
   );
 }
