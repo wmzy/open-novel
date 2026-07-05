@@ -192,4 +192,54 @@ describe('useFileRevision', () => {
     expect(result.current.dialog).toBeNull();
     cleanup();
   });
+
+  it('卡片级：openDialog(undefined, sectionTitle) 提交时 revisionNote 前置定向锚点', async () => {
+    const { result } = renderHook(() => useFileRevision(baseOpts), { wrapper: makeWrapper() });
+    act(() => result.current.openDialog(undefined, '核心冲突'));
+
+    const { container } = render(result.current.dialog as ReactNode, { wrapper: makeWrapper() });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: '把冲突改得更尖锐' } });
+    });
+    const submitBtn = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('执行修订'),
+    )!;
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    const callBody = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(callBody.revisionNote).toContain('【定向修订：仅修改「核心冲突」这一节');
+    expect(callBody.revisionNote).toContain('把冲突改得更尖锐');
+    expect(callBody.message).toBe(callBody.revisionNote);
+    expect(callBody.targetFile).toBe('concept.md');
+    cleanup();
+  });
+
+  it('卡片级：closeDialog 重置 sectionTitle，再次 openDialog() 无锚点前缀', async () => {
+    const { result } = renderHook(() => useFileRevision(baseOpts), { wrapper: makeWrapper() });
+    // 先以 sectionTitle 打开，再关闭（模拟用户改主意）
+    act(() => result.current.openDialog(undefined, '核心冲突'));
+    act(() => result.current.closeDialog());
+    // 再次以无 sectionTitle 打开并提交
+    act(() => result.current.openDialog());
+
+    const { container } = render(result.current.dialog as ReactNode, { wrapper: makeWrapper() });
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: '整体调整' } });
+    });
+    const submitBtn = [...container.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('执行修订'),
+    )!;
+    await act(async () => {
+      fireEvent.click(submitBtn);
+    });
+
+    const callBody = JSON.parse(fetchSpy.mock.calls[0][1].body);
+    expect(callBody.revisionNote).toBe('整体调整');
+    expect(callBody.revisionNote).not.toContain('【定向修订');
+    cleanup();
+  });
 });

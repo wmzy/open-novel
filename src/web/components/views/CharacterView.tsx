@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
 import { CollapsibleDiagram } from '../MermaidDiagram';
@@ -148,7 +148,7 @@ export default function CharacterView({ projectId }: Props) {
       <div className={charGrid}>
         {sections.map((s, i) => {
           const role = detectRole(s.title);
-          // 从标题提取角色名："一、林冲（主角）" → "林冲"
+          // 从标题提取角色名："一、姓名（主角）" → "姓名"
           const titleName = s.title.replace(/^[一二三四五六七八九十\d]+[、.)\s]+/, '').replace(/[（(].*$/, '').trim();
           const name = s.fields.find((f) => f.key === '姓名')?.value || titleName;
           const cardStyle: CSSProperties = { borderLeft: `3px solid ${role.color}` };
@@ -161,6 +161,7 @@ export default function CharacterView({ projectId }: Props) {
               <div className={charHeader}>
                 <span className={roleBadge} style={{ background: role.color }}>{role.label}</span>
                 {name && <span className={charName}>{name}</span>}
+                <button className={cardReviseBtn} onClick={() => revision.openDialog(undefined, s.title)} title="修订这一组">✎</button>
               </div>
               <div className={charFields}>
                 {hasDirect || hasSubs ? (

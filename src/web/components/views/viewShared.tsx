@@ -94,14 +94,39 @@ export const card = css`
   padding: 1rem 1.1rem;
 `;
 
-/** 卡片标题。 */
+/** 卡片标题：flex 容器（标题文字 + 可选修订按钮）。保留原分隔线。
+ *  单文本子节点（如 WuxiaView / 原始内容卡）在 flex 下渲染一致：匿名 flex 项、baseline 对齐、border 仍跨整行。 */
 export const cardTitle = css`
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--haze-color-text);
   margin: 0 0 0.75rem;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--haze-color-border);
+`;
+
+/** 卡片标题文字：占满剩余空间，把修订按钮推到最右。 */
+export const cardTitleText = css`
+  flex: 1;
+`;
+
+/** 卡片级修订按钮：紧凑、低视觉权重，不抢卡片主信息。 */
+export const cardReviseBtn = css`
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.35rem;
+  color: var(--haze-color-text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.15s, background 0.15s;
+  &:hover { opacity: 1; background: rgba(255,255,255,0.05); }
 `;
 
 /** 字段行（标签：值 内联）。 */

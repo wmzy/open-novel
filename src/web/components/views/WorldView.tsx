@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
@@ -69,7 +69,10 @@ export default function WorldView({ projectId }: Props) {
     const empty = isSectionEmpty(s);
     return (
       <div key={i} className={card} style={cardStyle}>
-        <div className={cardTitle}>{s.title}</div>
+        <div className={cardTitle}>
+          <span className={cardTitleText}>{s.title}</span>
+          <button className={cardReviseBtn} onClick={() => revision.openDialog(undefined, s.title)} title="修订这一节">✎</button>
+        </div>
         {empty ? (
           <div className={emptyValue}>暂无内容，在聊天面板补充 /world</div>
         ) : (

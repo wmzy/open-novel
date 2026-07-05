@@ -97,4 +97,39 @@ describe('视图修订接线冒烟', () => {
     });
     cleanup();
   });
+
+  // —— 卡片级 ✎ 按钮（section 定向修订入口）——
+
+  it('ConceptView 每张卡片标题栏渲染卡片级 ✎ 按钮', () => {
+    wrap(createElement(ConceptView, { projectId: 'proj_1' }));
+    // 文件级头部按钮文案「✎ 修订」；卡片级按钮文案仅为「✎」
+    const cardBtns = screen.getAllByTitle('修订这一节');
+    expect(cardBtns.length).toBeGreaterThanOrEqual(1);
+    cardBtns.forEach((b) => expect(b.textContent?.trim()).toBe('✎'));
+    cleanup();
+  });
+
+  it('WorldView 每张卡片标题栏渲染卡片级 ✎ 按钮', () => {
+    wrap(createElement(WorldView, { projectId: 'proj_1' }));
+    const cardBtns = screen.getAllByTitle('修订这一节');
+    expect(cardBtns.length).toBeGreaterThanOrEqual(1);
+    cleanup();
+  });
+
+  it('CharacterView 每个分组卡片渲染卡片级 ✎ 按钮', () => {
+    wrap(createElement(CharacterView, { projectId: 'proj_1' }));
+    const cardBtns = screen.getAllByTitle('修订这一组');
+    expect(cardBtns.length).toBeGreaterThanOrEqual(1);
+    cleanup();
+  });
+
+  it('点击 ConceptView 卡片 ✎ 打开 RevisionDialog（section 定向）', async () => {
+    wrap(createElement(ConceptView, { projectId: 'proj_1' }));
+    const cardBtn = screen.getAllByTitle('修订这一节')[0];
+    fireEvent.click(cardBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/修订 · concept\.md/)).toBeInTheDocument();
+    });
+    cleanup();
+  });
 });

@@ -16,8 +16,10 @@ export interface UseFileRevisionOptions {
 }
 
 export interface UseFileRevisionResult {
-  /** 打开弹窗。可选参数覆盖 options.targetFile（WritingView 选完章节后传具体路径）。 */
-  openDialog: (targetFile?: string) => void;
+  /** 打开弹窗。
+   *  @param targetFile 可选，覆盖 options.targetFile（WritingView 选完章节后传具体路径）
+   *  @param sectionTitle 可选，section 级定向锚点（卡片级 ✎ 传入 section 标题） */
+  openDialog: (targetFile?: string, sectionTitle?: string) => void;
   /** 关闭弹窗。 */
   closeDialog: () => void;
   /** 已挂载的 <RevisionDialog>；未打开或 targetFile 为空时为 null。 */
@@ -26,7 +28,11 @@ export interface UseFileRevisionResult {
 
 /**
  * 封装「修订某个 .novel/ 文件」的完整逻辑：弹窗状态 + RevisionDialog 渲染 + onSubmit fetch。
- * 复用于 ConceptView / WorldView / CharacterView（文件级）与 WritingView（章节级，延迟指定 targetFile）。
+ * 复用于 ConceptView / WorldView / CharacterView（文件级与卡片级 section 定向）
+ * 与 WritingView（章节级，延迟指定 targetFile）。
+ *
+ * 卡片级：openDialog 传入 sectionTitle 时，revise 提交会在 revisionNote 前置定向锚点
+ * （【定向修订：仅修改「X」这一节】），引导 agent 只 Edit 对应 section。零后端改动。
  *
  * 刷新由 ProjectPage 的 SSE file-changed 监听统一处理，hook 内不重复。
  */
@@ -34,15 +40,18 @@ export function useFileRevision(options: UseFileRevisionOptions): UseFileRevisio
   const { projectId, targetFile: defaultTargetFile, stage, onClose } = options;
   const [isOpen, setIsOpen] = useState(false);
   const [activeTargetFile, setActiveTargetFile] = useState(defaultTargetFile);
+  const [activeSectionTitle, setActiveSectionTitle] = useState<string | undefined>(undefined);
   const [agentId] = useAgentSelection();
 
-  const openDialog = useCallback((targetFile?: string) => {
+  const openDialog = useCallback((targetFile?: string, sectionTitle?: string) => {
     if (targetFile !== undefined) setActiveTargetFile(targetFile);
+    setActiveSectionTitle(sectionTitle);
     setIsOpen(true);
   }, []);
 
   const closeDialog = useCallback(() => {
     setIsOpen(false);
+    setActiveSectionTitle(undefined);
     onClose?.();
   }, [onClose]);
 
@@ -57,6 +66,11 @@ export function useFileRevision(options: UseFileRevisionOptions): UseFileRevisio
       },
     ) => {
       if (mode === 'revise') {
+        // 卡片级 section 定向：sectionTitle 非空时在 revisionNote 前置锚点提示，
+        // 引导 agent 只 Edit 对应 section；message 与 revisionNote 一致以保持对话记录可读。
+        const note = activeSectionTitle
+          ? `【定向修订：仅修改「${activeSectionTitle}」这一节（## 标题），其余原封不动】\n${data.revisionNote}`
+          : data.revisionNote;
         await fetch('/api/runs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -64,10 +78,10 @@ export function useFileRevision(options: UseFileRevisionOptions): UseFileRevisio
             projectId,
             agentId,
             stage,
-            message: data.revisionNote,
+            message: note,
             mode: 'revise',
             targetFile: activeTargetFile,
-            revisionNote: data.revisionNote,
+            revisionNote: note,
           }),
         });
       } else {
@@ -83,7 +97,7 @@ export function useFileRevision(options: UseFileRevisionOptions): UseFileRevisio
       }
       closeDialog();
     },
-    [projectId, agentId, stage, activeTargetFile, closeDialog],
+    [projectId, agentId, stage, activeTargetFile, activeSectionTitle, closeDialog],
   );
 
   const dialog = useMemo<ReactNode>(() => {

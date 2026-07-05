@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
@@ -104,7 +104,10 @@ export default function ConceptView({ projectId }: Props) {
 
     return (
       <div key={i} className={card + (highlight ? ' ' + conceptHighlight : '')}>
-        <div className={cardTitle + (highlight ? ' ' + conceptHighlightTitle : '')}>{s.title}</div>
+        <div className={cardTitle + (highlight ? ' ' + conceptHighlightTitle : '')}>
+          <span className={cardTitleText}>{s.title}</span>
+          <button className={cardReviseBtn} onClick={() => revision.openDialog(undefined, s.title)} title="修订这一节">✎</button>
+        </div>
 
         {hasSynopsis ? (
           <ol className={synopsisList}>
