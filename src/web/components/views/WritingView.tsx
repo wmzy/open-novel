@@ -153,7 +153,7 @@ export default function WritingView({
                 className={reviseBtn}
                 onClick={(e) => {
                   e.stopPropagation();
-                  revision.openDialog(`chapters/第${c.number}章.md`);
+                  revision.openRevise(`chapters/第${c.number}章.md`);
                 }}
               >
                 ✎ 修订
@@ -162,7 +162,7 @@ export default function WritingView({
           </div>
         ))}
       </div>
-      {revision.dialog}
+      {revision.renameDialog}
     </div>
   );
 }

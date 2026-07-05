@@ -86,6 +86,21 @@ export const reviseBtn = css`
   }
 `;
 
+/** 重命名按钮样式：与 reviseBtn 同尺寸，用次级文字色区分机械操作。 */
+export const renameBtn = css`
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--haze-color-text-secondary);
+  &:hover {
+    border-color: var(--haze-color-text-secondary);
+    color: var(--haze-color-text);
+  }
+`;
+
 /** 卡片底座。 */
 export const card = css`
   background: var(--haze-color-bg);

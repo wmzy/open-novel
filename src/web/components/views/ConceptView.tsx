@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
@@ -106,7 +106,8 @@ export default function ConceptView({ projectId }: Props) {
       <div key={i} className={card + (highlight ? ' ' + conceptHighlight : '')}>
         <div className={cardTitle + (highlight ? ' ' + conceptHighlightTitle : '')}>
           <span className={cardTitleText}>{s.title}</span>
-          <button className={cardReviseBtn} onClick={() => revision.openDialog(undefined, s.title)} title="修订这一节">✎</button>
+          <button className={cardReviseBtn} onClick={() => revision.openRevise(undefined, s.title)} title="修订这一节">✎</button>
+          <button className={cardReviseBtn} onClick={() => revision.openRename()} title="重命名">⇄</button>
         </div>
 
         {hasSynopsis ? (
@@ -135,11 +136,12 @@ export default function ConceptView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>故事概念</h3>
-        <button className={reviseBtn} onClick={() => revision.openDialog()}>✎ 修订</button>
+        <button className={reviseBtn} onClick={() => revision.openRevise()}>✎ 修订</button>
+        <button className={renameBtn} onClick={() => revision.openRename()}>⇄ 重命名</button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
       <div className={conceptGrid}>{sections.map(renderElement)}</div>
-      {revision.dialog}
+      {revision.renameDialog}
     </div>
   );
 }
