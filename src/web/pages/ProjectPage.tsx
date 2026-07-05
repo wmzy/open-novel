@@ -154,6 +154,48 @@ const rewriteSummary = css`
   &:hover { color: var(--haze-color-text); }
 `;
 
+/** 全屏状态占位（加载中 / 加载失败 / 项目不存在）。 */
+const stateWrap = css`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 2rem;
+  text-align: center;
+  gap: 0.75rem;
+`;
+
+const stateTitle = css`
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+`;
+
+const stateMsg = css`
+  font-size: 0.875rem;
+  color: var(--haze-color-text-secondary);
+  max-width: 420px;
+  margin: 0;
+`;
+
+const stateActions = css`
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+`;
+
+const retryBtn = css`
+  background: var(--haze-color-bg-secondary);
+  color: var(--haze-color-text);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  padding: 0.4rem 1rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  &:hover { background: var(--haze-color-bg); }
+`;
+
 function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: { activeView: string; projectId: string; onViewChange: (view: string) => void; agentId: string; skillId: string }) {
   if (activeView === 'dashboard') return <DashboardView projectId={projectId} />;
   if (activeView === 'concept') return <ConceptView projectId={projectId} />;
@@ -202,12 +244,25 @@ export default function ProjectPage() {
   const [syncing, setSyncing] = useState(false);
 
   const queryClient = useQueryClient();
-  const { data: project, refetch: refetchProject } = useQuery({
+  const { data: project, isLoading, error, refetch: refetchProject } = useQuery({
     queryKey: ['project', id],
     queryFn: async () => {
       const res = await fetch(`/api/projects/${id}`);
+      // 检查响应状态：404（项目不存在）等需进入 error 态，否则下面 data.project 为 undefined，
+      // 会被误判成「加载中」无限转圈（旧 bug：把 Not Found 静默成 loading）。
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        // 附带 status，供 retry 判断 4xx 不重试。
+        throw Object.assign(new Error(body?.error || `HTTP ${res.status}`), { status: res.status });
+      }
       const data = await res.json();
       return data.project;
+    },
+    // 4xx（项目不存在/权限）不重试；网络/5xx 最多重试 2 次。
+    retry: (count, err) => {
+      const status = (err as Error & { status?: number }).status;
+      if (typeof status === 'number' && status >= 400 && status < 500) return false;
+      return count < 2;
     },
   });
 
@@ -371,7 +426,28 @@ export default function ProjectPage() {
     }
   };
 
-  if (!project) return <div>加载中...</div>;
+  if (isLoading) return <div className={stateWrap}>加载中...</div>;
+  if (error || !project) {
+    // 区分「项目不存在」(404) 与「加载失败」(网络/5xx)，给出不同文案与动作。
+    const status = (error as Error & { status?: number })?.status;
+    const isNotFound = status === 404 || /not found/i.test(error?.message || '');
+    return (
+      <div className={stateWrap}>
+        <h2 className={stateTitle}>{isNotFound ? '项目不存在' : '加载失败'}</h2>
+        <p className={stateMsg}>
+          {isNotFound
+            ? '该项目可能已被删除，或链接已失效。请从首页选择一个现有项目。'
+            : (error?.message || '无法连接服务器，请稍后重试。')}
+        </p>
+        <div className={stateActions}>
+          <Link to="/" className={backLink}>← 返回首页</Link>
+          {!isNotFound && (
+            <button className={retryBtn} onClick={() => refetchProject()}>重试</button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={layout}>
