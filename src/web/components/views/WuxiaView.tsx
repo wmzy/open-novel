@@ -1,8 +1,10 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
+import { useQueries } from '@tanstack/react-query';
 import {
   useNovelFile,
+  useNovelFileList,
   EmptyState,
   loadingWrap,
   pageHeading,
@@ -24,30 +26,69 @@ interface Props {
 /**
  * 武侠专属设定仪表盘。
  *
- * 架构说明：wuxia SKILL.md 明确"武侠设定在 world-building.md，无需另建目录"，
- * 故本视图不读 `wuxia/system.md`（无阶段会生成它），而是从 world-building.md 与
- * characters/profiles.md 聚合武侠维度，与 WorldView 形成差异化聚焦。
+ * 架构说明（双数据源）：
+ * 1. `.novel/wuxia/` 独立文件（旧工具迁移项目，如 martial-arts.md / weapons.md /
+ *    sects.md / sects/*.md）——按文件内容归类到「功法体系 / 神兵利器 / 势力总览 /
+ *    势力详情」，优先展示。
+ * 2. `world-building.md` 的武侠维度 `##` 节（与 WorldView 差异化聚焦） +
+ *    `characters/profiles.md` 的武学路数——补充与新项目兼容。
  */
 
-/** 武侠三大维度：按标题关键词从 world-building 筛选对应 `##` 分组。 */
+/**
+ * 武侠设定维度：按标题关键词从 world-building 筛选对应 `##` 分组。
+ * 维度与 plugins/wuxia/templates/world-building.md 的 `##` 节 1:1 对齐，
+ * 顺序亦与模板一致（时代背景 → … → 历史恩怨）。
+ * 「神兵利器」独立成维，与旧版 novel-wuxia 的「兵器谱」章呼应；
+ * 「武功体系」不再吞并兵器关键词。
+ */
 const DIMENSIONS: Array<{ keys: string[]; title: string; color: string; hint: string }> = [
   {
-    keys: ['力量', '武功', '武学', '兵器', '内力'],
-    title: '武功体系',
-    color: '#f97316',
-    hint: '力量分层、招式代价、内力限制',
+    keys: ['时代背景', '时代', '朝代', '年代'],
+    title: '时代背景',
+    color: '#64748b',
+    hint: '朝代、社会状况、武林大势之根基',
   },
   {
-    keys: ['社会', '门派', '势力', '格局', '组织'],
+    keys: ['江湖格局', '门派', '势力', '格局'],
     title: '门派江湖',
     color: '#8b5cf6',
-    hint: '门派架构、势力消长、江湖格局',
+    hint: '门派架构、正邪中立势力、江湖格局',
   },
   {
-    keys: ['规则', '规矩', '江湖礼', '戒律'],
+    keys: ['武功体系', '武功', '武学', '内力', '功法', '招式', '轻功'],
+    title: '武功体系',
+    color: '#f97316',
+    hint: '内功外功、招式轻功、力量分层与代价',
+  },
+  {
+    keys: ['百工', '技艺', '锻造', '火药', '机关', '医术'],
+    title: '百工技艺',
+    color: '#0ea5e9',
+    hint: '冶金火药、机关医毒——武能的天花板',
+  },
+  {
+    keys: ['神兵', '兵器', '利器', '名剑', '名刀'],
+    title: '神兵利器',
+    color: '#ef4444',
+    hint: '兵器谱、神兵来历、持有者与特殊能力',
+  },
+  {
+    keys: ['重要地点', '地点', '地理'],
+    title: '重要地点',
+    color: '#10b981',
+    hint: '关键场所、势力所在、地理格局',
+  },
+  {
+    keys: ['江湖规矩', '规矩', '戒律', '道义'],
     title: '江湖规矩',
     color: '#14b8a6',
     hint: '道义准则、江湖铁律、两难抉择',
+  },
+  {
+    keys: ['历史恩怨', '恩怨', '渊源', '旧仇'],
+    title: '历史恩怨',
+    color: '#a16207',
+    hint: '门派渊源、世仇旧约、未解之恨',
   },
 ];
 
@@ -157,6 +198,73 @@ function roleColor(title: string): string {
   return '#64748b';
 }
 
+// ── .novel/wuxia/ 独立文件归类 ───────────────────────────────────────
+
+interface WuxiaFileItem {
+  title: string;
+  rawMd: string;
+}
+
+interface WuxiaGroup {
+  key: string;
+  title: string;
+  color: string;
+  hint: string;
+  items: WuxiaFileItem[];
+}
+
+/** wuxia/ 文件分组的元数据（顺序即展示顺序）。 */
+const WUXIA_GROUP_META: Array<{ key: string; title: string; color: string; hint: string }> = [
+  { key: 'martial', title: '功法体系', color: '#f97316', hint: '武学体系、内力招式、轻功身法' },
+  { key: 'weapon', title: '神兵利器', color: '#ef4444', hint: '兵器谱、装备、甲胄工具' },
+  { key: 'sect-overview', title: '势力总览', color: '#8b5cf6', hint: '江湖格局、势力生态、利益纠葛' },
+  { key: 'sect-detail', title: '势力详情', color: '#a855f7', hint: '各势力档案：地盘、钱脉、弱点' },
+  { key: 'other', title: '其它设定', color: '#64748b', hint: '未归类的武侠设定文件' },
+];
+
+/** 文件名（去扩展名）作为展示名。 */
+function fileDisplayName(path: string): string {
+  return path.split('/').pop()!.replace(/\.md$/, '');
+}
+
+/**
+ * 把 `.novel/wuxia/` 下的已加载文件归类成展示分组。
+ * - martial/weapon/sect-overview：拆成文件内 `##` 节作为独立卡片；
+ * - sect-detail/other：每个文件整篇作为一张卡片。
+ */
+function categorizeWuxiaFiles(files: { path: string; content: string }[]): WuxiaGroup[] {
+  const buckets: Record<string, WuxiaFileItem[]> = {
+    martial: [],
+    weapon: [],
+    'sect-overview': [],
+    'sect-detail': [],
+    other: [],
+  };
+  for (const f of files) {
+    const parsed = parseSections(f.content);
+    const title = parsed.title || fileDisplayName(f.path);
+    const hint = `${title} ${f.path}`;
+    let cat: keyof typeof buckets;
+    if (f.path.startsWith('wuxia/sects/')) cat = 'sect-detail';
+    else if (f.path === 'wuxia/sects.md') cat = 'sect-overview';
+    else if (/martial|功法|武功|武学/.test(hint)) cat = 'martial';
+    else if (/weapon|兵器|神兵|兵刃/.test(hint)) cat = 'weapon';
+    else if (/sect|门派|势力|江湖/.test(hint)) cat = 'sect-overview';
+    else cat = 'other';
+
+    if (cat === 'sect-detail' || cat === 'other') {
+      buckets[cat].push({ title, rawMd: f.content });
+    } else if (parsed.sections.length === 0) {
+      buckets[cat].push({ title, rawMd: f.content });
+    } else {
+      for (const s of parsed.sections) {
+        buckets[cat].push({ title: s.title, rawMd: s.fullRawMd });
+      }
+    }
+  }
+  return WUXIA_GROUP_META.map((g) => ({ ...g, items: buckets[g.key] ?? [] }));
+}
+
 export default function WuxiaView({ projectId }: Props) {
   const { data: worldData, isLoading: worldLoading } = useNovelFile(
     projectId,
@@ -169,6 +277,40 @@ export default function WuxiaView({ projectId }: Props) {
     'characters/profiles.md'
   );
   const [viewMode, setViewMode] = useViewMode();
+
+  // .novel/wuxia/ 独立文件（旧工具迁移项目）
+  const { data: fileList } = useNovelFileList(projectId);
+  const wuxiaPaths = useMemo(
+    () => (fileList ?? []).filter((f) => f.startsWith('wuxia/') && f.endsWith('.md')),
+    [fileList],
+  );
+  const wuxiaQueries = useQueries({
+    queries: wuxiaPaths.map((p) => ({
+      queryKey: ['novel-file', projectId, `wuxia-file-${p}`],
+      queryFn: async () => {
+        const res = await fetch(
+          `/api/projects/${projectId}/files?path=${encodeURIComponent(p)}`,
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        return { path: p, content: data.content as string };
+      },
+      staleTime: 30_000,
+    })),
+  });
+  const wuxiaLoadedCount = wuxiaQueries.filter((q) => q.data !== undefined).length;
+  const wuxiaGroups = useMemo(
+    () =>
+      categorizeWuxiaFiles(
+        wuxiaQueries
+          .map((q) => q.data)
+          .filter((d): d is { path: string; content: string } => !!d),
+      ),
+    // 仅在加载进度变化时重算（避免 useQueries 数组引用变化导致的频繁重算）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [wuxiaLoadedCount],
+  );
+  const hasWuxiaFiles = wuxiaGroups.some((g) => g.items.length > 0);
 
   const worldSections = useMemo(
     () => (worldData ? parseSections(worldData).sections : []),
@@ -204,7 +346,7 @@ export default function WuxiaView({ projectId }: Props) {
   );
 
   if (worldLoading || charLoading) return <div className={loadingWrap}>加载中...</div>;
-  if (!worldData && !charData) {
+  if (!worldData && !charData && !hasWuxiaFiles) {
     return <EmptyState message="尚未创建武侠设定。" command="/world" />;
   }
 
@@ -218,11 +360,40 @@ export default function WuxiaView({ projectId }: Props) {
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
 
-      {!hasWorldDim && !hasChars && (
+      {!hasWorldDim && !hasChars && !hasWuxiaFiles && (
         <EmptyState message="世界观与角色档案中暂无可识别的武侠维度内容。" command="/world" />
       )}
 
-      {/* 武侠三大维度 */}
+      {/* 武侠设定库（来自 .novel/wuxia/ 独立文件，旧工具迁移项目） */}
+      {wuxiaGroups.map((group) => {
+        if (group.items.length === 0) return null;
+        return (
+          <div key={group.key}>
+            <div className={dimHeading}>
+              <span className={dimTitle} style={{ color: group.color } as CSSProperties}>
+                {group.title}
+              </span>
+              <span className={dimHint}>{group.hint}</span>
+            </div>
+            <div className={dimGrid}>
+              {group.items.map((item, i) => (
+                <div
+                  key={`${group.key}-${i}`}
+                  className={card}
+                  style={{ borderLeft: `3px solid ${group.color}` } as CSSProperties}
+                >
+                  <div className={cardTitle}>{item.title}</div>
+                  <CardContent rawMd={item.rawMd} mode={viewMode} />
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      {hasWuxiaFiles && (hasWorldDim || hasChars) && <hr className={divider} />}
+
+      {/* 世界观武侠维度（来自 world-building.md） */}
       {dimensions.map((dim) => {
         if (dim.sections.length === 0) return null;
         return (

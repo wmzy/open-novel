@@ -25,6 +25,19 @@ export function useNovelFile(projectId: string, fileKey: string, path: string) {
   });
 }
 
+/** 列出项目 .novel/ 下所有 .md/.json 文件（相对路径），用于发现子目录文件（如 wuxia/）。 */
+export function useNovelFileList(projectId: string) {
+  return useQuery({
+    queryKey: ['novel-file-list', projectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/files/list`);
+      if (!res.ok) return [] as string[];
+      const data = await res.json();
+      return (data.files as string[]) ?? [];
+    },
+  });
+}
+
 /** 加载中占位。 */
 export const loadingWrap = css`
   padding: 2rem 1rem;
