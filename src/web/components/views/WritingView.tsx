@@ -3,6 +3,7 @@ import { css } from '@linaria/core';
 import { useState } from 'react';
 import RevisionDialog from '../RevisionDialog';
 import { useAgentSelection } from '@/web/hooks/useAgents';
+import { reviseBtn } from './viewShared';
 
 interface ChapterRow {
   id: string;
@@ -87,20 +88,6 @@ const emptyHint = css`
   padding: 3rem 1rem;
   color: var(--haze-color-text-secondary);
   & h3 { margin-bottom: 0.5rem; color: var(--haze-color-text); }
-`;
-
-const reviseBtn = css`
-  padding: 0.25rem 0.6rem;
-  border: 1px solid var(--haze-color-border);
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  font-size: 0.75rem;
-  color: var(--haze-color-text);
-  &:hover {
-    border-color: var(--haze-color-primary);
-    color: var(--haze-color-primary);
-  }
 `;
 
 const statusLabels: Record<string, string> = {

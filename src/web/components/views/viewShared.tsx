@@ -71,6 +71,21 @@ export const pageHeading = css`
   color: var(--haze-color-text);
 `;
 
+/** 修订按钮样式。ConceptView/WorldView/CharacterView/WritingView 共用。 */
+export const reviseBtn = css`
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--haze-color-text);
+  &:hover {
+    border-color: var(--haze-color-primary);
+    color: var(--haze-color-primary);
+  }
+`;
+
 /** 卡片底座。 */
 export const card = css`
   background: var(--haze-color-bg);
