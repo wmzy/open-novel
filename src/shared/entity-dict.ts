@@ -65,9 +65,19 @@ function extractAliasFromTitle(title: string): string | null {
   return m ? m[1].trim() : null;
 }
 
+/** 清理 markdown 强调标记：**姓名** → 姓名。 */
+function cleanMdEmphasis(s: string): string {
+  return s.replace(/\*\*/g, '').trim();
+}
+
 /** 清理列表项文本：去掉 markdown 加粗/链接标记。 */
 function cleanItem(item: string): string {
   return item.replace(/\*\*/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
+}
+
+/** 从值中取逗号前的主名：「剑平，字试锋」→「剑平」。 */
+function primaryName(value: string): string {
+  return value.split(/[，,、][^，,、]*$/)[0].split(/，|,|、/)[0].trim();
 }
 
 /** 招式子节关键词。 */
@@ -104,12 +114,20 @@ export function buildEntityDict(
     const fileType = inferFileType(path);
     if (fileType === 'other') continue;
     const doc = parseSections(content);
+    // 文档标题（# 级）含冒号时取冒号后作为名字候选（如「# 主角：剑平」→「剑平」）
+    const titleColonIdx = doc.title.search(/[：:]/);
+    const docTitleName =
+      titleColonIdx >= 0
+        ? extractNameFromTitle(doc.title.slice(titleColonIdx + 1))
+        : '';
+    const docTitleAlias = extractAliasFromTitle(doc.title);
+    const fullRaw = content;
 
     for (const section of doc.sections) {
       const sectionRaw = `## ${section.title}\n\n${section.fullRawMd}`;
 
       if (fileType === 'profiles') {
-        processProfilesSection(section, path, sectionRaw, add);
+        processProfilesSection(section, path, sectionRaw, add, docTitleName, docTitleAlias, fullRaw);
       } else if (fileType === 'world') {
         processWorldSection(section, path, add);
       } else {
@@ -127,17 +145,36 @@ export function buildEntityDict(
   return dict;
 }
 
-function processProfilesSection(section: MdSection, file: string, sectionRaw: string, add: AddFn) {
-  const nameField = section.fields.find((f) => f.key === '姓名');
-  if (nameField) add(nameField.value, 'character', file, section.title, sectionRaw);
-  // 标题里的名字（兼容无 姓名 字段的档案）
+function processProfilesSection(
+  section: MdSection,
+  file: string,
+  sectionRaw: string,
+  add: AddFn,
+  docTitleName: string,
+  docTitleAlias: string | null,
+  fullRaw: string,
+) {
+  // 字段名去 markdown 强调标记后比较：**姓名** → 姓名
+  const nameField = section.fields.find((f) => cleanMdEmphasis(f.key) === '姓名');
+  if (nameField) {
+    const name = primaryName(nameField.value);
+    add(name, 'character', file, section.title, fullRaw);
+  }
+  // 文档标题里的名字（如「# 主角：剑平」→「剑平」），兼容无 姓名 字段的档案
+  if (docTitleName) add(docTitleName, 'character', file, section.title, fullRaw);
+  // 标题里的名字（如「## 林冲」）
   const titleName = extractNameFromTitle(section.title);
   if (titleName) add(titleName, 'character', file, section.title, sectionRaw);
 
-  const aliasField = section.fields.find((f) => f.key === '外号' || f.key === '绰号');
-  if (aliasField) add(aliasField.value, 'alias', file, section.title, sectionRaw);
-  const titleAlias = extractAliasFromTitle(section.title);
-  if (titleAlias) add(titleAlias, 'alias', file, section.title, sectionRaw);
+  const aliasField = section.fields.find(
+    (f) => cleanMdEmphasis(f.key) === '外号' || cleanMdEmphasis(f.key) === '绰号',
+  );
+  if (aliasField) {
+    const alias = primaryName(aliasField.value);
+    add(alias, 'alias', file, section.title, fullRaw);
+  }
+  const titleAlias = extractAliasFromTitle(section.title) ?? docTitleAlias;
+  if (titleAlias) add(titleAlias, 'alias', file, section.title, fullRaw);
 }
 
 function processWorldSection(section: MdSection, file: string, add: AddFn) {

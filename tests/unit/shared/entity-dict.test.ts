@@ -176,6 +176,27 @@ describe('buildEntityDict', () => {
     expect(dict.get('林冲')?.type).toBe('character'); // 角色优先
   });
 
+  it('支持加粗字段名 **姓名**：剑平', () => {
+    const profiles = `# 主角：剑平
+
+## 基本信息
+
+- **姓名**：剑平，字试锋
+- **年龄**：18岁`;
+    const dict = buildEntityDict([{ path: 'characters/profiles/剑平.md', content: profiles }]);
+    expect(dict.get('剑平')?.type).toBe('character');
+  });
+
+  it('从文档标题 # 主角：剑平 提取名字', () => {
+    const profiles = `# 主角：剑平
+
+## 基本信息
+
+剑平是主角。`;
+    const dict = buildEntityDict([{ path: 'characters/profiles/剑平.md', content: profiles }]);
+    expect(dict.get('剑平')?.type).toBe('character');
+  });
+
   it('EntityRef.sectionRaw 含 ## 标题行', () => {
     const profiles = `# 角色档案
 
