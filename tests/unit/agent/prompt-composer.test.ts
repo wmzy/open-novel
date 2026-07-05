@@ -485,7 +485,7 @@ describe('composePrompt', () => {
       expect(castIdx).toBeGreaterThan(outlineIdx);
     });
 
-    it('loadForeshadows 容忍 items 键 + description 字段（逆向/enrich schema）', async () => {
+    it('loadForeshadows 拒绝非标准 schema（items 键 / description 字段）', async () => {
       const novel = path.join(tempDir, '.novel');
       await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
       await fs.writeFile(
@@ -495,10 +495,9 @@ describe('composePrompt', () => {
       await fs.writeFile(
         path.join(novel, 'foreshadow.json'),
         JSON.stringify({
-          // 逆向/enrich 产出的 schema：顶层 items + description
+          // 非标准：顶层 items + description 字段——应被拒绝，不注入任何伏笔
           items: [
             { id: 'foreshadow-001', description: '蝴蝶玉佩', status: 'planted', plantedChapter: 1 },
-            { id: 'foreshadow-002', description: '已回收的伏笔', status: 'resolved', plantedChapter: 1, expectedPayoffChapter: 2 },
           ],
         }),
       );
@@ -508,11 +507,9 @@ describe('composePrompt', () => {
         stage: 'writing',
         projectDir: tempDir,
       });
-      // items 键的 planted 伏笔应被 loadForeshadows 读取并注入待回收区
-      expect(prompt).toContain('### 活跃伏笔层');
-      expect(prompt).toContain('蝴蝶玉佩');
-      // 已回收不出现
-      expect(prompt).not.toContain('已回收的伏笔');
+      // 非标准 schema 不被解析——活跃伏笔层不注入
+      expect(prompt).not.toContain('### 活跃伏笔层');
+      expect(prompt).not.toContain('蝴蝶玉佩');
     });
   });
 

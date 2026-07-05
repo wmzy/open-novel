@@ -367,35 +367,18 @@ export function analyzeForeshadows(
 
 // ===== 伏笔遗忘检测：文件 IO =====
 
-/** 从对象中按候选键名取首个数值字段，均无效返回 null。容错 agent 产出的字段名变体。 */
-function pickNumField(o: Record<string, unknown>, keys: string[]): number | null {
-  for (const k of keys) {
-    const v = o[k];
-    if (typeof v === 'number') return v;
-    if (typeof v === 'string') {
-      const parsed = parseInt(v, 10);
-      if (!Number.isNaN(parsed)) return parsed;
-    }
-  }
-  return null;
-}
-
 export function normalizeForeshadows(input: unknown): Foreshadow[] {
+  // 严格只认标准 schema：{ foreshadows: [{ id, content, status, plantedIn, resolvedIn }] }
+  // status 必须是 pending/planted/resolved；content 必须是字符串。非标准条目跳过。
   if (!input || typeof input !== 'object') return [];
-  // 容错两种顶层键：标准 `foreshadows` 与逆向/enrich 产出的 `items`
-  const obj = input as { foreshadows?: unknown; items?: unknown };
-  const arr = Array.isArray(obj.foreshadows) ? obj.foreshadows : obj.items;
-  if (!Array.isArray(arr)) return [];
-  return arr
+  const obj = input as { foreshadows?: unknown };
+  if (!Array.isArray(obj.foreshadows)) return [];
+  const VALID_STATUS = new Set(['pending', 'planted', 'resolved']);
+  return obj.foreshadows
     .map((f, idx): Foreshadow | null => {
       if (!f || typeof f !== 'object') return null;
       const o = f as Record<string, unknown>;
-      // 内容字段容错：content / description / text
-      const content = typeof o.content === 'string' ? o.content
-        : typeof o.description === 'string' ? o.description
-          : typeof o.text === 'string' ? o.text : null;
-      if (content === null) return null;
-      // id 容错：number 优先；string 尝试 parse，失败用序号
+      if (typeof o.content !== 'string' || typeof o.status !== 'string' || !VALID_STATUS.has(o.status)) return null;
       let id: number;
       if (typeof o.id === 'number') id = o.id;
       else if (typeof o.id === 'string') {
@@ -404,11 +387,10 @@ export function normalizeForeshadows(input: unknown): Foreshadow[] {
       } else id = idx + 1;
       return {
         id,
-        content,
-        status: typeof o.status === 'string' ? o.status : 'pending',
-        // 章节字段容错：多种常见命名变体
-        plantedIn: pickNumField(o, ['plantedIn', 'plantedChapter', 'planted_chapter', 'planted']),
-        resolvedIn: pickNumField(o, ['resolvedIn', 'resolvedChapter', 'expectedPayoffChapter', 'expected_payoff_chapter', 'payoffChapter']),
+        content: o.content,
+        status: o.status,
+        plantedIn: typeof o.plantedIn === 'number' ? o.plantedIn : null,
+        resolvedIn: typeof o.resolvedIn === 'number' ? o.resolvedIn : null,
       };
     })
     .filter((f): f is Foreshadow => f !== null);

@@ -49,7 +49,17 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
   ]
 }
 \`\`\`
-actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视点角色名。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
+actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视点角色名。
+
+**伏笔登记（必做）**：从大纲中识别贯穿全书的伏笔（每处埋设 + 对应回收），写入 .novel/foreshadow.json，**替换掉模板占位**（"伏笔内容" 那一条）。每条用**具体内容**描述该伏笔是什么，而非泛泛之词。标准 schema：
+\`\`\`json
+{
+  "foreshadows": [
+    { "id": 1, "content": "具体伏笔描述", "status": "pending", "plantedIn": 预定埋设章号, "resolvedIn": 预定回收章号 }
+  ]
+}
+\`\`\`
+顶层键为 foreshadows（**不是** items），内容字段为 content（**不是** description），status 取值 pending/planted/resolved；plantedIn/resolvedIn 为数字章号，无法确定时填 null。写章时 agent 会据此把 pending 翻成 planted，故此处务必把全书伏笔登记齐全。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
 
   scenes: `将大纲拆解为详细场景，包含节拍、情感弧光与节奏。规划每个场景的目的与关键时刻。
 
@@ -65,7 +75,12 @@ actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视
 每写完一章后，你必须完成以下三件事以保持后续章节的一致性：
 (1) 为该章生成约 200 字的**语义摘要**，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。摘要必须包含：本章情节推进、角色状态变化（位置/情绪/获知新信息）、伏笔兑现或新增。**严禁复制正文原文段落**——摘要必须是你的概括重述，不是截取。
 (2) 更新 .novel/state.json——刷新每个在场角色的位置（location）、情绪（emotion）、新获知的信息（knows）；**角色间关系变化必须写入 relationships 字段**（键=对方角色名，值=关系描述，如 \"孙二娘\": \"脆弱的盟友\"），不能留空——这是人物关系图的唯一数据源；推进时间线和 lastUpdatedChapter；设置 updatedAt。
-(3) 更新 .novel/foreshadow.json 的伏笔状态：本章埋设了某条伏笔（首次在正文中植入线索），将该伏笔的 status 从 "pending" 改为 "planted"；本章回收了某条伏笔（伏笔线索得到兑现/揭晓），将 status 改为 "resolved" 并填写 resolvedIn 为当前章号。同时同步 state.json 的 activeForeshadows 字段——收集所有 status 为 "planted" 的伏笔 ID 列表。
+(3) 更新 .novel/foreshadow.json 的伏笔状态：
+- 若本章**新埋设**了一条伏笔（首次在正文中植入线索）且大纲阶段未预登：**新增一条**，id 取现有最大 id + 1，content 写具体描述，status 设为 "planted"，plantedIn 填当前章号，resolvedIn 为 null。
+- 若大纲阶段已预登该伏笔为 pending：将其 status 从 "pending" 改为 "planted"。
+- 若本章**回收**了某条伏笔（线索得到兑现/揭晓）：将 status 改为 "resolved" 并填写 resolvedIn 为当前章号。
+- 标准 schema：{ "foreshadows": [{ "id": 1, "content": "具体描述", "status": "planted", "plantedIn": 3, "resolvedIn": null }] }。顶层键为 foreshadows（不是 items），内容字段为 content（不是 description），status 取值 pending/planted/resolved。
+- 同时同步 state.json 的 activeForeshadows 字段——收集所有 status 为 "planted" 的伏笔 ID 列表。
 
 写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。`,
   drafting: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。`,
@@ -235,23 +250,18 @@ export async function loadForeshadows(projectDir: string): Promise<{
   const raw = await readNovelFile(projectDir, 'foreshadow.json');
   if (!raw) return { foreshadows: [] };
   try {
-    const data = JSON.parse(raw) as {
-      foreshadows?: Array<Record<string, unknown>>;
-      items?: Array<Record<string, unknown>>;
-    };
-    // 容错两种顶层键：标准 `foreshadows` 与逆向/enrich 产出的 `items`
-    const raw2 = Array.isArray(data.foreshadows) ? data.foreshadows : data.items;
-    const list = (raw2 ?? [])
-      .filter((f) => f && (typeof f.content === 'string' || typeof f.description === 'string'))
+    const data = JSON.parse(raw) as { foreshadows?: Array<Record<string, unknown>> };
+    // 严格只认标准 schema：{ foreshadows: [{ id, content, status, plantedIn, resolvedIn }] }
+    // status 必须是 pending/planted/resolved；content 必须是字符串。非标准条目跳过。
+    const VALID_STATUS = new Set(['pending', 'planted', 'resolved']);
+    const list = (Array.isArray(data.foreshadows) ? data.foreshadows : [])
+      .filter((f) => f && typeof f.content === 'string' && typeof f.status === 'string' && VALID_STATUS.has(f.status))
       .map((f, idx) => ({
         id: typeof f.id === 'number' ? f.id
           : typeof f.id === 'string' ? (parseInt(f.id, 10) || idx + 1)
             : idx + 1,
-        // 内容字段容错：content / description / text
-        content: typeof f.content === 'string' ? f.content
-          : typeof f.description === 'string' ? f.description
-            : (f.text as string) ?? '',
-        status: typeof f.status === 'string' ? f.status : 'pending',
+        content: f.content as string,
+        status: f.status as string,
         plantedIn: typeof f.plantedIn === 'number' ? f.plantedIn : null,
         resolvedIn: typeof f.resolvedIn === 'number' ? f.resolvedIn : null,
       }));

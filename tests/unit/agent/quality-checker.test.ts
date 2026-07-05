@@ -229,14 +229,14 @@ describe('checkForeshadows (IO)', () => {
     expect(report.forgotten).toHaveLength(0);
   });
 
-  it('容忍非标准字段名（description/plantedChapter/string id）', async () => {
+  it('拒绝非标准字段名（description/plantedChapter/string id）', async () => {
     const novel = path.join(dir, '.novel', 'chapters');
     await fs.mkdir(novel, { recursive: true });
     await fs.writeFile(
       path.join(dir, '.novel', 'foreshadow.json'),
       JSON.stringify({
         foreshadows: [
-          // 非标准：id 为字符串、字段名 description / plantedChapter
+          // 非标准：id 为字符串、字段名 description / plantedChapter、status='open'
           { id: 'fs1', description: '神秘信件', status: 'open', plantedChapter: 1, expectedPayoffChapter: 5 },
         ],
       }),
@@ -244,19 +244,19 @@ describe('checkForeshadows (IO)', () => {
     await fs.writeFile(path.join(novel, 'chapter-1.md'), '林青发现神秘信件。');
     await fs.writeFile(path.join(novel, 'chapter-2.md'), '无关内容。');
     const report = await checkForeshadows(dir, 5);
-    // 应被归一化解析，而非静默丢弃；间隔 < 阈值 → healthy
-    expect(report.healthy).toHaveLength(1);
-    expect(report.healthy[0].content).toBe('神秘信件');
-    expect(report.healthy[0].lastSeenChapter).toBe(1);
+    // 非标准 schema（字段名/状态值）被拒绝——不产生任何报告条目
+    expect(report.healthy).toHaveLength(0);
+    expect(report.forgotten).toHaveLength(0);
+    expect(report.resolved).toHaveLength(0);
   });
 
-  it('容忍顶层 items 键（逆向/enrich 产出的 schema）', async () => {
+  it('拒绝顶层 items 键（逆向/enrich 产出的 schema）', async () => {
     const novel = path.join(dir, '.novel', 'chapters');
     await fs.mkdir(novel, { recursive: true });
     await fs.writeFile(
       path.join(dir, '.novel', 'foreshadow.json'),
       JSON.stringify({
-        // 逆向拆解/enrich 产出的 schema：顶层 items + description 字段
+        // 非标准：顶层 items + description 字段——应被拒绝
         items: [
           { id: 'foreshadow-001', description: '蝴蝶玉佩', status: 'planted', plantedChapter: 1 },
           { id: 'foreshadow-002', description: '诸子暗号', status: 'resolved', plantedChapter: 1, expectedPayoffChapter: 3 },
@@ -266,11 +266,9 @@ describe('checkForeshadows (IO)', () => {
     await fs.writeFile(path.join(novel, 'chapter-1.md'), '蝴蝶玉佩与诸子暗号同时出现。');
     await fs.writeFile(path.join(novel, 'chapter-2.md'), '无关内容。');
     const report = await checkForeshadows(dir, 5);
-    // items 键应被识别；伏笔 1 间隔 < 5 → healthy，伏笔 2 已 resolved
-    expect(report.healthy).toHaveLength(1);
-    expect(report.healthy[0].content).toBe('蝴蝶玉佩');
-    expect(report.resolved).toHaveLength(1);
-    expect(report.resolved[0].content).toBe('诸子暗号');
+    // 非标准顶层键 items 被拒绝——不产生任何报告条目
+    expect(report.healthy).toHaveLength(0);
+    expect(report.resolved).toHaveLength(0);
   });
 });
 

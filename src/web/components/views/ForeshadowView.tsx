@@ -46,21 +46,27 @@ export default function ForeshadowView({ projectId }: Props) {
   });
 
   if (isLoading) return <div>加载中...</div>;
-  if (!data) return <div>尚未创建伏笔。在聊天面板中输入 /foreshadow 开始。</div>;
+  if (!data) return <div>尚未创建伏笔。前往「大纲」阶段，生成大纲时会自动登记伏笔到此看板。</div>;
 
-  // 容错两种 schema：标准 { foreshadows } 与逆向/enrich 产出的 { items }
-  type Item = { id?: number | string; content?: string; description?: string; status: string; plantedIn?: number | string | null; resolvedIn?: number | string | null };
-  const rawList: Item[] = Array.isArray(data.foreshadows) ? data.foreshadows
-    : Array.isArray(data.items) ? data.items : [];
+  // 严格只认标准 schema：{ foreshadows: [{ id, content, status, plantedIn, resolvedIn }] }
+  // status 必须是 pending/planted/resolved，其余值视为数据错误，该条不渲染。
+  type Item = { id: number; content: string; status: string; plantedIn: number | null; resolvedIn: number | null };
+  const rawList: Item[] = Array.isArray(data?.foreshadows)
+    ? data.foreshadows.filter((f: unknown): f is Item =>
+        !!f && typeof f === 'object'
+        && typeof (f as Item).content === 'string'
+        && typeof (f as Item).status === 'string'
+        && ['pending','planted','resolved'].includes((f as Item).status))
+    : [];
   const num = (v: unknown): number => {
     if (typeof v === 'number') return v;
     if (typeof v === 'string') { const p = parseInt(v, 10); return Number.isNaN(p) ? 0 : p; }
     return 0;
   };
-  const normalize = (arr: Item[]) => arr.map((f, i) => ({
-    id: typeof f.id === 'number' ? f.id : typeof f.id === 'string' ? (parseInt(f.id, 10) || i + 1) : i + 1,
-    content: f.content ?? f.description ?? '',
-    status: f.status,
+  const normalize = (arr: Item[]) => arr.map((f) => ({
+    id: typeof f.id === 'number' ? f.id : Number(f.id) || 0,
+    content: f.content,
+    status: f.status as 'pending' | 'planted' | 'resolved',
     plantedIn: f.plantedIn != null ? num(f.plantedIn) : 0,
     resolvedIn: f.resolvedIn != null ? num(f.resolvedIn) : undefined,
   }));

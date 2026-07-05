@@ -196,7 +196,7 @@ LLM 的通病不是某个词，而是**六种写作模式**。成稿前请逐条
 | `chapters/第N章.md` | 第 N 章正文 |
 | `chapters/第N章.summary.md` | **第 N 章压缩摘要**（≤200 字，每章必写，供后续章节保持连贯） |
 | `state.json` | **全局状态**：各角色的位置/情绪/已知信息/关系、时间线、活跃伏笔、`lastUpdatedChapter`、`updatedAt`（每章后更新） |
-| `foreshadow.json` | 伏笔追踪（id/内容/状态 pending\|paid-off/埋设章节） |
+| `foreshadow.json` | 伏笔追踪（id/内容/状态 pending\|planted\|resolved/埋设/回收章节） |
 | `summary.md` | 全书摘要（已完成章节、进度、重要转折） |
 | `config.json` | 项目配置 |
 

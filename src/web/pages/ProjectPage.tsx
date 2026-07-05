@@ -23,6 +23,7 @@ import CharacterGraphView from '@/web/components/views/CharacterGraphView';
 import WuxiaView from '@/web/components/views/WuxiaView';
 import WritingView from '@/web/components/views/WritingView';
 import { useAgentSelection } from '@/web/hooks/useAgents';
+import { useChatPanelWidth } from '@/web/hooks/useChatPanelWidth';
 
 const layout = css`
   display: flex;
@@ -66,7 +67,7 @@ const content = css`
 `;
 
 const chatPanel = css`
-  width: 400px;
+  width: var(--chat-width, 400px);
   border-left: 1px solid var(--haze-color-border);
   display: flex;
   flex-direction: column;
@@ -76,6 +77,40 @@ const chatPanel = css`
     border-left: none;
     border-top: 1px solid var(--haze-color-border);
     height: 50vh;
+  }
+`;
+
+const resizeHandle = css`
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  user-select: none;
+  transition: background-color 0.15s;
+  &:hover,
+  &:active {
+    background-color: var(--haze-color-border);
+  }
+  &::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 2px;
+    height: 28px;
+    border-radius: 2px;
+    background: var(--haze-color-border);
+    opacity: 0.5;
+    transition: opacity 0.15s;
+  }
+  &:hover::after,
+  &:active::after {
+    opacity: 1;
+  }
+  @media (max-width: 768px) {
+    display: none;
   }
 `;
 
@@ -245,6 +280,9 @@ export default function ProjectPage() {
   // 用户可选 agent，持久化到 localStorage；setAgentId 传给 ChatPanel
   const [activeAgentId, setActiveAgentId] = useAgentSelection();
 
+  // 右侧会话面板宽度（可拖拽，持久化）
+  const { width: chatWidth, isResizing, resizeHandleProps } = useChatPanelWidth();
+
   // Load preview content when file changes
   useEffect(() => {
     if (!previewFile) {
@@ -369,7 +407,20 @@ export default function ProjectPage() {
           />
         </div>
       )}
-      <div className={chatPanel} data-testid="chat-panel">
+      <div
+        className={resizeHandle}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="拖拽调整会话面板宽度"
+        tabIndex={0}
+        {...resizeHandleProps}
+      />
+      <div
+        className={chatPanel}
+        style={{ ['--chat-width' as string]: `${chatWidth}px` }}
+        data-testid="chat-panel"
+        data-resizing={isResizing ? 'true' : undefined}
+      >
         <ChatPanel projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleViewChange} />
       </div>
     </div>
