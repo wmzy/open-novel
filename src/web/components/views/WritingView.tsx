@@ -1,9 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { css } from '@linaria/core';
-import { useState } from 'react';
-import RevisionDialog from '../RevisionDialog';
-import { useAgentSelection } from '@/web/hooks/useAgents';
 import { reviseBtn } from './viewShared';
+import { useFileRevision } from '@/web/hooks/useFileRevision';
 
 interface ChapterRow {
   id: string;
@@ -104,8 +102,7 @@ export default function WritingView({
   projectId: string;
   onViewChange: (view: string) => void;
 }) {
-  const [reviseChapter, setReviseChapter] = useState<number | null>(null);
-  const [agentId] = useAgentSelection();
+  const revision = useFileRevision({ projectId, targetFile: '', stage: 'writing' });
   const { data: chapters } = useQuery<ChapterRow[]>({
     queryKey: ['chapters', projectId],
     queryFn: async () => {
@@ -156,7 +153,7 @@ export default function WritingView({
                 className={reviseBtn}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setReviseChapter(c.number);
+                  revision.openDialog(`chapters/第${c.number}章.md`);
                 }}
               >
                 ✎ 修订
@@ -165,41 +162,7 @@ export default function WritingView({
           </div>
         ))}
       </div>
-      {reviseChapter !== null && (
-        <RevisionDialog
-          projectId={projectId}
-          targetFile={`chapters/第${reviseChapter}章.md`}
-          onClose={() => setReviseChapter(null)}
-          onSubmit={async (mode, data) => {
-            if (mode === 'revise') {
-              await fetch('/api/runs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  projectId,
-                  agentId,
-                  stage: 'writing',
-                  message: data.revisionNote,
-                  mode: 'revise',
-                  targetFile: `chapters/第${reviseChapter}章.md`,
-                  revisionNote: data.revisionNote,
-                }),
-              });
-            } else {
-              await fetch(`/api/projects/${projectId}/rename`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  oldName: data.oldName,
-                  newName: data.newName,
-                  scope: data.scope,
-                }),
-              });
-            }
-            setReviseChapter(null);
-          }}
-        />
-      )}
+      {revision.dialog}
     </div>
   );
 }
