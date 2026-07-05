@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { css } from '@linaria/core';
 import { useQuery } from '@tanstack/react-query';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import RewritePanel from './RewritePanel';
+import { useEntityDict } from '@/web/hooks/useEntityDict';
+import { EntityMarkdown } from './EntityMarkdown';
 
 const editorContainer = css`
   display: flex;
@@ -111,6 +111,7 @@ export default function EditorPanel({ projectId, chapterNum, agentId = 'claude',
       return data.chapter;
     },
   });
+  const { dict } = useEntityDict(projectId);
 
   const [content, setContent] = useState('');
   const [charCount, setCharCount] = useState(0);
@@ -227,7 +228,7 @@ export default function EditorPanel({ projectId, chapterNum, agentId = 'claude',
       </div>
       {mode === 'preview' ? (
         <div className={preview}>
-          <Markdown remarkPlugins={[remarkGfm]}>{content || '*No content*'}</Markdown>
+          <EntityMarkdown content={content} dict={dict} projectId={projectId} />
         </div>
       ) : mode === 'rewrite' ? (
         <RewritePanel projectId={projectId} chapterNum={chapterNum} agentId={agentId} skillId={skillId} />
