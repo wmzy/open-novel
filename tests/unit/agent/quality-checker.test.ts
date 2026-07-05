@@ -469,7 +469,7 @@ describe('detectDegradation', () => {
 
 describe('buildExcludeGrams', () => {
   it('2字角色名生成1个2-gram', () => {
-    expect(buildExcludeGrams(['林冲', '孙二娘'])).toEqual(['林冲', '孙二娘']);
+    expect(buildExcludeGrams(['林冲', '吴用'])).toEqual(['林冲', '吴用']);
   });
 
   it('3字角色名生成2个2-gram', () => {

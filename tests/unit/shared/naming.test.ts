@@ -41,12 +41,12 @@ describe('pinyin', () => {
   it('nameToPinyin 解析多字名字', () => {
     const infos = nameToPinyin('林冲');
     expect(infos).toHaveLength(2);
-    expect(infos[0]!.pinyin).toBe('xiāo');
-    expect(infos[1]!.pinyin).toBe('yuǎn');
+    expect(infos[0]!.pinyin).toBe('lín');
+    expect(infos[1]!.pinyin).toBe('chōng');
   });
 
   it('nameToPinyinString 返回空格分隔的拼音', () => {
-    expect(nameToPinyinString('林冲')).toBe('xiāo yuǎn');
+    expect(nameToPinyinString('林冲')).toBe('lín chōng');
   });
 
   it('isAllSameTone 检测全组同声调', () => {
@@ -103,8 +103,8 @@ describe('name-checker', () => {
 
   describe('checkSimilarity', () => {
     it('编辑距离≤1判定相似', () => {
-      // 林冲 vs 萧言 → 只差一个字
-      const result = checkSimilarity('萧言', ['林冲']);
+      // 林言 vs 林冲 → 只差一个字
+      const result = checkSimilarity('林言', ['林冲']);
       expect(result.hit).toBe(true);
       expect(result.target).toBe('林冲');
     });
@@ -146,11 +146,11 @@ describe('name-checker', () => {
     });
 
     it('差一个字距离为 1', () => {
-      expect(editDistance('林冲', '萧言')).toBe(1);
+      expect(editDistance('林冲', '林言')).toBe(1);
     });
 
     it('完全不同距离为长度', () => {
-      expect(editDistance('萧', '宋江')).toBe(3);
+      expect(editDistance('萧', '宋江')).toBe(2);
     });
   });
 });

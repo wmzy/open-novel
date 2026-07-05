@@ -24,11 +24,11 @@ describe('POST /api/projects/:projectId/rename', () => {
     await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
     await fs.writeFile(
       path.join(novelDir, 'characters', 'profiles.md'),
-      '## 一、宋清（主角）\n\n## 二、林冲（配角）\n',
+      '## 一、宋公明（主角）\n\n## 二、林冲（配角）\n',
     );
     await fs.writeFile(
       path.join(novelDir, 'chapters', '第1章.md'),
-      '# 第一章\n\n宋清推开了门。\n',
+      '# 第一章\n\n宋公明推开了门。\n',
     );
     projectId = 'test_proj_rename_1';
     await db.delete(projects).where(eq(projects.id, projectId));
@@ -60,7 +60,7 @@ describe('POST /api/projects/:projectId/rename', () => {
     const res = await apiApp.request(`/api/projects/${projectId}/rename`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oldName: '宋清', newName: '林寒声' }),
+      body: JSON.stringify({ oldName: '宋公明', newName: '林寒声' }),
     });
     if (res.status !== 200) {
       const dbg = await res.json();
@@ -74,21 +74,21 @@ describe('POST /api/projects/:projectId/rename', () => {
 
     const ch1 = await fs.readFile(path.join(tempDir, '.novel', 'chapters', '第1章.md'), 'utf-8');
     expect(ch1).toContain('林寒声');
-    expect(ch1).not.toContain('宋清');
+    expect(ch1).not.toContain('宋公明');
   });
 
   it('oldName 是其他全名子串时返回 409', async () => {
-    // "沈惊" 是 "宋清" 的子串 → 应被子串冲突预检拦截
+    // "宋公" 是 "宋公明" 的子串 → 应被子串冲突预检拦截
     // newName 选一个能通过 checkName 的（避免先被音韵检查拦截）
     const res = await apiApp.request(`/api/projects/${projectId}/rename`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oldName: '沈惊', newName: '林寒声' }),
+      body: JSON.stringify({ oldName: '宋公', newName: '林寒声' }),
     });
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error).toBe('precheck_failed');
-    expect(body.substringConflicts).toContain('宋清');
+    expect(body.substringConflicts).toContain('宋公明');
   });
 
   it('单字 oldName 被拒绝（避免误伤）', async () => {

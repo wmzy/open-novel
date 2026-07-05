@@ -7,7 +7,7 @@ import { performRename, findSubstringConflicts } from '../../../src/shared/renam
 describe('findSubstringConflicts', () => {
   it('检测 oldName 是其他全名子串的情况', () => {
     const allNames = ['宋江', '宋清', '林冲', '吴用'];
-    const conflicts = findSubstringConflicts('沈', allNames);
+    const conflicts = findSubstringConflicts('宋', allNames);
     expect(conflicts).toEqual(['宋江', '宋清']);
   });
 
