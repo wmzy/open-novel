@@ -158,6 +158,33 @@ export const emptyState = css`
   gap: 0.5rem;
 `;
 
+/** 修订模式提示条：视图/卡片 ✎ dispatch 后显示，标明修订目标。 */
+export const reviseBanner = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.4rem;
+  background: var(--haze-color-bg-secondary);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: var(--haze-color-text);
+`;
+
+export const reviseBannerClose = css`
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--haze-color-text-secondary);
+  font-size: 0.9rem;
+  padding: 0 0.25rem;
+  &:hover {
+    color: var(--haze-color-text);
+  }
+`;
+
 export const agentWarning = css`
   display: flex;
   align-items: center;

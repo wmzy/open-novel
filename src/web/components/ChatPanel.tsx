@@ -6,6 +6,7 @@ import { useConversations } from '@/web/hooks/useConversations';
 import { useAgents } from '@/web/hooks/useAgents';
 import { useAgentCommands } from '@/web/hooks/useAgentCommands';
 import { useFileAutocomplete } from '@/web/hooks/useFileAutocomplete';
+import { REVISE_TO_CHAT_EVENT } from '@/web/hooks/useFileRevision';
 import AgentMessage from './AgentMessage';
 import RevisionDiffPanel from './RevisionDiffPanel';
 import {
@@ -15,6 +16,7 @@ import {
   autocompleteCmd, autocompleteDesc, cmdBadge, cmdBadgeApp, cmdBadgeAgent,
   askBox, askMessage, askOptions, askOptionBtn, askCheckbox, askInput,
   askActions, askSubmitBtn, askCancelBtn,
+  reviseBanner, reviseBannerClose,
 } from './ChatPanel.styles';
 
 interface Command {
@@ -52,6 +54,20 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   // ask 选择框临时状态（多选的已选项、输入的文本）
   const [askMultiSelected, setAskMultiSelected] = useState<string[]>([]);
   const [askInputValue, setAskInputValue] = useState('');
+
+  // 修订模式：来自视图/卡片 ✎ dispatch 的 revise-to-chat 事件，发送时附加 mode/targetFile/revisionNote
+  const [pendingRevise, setPendingRevise] = useState<
+    { targetFile: string; sectionTitle?: string } | null
+  >(null);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { targetFile: string; sectionTitle?: string };
+      setPendingRevise(detail);
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    };
+    window.addEventListener(REVISE_TO_CHAT_EVENT, handler);
+    return () => window.removeEventListener(REVISE_TO_CHAT_EVENT, handler);
+  }, []);
 
   // File autocomplete for @ mentions
   const fileAutocomplete = useFileAutocomplete(projectId);
@@ -148,8 +164,18 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       stage,
       message: input.trim(),
       model: selectedModel !== 'default' ? selectedModel : undefined,
+      ...(pendingRevise
+        ? {
+            mode: 'revise' as const,
+            targetFile: pendingRevise.targetFile,
+            revisionNote: pendingRevise.sectionTitle
+              ? `【定向修订：仅修改「${pendingRevise.sectionTitle}」这一节】\n${input.trim()}`
+              : input.trim(),
+          }
+        : {}),
     });
     setInput('');
+    setPendingRevise(null);
   };
 
   const handleRetry = async () => {
@@ -194,7 +220,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     { name: '/draft', description: '进入写作阶段', source: 'app', action: () => { onStageChange?.('drafting'); sendMessage({ projectId, agentId, skillId, stage: 'drafting', message: '切换到写作阶段' }); } },
     { name: '/revision', description: '进入修改阶段', source: 'app', action: () => { onStageChange?.('revision'); sendMessage({ projectId, agentId, skillId, stage: 'revision', message: '切换到修改阶段' }); } },
     { name: '/polish', description: '进入润色阶段', source: 'app', action: () => { onStageChange?.('polish'); sendMessage({ projectId, agentId, skillId, stage: 'polish', message: '切换到润色阶段' }); } },
-    { name: '/new', description: '开始新对话', source: 'app', action: () => { setActiveConversationId(null); resetConversation(); } },
+    { name: '/new', description: '开始新对话', source: 'app', action: () => { setActiveConversationId(null); resetConversation(); setPendingRevise(null); } },
     { name: '/import', description: '导入源文本并逆向拆书（/import <文件或目录路径>）', source: 'app' },
     { name: '/enrich', description: '补全缺失的结构化数据（state/outline-meta/关系图，只增不覆盖）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage: 'enrich', message: '扫描并补全缺失的结构化数据' }); } },
     { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage, message: last.content }); } },
@@ -482,6 +508,12 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       )}
 
       <div className={inputArea} style={{ position: 'relative' }}>
+        {pendingRevise && (
+          <div className={reviseBanner}>
+            <span>📌 正在修订 {pendingRevise.targetFile}{pendingRevise.sectionTitle ? ` · ${pendingRevise.sectionTitle}` : ''}</span>
+            <button className={reviseBannerClose} onClick={() => setPendingRevise(null)} title="退出修订模式">✕</button>
+          </div>
+        )}
         {showCommands && filteredCommands.length > 0 && (
           <div className={autocompleteDropdown}>
             {filteredCommands.map((cmd, i) => (
@@ -536,7 +568,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           ref={textareaRef}
           className={textarea}
           rows={2}
-          placeholder="输入消息，/ 查看命令，@ 引用文件..."
+          placeholder={pendingRevise ? `输入对 ${pendingRevise.targetFile} 的修订意见...` : '输入消息，/ 查看命令，@ 引用文件...'}
           value={input}
           onChange={(e) => {
             const val = e.target.value;
