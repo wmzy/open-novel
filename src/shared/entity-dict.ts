@@ -29,7 +29,24 @@ export interface EntityRef {
 const STOPWORDS = new Set([
   '江湖', '天下', '武林', '中原', '江湖人', '武林中人',
   '主角', '反派', '配角', '师父', '师兄', '师弟', '师姐', '师妹',
+  // 分类标题词（真实档案的 section 常见名）
+  '基本信息', '时间线', '性格', '性格特征', '外貌', '外貌特征', '背景', '背景故事',
+  '动机', '目标', '冲突', '功能', '定位', '作用', '关系', '关键关系',
+  '家族', '驱动力', '驱动力三角', '成长弧线', '思想演变', '社会身份',
+  '装备', '语言习惯', '行为习惯', '核心性格', '武学状态', '三不朽',
+  '基本信息', '核心设定', '组织形态', '传承内容', '代表人物', '智囊人物',
+  '历史与政治', '社会结构', '文化特征', '经济基础', '世界规则', '世界冲突',
+  '时代背景', '地理环境', '地理运用原则', '物理规则', '真实制度',
 ]);
+
+/** 标题含这些模式则为描述性分类，不入词典：「故事舞台：真实的明初天下」「侠道——不是组织」。 */
+function isDescriptiveTitle(title: string): boolean {
+  // 含全角冒号、破折号、逗号、书名号等的描述性标题
+  if (/[：:——，,。]|——|《|》/.test(title)) return true;
+  // 以常见分类尾词结尾：「主要地点及其故事功能」「在故事中的作用」
+  if (/(作用|功能|定位|原则|特征|演变|状态|结构|关系|背景|阶段|习惯|含义|生态|守则)$/.test(title)) return true;
+  return false;
+}
 
 /** 文件类型推断：按路径关键词。 */
 type FileType = 'profiles' | 'world' | 'weapon' | 'martial' | 'sect' | 'other';
@@ -120,20 +137,22 @@ export function buildEntityDict(
       titleColonIdx >= 0
         ? extractNameFromTitle(doc.title.slice(titleColonIdx + 1))
         : '';
-    const docTitleAlias = extractAliasFromTitle(doc.title);
+    // 注意：不从文档标题括号提取 alias——「# 重要背景角色：剑城（父亲）」的括号是定位说明不是外号
     const fullRaw = content;
 
     for (const section of doc.sections) {
       const sectionRaw = `## ${section.title}\n\n${section.fullRawMd}`;
 
       if (fileType === 'profiles') {
-        processProfilesSection(section, path, sectionRaw, add, docTitleName, docTitleAlias, fullRaw);
+        processProfilesSection(section, path, sectionRaw, add, docTitleName, fullRaw);
       } else if (fileType === 'world') {
         processWorldSection(section, path, add);
       } else {
-        // weapon / martial / sect：## 标题即实体名
+        // weapon / martial / sect：## 标题为实体名（过滤描述性标题）
         const titleName = extractNameFromTitle(section.title);
-        if (titleName) add(titleName, fileType, path, section.title, sectionRaw);
+        if (titleName && !isDescriptiveTitle(section.title)) {
+          add(titleName, fileType, path, section.title, sectionRaw);
+        }
         // martial 文件额外解析招式
         if (fileType === 'martial') {
           processMoves(section, path, add);
@@ -151,21 +170,26 @@ function processProfilesSection(
   sectionRaw: string,
   add: AddFn,
   docTitleName: string,
-  docTitleAlias: string | null,
   fullRaw: string,
 ) {
   // 字段名去 markdown 强调标记后比较：**姓名** → 姓名
   const nameField = section.fields.find((f) => cleanMdEmphasis(f.key) === '姓名');
-  if (nameField) {
-    const name = primaryName(nameField.value);
-    add(name, 'character', file, section.title, fullRaw);
+  const sectionName = nameField ? primaryName(nameField.value) : '';
+
+  // 角色：姓名字段值（最可靠来源）
+  if (sectionName) {
+    add(sectionName, 'character', file, section.title, fullRaw);
   }
   // 文档标题里的名字（如「# 主角：剑平」→「剑平」），兼容无 姓名 字段的档案
   if (docTitleName) add(docTitleName, 'character', file, section.title, fullRaw);
-  // 标题里的名字（如「## 林冲」）
+  // 标题里的名字：仅当标题与姓名字段值一致时（如「## 林冲」+「- 姓名：林冲」）。
+  // 分类标题（「基本信息」「时间线」）与姓名值不一致，不入词典。
   const titleName = extractNameFromTitle(section.title);
-  if (titleName) add(titleName, 'character', file, section.title, sectionRaw);
+  if (titleName && titleName === sectionName) {
+    add(titleName, 'character', file, section.title, sectionRaw);
+  }
 
+  // 外号/绰号字段值
   const aliasField = section.fields.find(
     (f) => cleanMdEmphasis(f.key) === '外号' || cleanMdEmphasis(f.key) === '绰号',
   );
@@ -173,34 +197,40 @@ function processProfilesSection(
     const alias = primaryName(aliasField.value);
     add(alias, 'alias', file, section.title, fullRaw);
   }
-  const titleAlias = extractAliasFromTitle(section.title) ?? docTitleAlias;
-  if (titleAlias) add(titleAlias, 'alias', file, section.title, fullRaw);
+  // 标题括号里的外号：仅当标题是角色名时才取（防「基本信息（必读）」这类深分类词）
+  if (titleName && titleName === sectionName) {
+    const titleAlias = extractAliasFromTitle(section.title);
+    if (titleAlias) add(titleAlias, 'alias', file, section.title, sectionRaw);
+  }
 }
 
 function processWorldSection(section: MdSection, file: string, add: AddFn) {
   const title = section.title;
-  // 地理节：### 子标题为地名
+  // 地理节：### 子标题为地名（过滤描述性标题）
   if (PLACE_KEYS.test(title)) {
     for (const sub of section.subsections) {
-      if (isValidName(sub.title)) {
+      if (isValidName(sub.title) && !isDescriptiveTitle(sub.title)) {
         add(sub.title, 'place', file, sub.title, `### ${sub.title}\n\n${sub.rawMd}`);
       }
     }
   }
   // 武功节：标题本身 + 招式
   if (MARTIAL_KEYS.test(title)) {
-    add(extractNameFromTitle(title), 'martial', file, title, `## ${title}\n\n${section.fullRawMd}`);
+    const name = extractNameFromTitle(title);
+    if (name && !isDescriptiveTitle(title)) add(name, 'martial', file, title, `## ${title}\n\n${section.fullRawMd}`);
     processMoves(section, file, add);
   }
   // 兵器节
   if (WEAPON_KEYS.test(title)) {
-    add(extractNameFromTitle(title), 'weapon', file, title, `## ${title}\n\n${section.fullRawMd}`);
+    const name = extractNameFromTitle(title);
+    if (name && !isDescriptiveTitle(title)) add(name, 'weapon', file, title, `## ${title}\n\n${section.fullRawMd}`);
   }
   // 门派节
   if (SECT_KEYS.test(title)) {
-    add(extractNameFromTitle(title), 'sect', file, title, `## ${title}\n\n${section.fullRawMd}`);
+    const name = extractNameFromTitle(title);
+    if (name && !isDescriptiveTitle(title)) add(name, 'sect', file, title, `## ${title}\n\n${section.fullRawMd}`);
     for (const sub of section.subsections) {
-      if (isValidName(sub.title)) {
+      if (isValidName(sub.title) && !isDescriptiveTitle(sub.title)) {
         add(sub.title, 'sect', file, sub.title, `### ${sub.title}\n\n${sub.rawMd}`);
       }
     }
