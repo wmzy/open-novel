@@ -166,11 +166,11 @@ export default function CharacterView({ projectId }: Props) {
               <div className={charFields}>
                 {hasDirect || hasSubs ? (
                   <>
-                    {hasDirect && <CardContent rawMd={s.rawMd} mode={viewMode} />}
+                    {hasDirect && <CardContent rawMd={s.rawMd} mode={viewMode} projectId={projectId} />}
                     {s.subsections.map((sub, j) => (
                       <div key={`sub${j}`}>
                         <div className={subTitle}>{sub.title}</div>
-                        <CardContent rawMd={sub.rawMd} mode={viewMode} />
+                        <CardContent rawMd={sub.rawMd} mode={viewMode} projectId={projectId} />
                       </div>
                     ))}
                   </>

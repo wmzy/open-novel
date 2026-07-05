@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { css } from '@linaria/core';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { EntityMarkdown } from './EntityMarkdown';
+import { useEntityDict } from '@/web/hooks/useEntityDict';
 
 const container = css`
   border: 1px solid var(--haze-color-border);
@@ -72,6 +72,7 @@ interface Props {
 
 export default function FilePreview({ projectId, filePath, content, loading }: Props) {
   const [raw, setRaw] = useState(false);
+  const { dict } = useEntityDict(projectId);
 
   if (!filePath) {
     return (
@@ -113,7 +114,7 @@ export default function FilePreview({ projectId, filePath, content, loading }: P
       </div>
       {isMarkdown && !raw ? (
         <div className={content}>
-          <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+          <EntityMarkdown content={content} dict={dict} projectId={projectId} />
         </div>
       ) : (
         <div className={rawContent}>{content}</div>

@@ -76,7 +76,7 @@ function stripScenePrefix(title: string): string {
   return (m ? m[1] : title).trim();
 }
 
-function renderSceneCard(sub: MdSubsection, keyPrefix: string, index: number, viewMode: ViewMode) {
+function renderSceneCard(sub: MdSubsection, keyPrefix: string, index: number, viewMode: ViewMode, projectId: string) {
   const active = isActive(sub.title);
   const color = active ? ACTIVE_COLOR : PASSIVE_COLOR;
   const cardStyle: CSSProperties = { borderLeft: `3px solid ${color}` };
@@ -88,7 +88,7 @@ function renderSceneCard(sub: MdSubsection, keyPrefix: string, index: number, vi
         </span>
         <span className={sceneTitle}>{stripScenePrefix(sub.title)}</span>
       </div>
-      <CardContent rawMd={sub.rawMd} mode={viewMode} />
+      <CardContent rawMd={sub.rawMd} mode={viewMode} projectId={projectId} />
     </div>
   );
 }
@@ -115,12 +115,12 @@ export default function SceneView({ projectId }: Props) {
       <div className={chapterGroupTitle}>{s.title}</div>
       {s.subsections.length > 0 ? (
         <div className={sceneGrid}>
-          {s.subsections.map((sub, j) => renderSceneCard(sub, `sub-${i}`, j, viewMode))}
+          {s.subsections.map((sub, j) => renderSceneCard(sub, `sub-${i}`, j, viewMode, projectId))}
         </div>
       ) : (
         // 没有子场景时，直接渲染分组全部内容
         <div className={sceneGrid}>
-          <div className={card}><CardContent rawMd={s.fullRawMd} mode={viewMode} /></div>
+          <div className={card}><CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} /></div>
         </div>
       )}
     </div>

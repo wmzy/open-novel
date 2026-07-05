@@ -383,7 +383,7 @@ export default function WuxiaView({ projectId }: Props) {
                   style={{ borderLeft: `3px solid ${group.color}` } as CSSProperties}
                 >
                   <div className={cardTitle}>{item.title}</div>
-                  <CardContent rawMd={item.rawMd} mode={viewMode} />
+                  <CardContent rawMd={item.rawMd} mode={viewMode} projectId={projectId} />
                 </div>
               ))}
             </div>
@@ -414,7 +414,7 @@ export default function WuxiaView({ projectId }: Props) {
                     {empty ? (
                       <span className={dimEmpty}>暂无内容</span>
                     ) : (
-                      <CardContent rawMd={s.fullRawMd} mode={viewMode} />
+                      <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
                     )}
                   </div>
                 );
@@ -453,7 +453,7 @@ export default function WuxiaView({ projectId }: Props) {
                         {empty ? (
                           <span className={subEmpty}>暂无内容</span>
                         ) : (
-                          <CardContent rawMd={sub.rawMd} mode={viewMode} />
+                          <CardContent rawMd={sub.rawMd} mode={viewMode} projectId={projectId} />
                         )}
                       </div>
                     );

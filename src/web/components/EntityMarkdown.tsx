@@ -74,9 +74,11 @@ interface Props {
   dict: Map<string, EntityRef>;
   /** 预留：未来弹窗内可展示该实体出现过的章节（当前未直接使用）。 */
   projectId: string;
+  /** 可选：传给 react-markdown 顶层容器的 className（如复用卡片样式）。 */
+  className?: string;
 }
 
-export function EntityMarkdown({ content, dict, projectId: _projectId }: Props) {
+export function EntityMarkdown({ content, dict, projectId: _projectId, className }: Props) {
   const [dialogEntity, setDialogEntity] = useState<EntityRef | null>(null);
 
   const ctxValue = useMemo<CtxValue>(
@@ -99,7 +101,7 @@ export function EntityMarkdown({ content, dict, projectId: _projectId }: Props) 
 
   return (
     <EntityContext.Provider value={ctxValue}>
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown remarkPlugins={[remarkGfm]} components={components} className={className}>
         {content || '*No content*'}
       </Markdown>
       {dialogEntity && (

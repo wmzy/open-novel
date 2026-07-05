@@ -153,7 +153,7 @@ export default function OutlineView({ projectId }: Props) {
         </button>
         {isOpen && (
           <div className={chapterBody}>
-            <CardContent rawMd={s.fullRawMd} mode={viewMode} />
+            <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
           </div>
         )}
       </div>

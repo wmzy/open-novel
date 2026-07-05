@@ -76,7 +76,7 @@ export default function WorldView({ projectId }: Props) {
         {empty ? (
           <div className={emptyValue}>暂无内容，在聊天面板补充 /world</div>
         ) : (
-          <CardContent rawMd={s.fullRawMd} mode={viewMode} />
+          <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
         )}
       </div>
     );

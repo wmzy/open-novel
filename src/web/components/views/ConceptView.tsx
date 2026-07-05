@@ -125,7 +125,7 @@ export default function ConceptView({ projectId }: Props) {
             <p className={loglineText} style={{ opacity: 0.55, fontWeight: 400 }}>暂未填写</p>
           )
         ) : (
-          <CardContent rawMd={s.fullRawMd} mode={viewMode} />
+          <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
         )}
       </div>
     );

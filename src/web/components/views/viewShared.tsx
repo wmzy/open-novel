@@ -2,8 +2,8 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { css } from '@linaria/core';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { EntityMarkdown } from '../EntityMarkdown';
+import { useEntityDict } from '@/web/hooks/useEntityDict';
 import { isPlaceholder, parseSections } from './parseSections';
 import type { MdField, MdSection } from './parseSections';
 
@@ -399,18 +399,23 @@ export function useViewMode(): [ViewMode, (m: ViewMode) => void] {
  * 卡片内容：根据 mode 渲染 Markdown 或源码。
  * `rawMd` 为空时显示占位提示。
  */
-export function CardContent({ rawMd, mode }: { rawMd: string; mode: ViewMode }) {
+export function CardContent({
+  rawMd,
+  mode,
+  projectId,
+}: {
+  rawMd: string;
+  mode: ViewMode;
+  projectId: string;
+}) {
+  const { dict } = useEntityDict(projectId);
   if (!rawMd || !rawMd.trim()) {
     return <span className={emptyInline}>暂无内容</span>;
   }
   if (mode === 'source') {
     return <pre className={sourcePre}>{rawMd}</pre>;
   }
-  return (
-    <Markdown remarkPlugins={[remarkGfm]} className={markdownBody}>
-      {rawMd}
-    </Markdown>
-  );
+  return <EntityMarkdown content={rawMd} dict={dict} projectId={projectId} className={markdownBody} />;
 }
 
 /** 判断分组是否完全为空（无任何可渲染内容，或内容全是模板占位符）。 */
