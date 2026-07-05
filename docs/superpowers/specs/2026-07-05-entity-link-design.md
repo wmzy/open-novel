@@ -300,7 +300,6 @@ export function useEntityDict(projectId: string): {
 - ❌ AI 识别实体——纯前端解析足够，调 LLM 成本高、速度慢，与项目纯函数倾向冲突
 - ❌ 字段化卡片弹窗——档案原文渲染统一且信息完整，字段化要为每类实体写解析+布局，过度工程
 - ❌ 章节 edit 模式链接——textarea 是原始文本，不可注入 React 组件
-- ❌ 其他视图（CharacterView/WuxiaView 等）链接——卡片本身就在展示档案，循环链接无意义
 - ❌ Aho-Corasick 多模式匹配——当前词典规模 O(n·m) 足够，未来词典爆炸再优化
 - ❌ 跨章节实体统计/索引——超出本功能范围
 
@@ -335,3 +334,52 @@ export function useEntityDict(projectId: string): {
    - 武侠项目：武器/武功/门派名也应可链接
    - 全新空项目：正文无链接，无报错（降级验证）
    - edit 模式：textarea 保持原始文本，无链接
+   - 打开任一档案/设定视图（角色/世界观/概念/大纲/场景/武侠）卡片 → 卡片 markdown 中提及的他实体名也应可点击
+   - 打开文件预览器看任意 `.md` 档案 → 预览模式中实体名可点击
+
+---
+
+## 11. 扩展到档案/设定视图（2026-07-05 增补）
+
+**动机**：初版仅章节正文预览支持实体链接。作者在浏览「角色」「世界观」「概念」「大纲」「场景」「武侠」等视图卡片、以及「文件预览器」看任意 `.md` 档案时，同样会遇到跨实体的相互引用（如角色档案里提到某武功、世界观里提到某门派），希望这些地方也能点击查看档案。
+
+### 11.1 范围
+
+| 位置 | 纳入 | 说明 |
+|---|---|---|
+| `viewShared.CardContent`（6 视图共用：Character/Concept/World/Outline/Scene/Wuxia） | ✅ | 单点接入，一处改动覆盖所有档案/设定视图卡片 |
+| `FilePreview`（任意 `.md` 文件预览） | ✅ | 预览分支（非源码分支）生效 |
+| `EditorPanel` 章节预览 | ✅（初版已做） | 不变 |
+| `EntityDetailDialog` 弹窗内档案原文 | ❌ | 递归链接暂不做，避免弹窗层级复杂化；YAGNI |
+| `AgentMessage` AI 对话消息 | ❌ | AI 可能提及未建档名字，点击无反馈体验差；YAGNI |
+
+### 11.2 方案
+
+**复用已有的 `EntityMarkdown`**，组件内自助 hook（与 `EditorPanel` 已有模式一致）：
+
+- `viewShared.CardContent` 加 `projectId` 参数；`mode==='md'` 分支由 `<Markdown>` 改为 `<EntityMarkdown>`；`source` 模式不变（保持源码显示）。
+- `FilePreview` 加 `projectId` 参数；`isMarkdown && !raw` 预览分支由 `<Markdown>` 改为 `<EntityMarkdown>`；源码分支不变。
+- 各组件内部 `useEntityDict(projectId)` → react-query 按 queryKey 全局缓存（与 EditorPanel 共享同一份档案拉取请求，零重复拉取）。
+
+### 11.3 为什么不用 React Context 统一注入词典
+
+项目现有模式是「组件内调 `useEntityDict`」（EditorPanel 如此）；react-query 缓存已消除重复请求，Context 的抽象收益不抵引入跨组件层级的复杂度。保持一致。
+
+### 11.4 边界处理
+
+- **空词典**（无档案项目）：`EntityMarkdown` 退化为普通 markdown 渲染，零链接零报错（与初版一致）。
+- **`source` 模式**：卡片/文件预览器的源码模式显示原始 markdown 文本，不链接（保持既有行为）。
+- **非 `.md` 文件**（FilePreview）：不受影响。
+- **CardContent 空内容**：仍显示「暂无内容」占位，不调用 EntityMarkdown。
+
+### 11.5 改动文件清单（增补）
+
+| 文件 | 改动 |
+|---|---|
+| `src/web/components/views/viewShared.tsx` | **改** `CardContent` 加 `projectId` 参数，`md` 模式换 `EntityMarkdown` |
+| `src/web/components/FilePreview.tsx` | **改** 加 `projectId` 参数，预览分支换 `EntityMarkdown` |
+| 6 个视图组件（Character/Concept/World/Outline/Scene/Wuxia） | **改** `<CardContent>` 调用点传 `projectId`（各组件已有 `projectId`） |
+| `FilePreview` 调用点 | **改** 传 `projectId` |
+| `tests/integration/entity-link.test.tsx` | **增** CardContent + FilePreview 各 1-2 个集成测试（渲染含实体文本→出现链接→点击弹窗） |
+
+零新增组件、零新增依赖、零后端改动。
