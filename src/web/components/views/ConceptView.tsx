@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
+import { useFileRevision } from '@/web/hooks/useFileRevision';
 
 interface Props {
   projectId: string;
@@ -81,6 +82,7 @@ function isHighlight(title: string): boolean {
 export default function ConceptView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'concept', 'concept.md');
   const [viewMode, setViewMode] = useViewMode();
+  const revision = useFileRevision({ projectId, targetFile: 'concept.md', stage: 'concept' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -130,9 +132,11 @@ export default function ConceptView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>故事概念</h3>
+        <button className={reviseBtn} onClick={() => revision.openDialog()}>✎ 修订</button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
       <div className={conceptGrid}>{sections.map(renderElement)}</div>
+      {revision.dialog}
     </div>
   );
 }
