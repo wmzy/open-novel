@@ -273,25 +273,26 @@ export function useRun(conversationId?: string) {
   function flushDeltas() {
     if (!pendingTextDelta && !pendingThinkingDelta) return;
 
+    // 同步捕获并重置：原先把 pendingTextDelta='' 写在 setMessages 的 updater 里（延迟执行），
+    // 与新到达的 delta 竞态——updater 未跑时新 delta 追加到同一 pending，导致错位合并。
+    const text = pendingTextDelta;
+    const thinking = pendingThinkingDelta;
+    pendingTextDelta = '';
+    pendingThinkingDelta = '';
+    rafId = null;
+
     setMessages((prev) => {
       const updated = [...prev];
       const last = updated[updated.length - 1];
       if (last?.role !== 'assistant') return updated;
 
-      if (pendingTextDelta) {
-        last.events = [...(last.events || []), { kind: 'text', text: pendingTextDelta }];
-        pendingTextDelta = '';
-      }
-      if (pendingThinkingDelta) {
-        last.events = [...(last.events || []), { kind: 'thinking', text: pendingThinkingDelta }];
-        pendingThinkingDelta = '';
-      }
-
-      assistantEventsRef.current = last.events ?? null;
+      const events = [...(last.events || [])];
+      if (text) events.push({ kind: 'text', text });
+      if (thinking) events.push({ kind: 'thinking', text: thinking });
+      last.events = events;
+      assistantEventsRef.current = events;
       return updated;
     });
-
-    rafId = null;
   }
 
   function handleAgentEvent(event: Record<string, unknown>) {
@@ -416,6 +417,15 @@ export function useRun(conversationId?: string) {
   }
 
   function cleanup(runId?: string) {
+    // 流结束时强制 flush：最后一批经 rAF 排队但尚未触发的文本/thinking delta，
+    // 若不在此处 flush 会丢失——实时视图渲染 events[]（非空时忽略 content），
+    // 而后端持久化完整，故表现为「刷新后才看到完整消息」。
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    flushDeltas();
+
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     if (runId) activeRunsRef.current.delete(runId);
