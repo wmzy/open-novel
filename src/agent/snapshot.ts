@@ -22,7 +22,9 @@ export async function ensureGitInit(projectDir: string): Promise<void> {
 }
 
 /**
- * Create a snapshot (git commit) of the current project state.
+ * Create an automatic snapshot (git commit) of the current project state.
+ * Message is prefixed with `[auto]` so UI can distinguish machine snapshots
+ * from user-created milestones.
  */
 export async function createSnapshot(projectDir: string, message: string): Promise<string | null> {
   try {
@@ -39,9 +41,51 @@ export async function createSnapshot(projectDir: string, message: string): Promi
       // There are changes, proceed with commit
     }
 
-    // Commit
-    const { stdout } = await execFileAsync('git', ['commit', '-m', message], { cwd: projectDir });
-    const commitHash = stdout.match(/\[[\w-]+\s+([\w]+)\]/)?.[1] || 'unknown';
+    // Commit with [auto] prefix
+    const autoMessage = `[auto] ${message}`;
+    await execFileAsync('git', ['commit', '-m', autoMessage], { cwd: projectDir });
+
+    // Use rev-parse for reliable hash extraction (commit output format varies
+    // by locale and root-commit vs normal commit)
+    const { stdout: hashOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectDir });
+    return hashOut.trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Create a user milestone snapshot: commit pending changes (if any) and tag
+ * the resulting / latest commit with `milestone-<name>`. Returns commit hash
+ * (may be null if nothing to commit and no HEAD exists yet).
+ */
+export async function createUserSnapshot(projectDir: string, name: string): Promise<string | null> {
+  try {
+    await ensureGitInit(projectDir);
+
+    // Stage all changes
+    await execFileAsync('git', ['add', '-A'], { cwd: projectDir });
+
+    // Commit if there are staged changes; otherwise tag current HEAD
+    let commitHash: string | null = null;
+    try {
+      await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd: projectDir });
+      // No staged changes — use current HEAD
+      const { stdout: headOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectDir });
+      commitHash = headOut.trim();
+    } catch {
+      // Has staged changes — commit them
+      const message = `[milestone] ${name}`;
+      await execFileAsync('git', ['commit', '-m', message], { cwd: projectDir });
+      const { stdout: hashOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectDir });
+      commitHash = hashOut.trim();
+    }
+
+    if (!commitHash) return null;
+
+    // Tag the commit (force to allow re-tagging same name)
+    const tagName = `milestone-${name}`;
+    await execFileAsync('git', ['tag', '-f', tagName, commitHash], { cwd: projectDir });
 
     return commitHash;
   } catch {
@@ -49,19 +93,54 @@ export async function createSnapshot(projectDir: string, message: string): Promi
   }
 }
 
+export interface Snapshot {
+  hash: string;
+  message: string;
+  date: string;
+  /** Tags pointing at this commit (e.g. milestone names). */
+  tags: string[];
+  /** True for machine-generated `[auto] ...` commits. */
+  isAuto: boolean;
+}
+
 /**
- * List recent snapshots (git log).
+ * List recent snapshots (git log), enriched with tags and auto flag.
  */
-export async function listSnapshots(projectDir: string, limit = 20): Promise<Array<{ hash: string; message: string; date: string }>> {
+export async function listSnapshots(projectDir: string, limit = 20): Promise<Snapshot[]> {
   try {
     const { stdout } = await execFileAsync('git', [
       'log', `--max-count=${limit}`, '--format=%H|%s|%ai', '--no-color',
     ], { cwd: projectDir });
 
-    return stdout.trim().split('\n').filter(Boolean).map((line) => {
+    const commits = stdout.trim().split('\n').filter(Boolean).map((line) => {
       const [hash, message, date] = line.split('|');
       return { hash, message, date };
     });
+
+    if (commits.length === 0) return [];
+
+    // Build tag→commit map in one call
+    const tagMap = new Map<string, string[]>(); // commitHash → tagNames
+    try {
+      const { stdout: tagOut } = await execFileAsync('git', [
+        'for-each-ref', '--format=%(refname:short) %(objectname)', 'refs/tags',
+      ], { cwd: projectDir });
+      for (const line of tagOut.trim().split('\n').filter(Boolean)) {
+        const [tagName, commitHash] = line.split(' ');
+        if (!tagName || !commitHash) continue;
+        const arr = tagMap.get(commitHash) || [];
+        arr.push(tagName);
+        tagMap.set(commitHash, arr);
+      }
+    } catch { /* no tags yet */ }
+
+    return commits.map((c) => ({
+      hash: c.hash,
+      message: c.message,
+      date: c.date,
+      tags: tagMap.get(c.hash) || [],
+      isAuto: c.message.startsWith('[auto] '),
+    }));
   } catch {
     return [];
   }

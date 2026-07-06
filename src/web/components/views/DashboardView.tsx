@@ -195,13 +195,29 @@ export default function DashboardView({ projectId }: Props) {
         <div className={section}>
           <div className={sectionTitle}>最近快照</div>
           <div className={snapshotList}>
-            {snapshots.slice(0, 5).map((s: { hash: string; message: string; date: string }) => (
-              <div key={s.hash} className={snapshotItem}>
-                <span style={{ color: 'var(--haze-color-primary)' }}>{s.hash.slice(0, 8)}</span>
-                <span>{s.message}</span>
-                <span style={{ marginLeft: 'auto' }}>{new Date(s.date).toLocaleDateString()}</span>
-              </div>
-            ))}
+            {(snapshots as Array<{ hash: string; message: string; date: string; tags?: string[]; isAuto?: boolean }>)
+              .slice()
+              .sort((a, b) => {
+                const aM = (a.tags || []).length > 0 ? 1 : 0;
+                const bM = (b.tags || []).length > 0 ? 1 : 0;
+                return bM - aM;
+              })
+              .slice(0, 5)
+              .map((s) => (
+                <div key={s.hash} className={snapshotItem} style={
+                  (s.tags || []).length > 0
+                    ? { background: 'var(--haze-color-bg-secondary)', borderLeft: '3px solid var(--haze-color-primary)' }
+                    : undefined
+                }>
+                  <span style={{ color: 'var(--haze-color-primary)' }}>{s.hash.slice(0, 8)}</span>
+                  <span>
+                    {(s.tags || []).length > 0
+                      ? `🏷 ${s.tags!.join(', ').replace(/milestone-/g, '')}`
+                      : s.message}
+                  </span>
+                  <span style={{ marginLeft: 'auto' }}>{new Date(s.date).toLocaleDateString()}</span>
+                </div>
+              ))}
           </div>
         </div>
       )}

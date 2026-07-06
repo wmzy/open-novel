@@ -15,7 +15,7 @@ import type { AgentEvent, StreamEvent } from '../../agent/types';
 import { ensureContextArtifacts, getStateTable } from '../../agent/context-manager';
 import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
-import { createSnapshot, restoreSnapshot, listSnapshots } from '../../agent/snapshot';
+import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
@@ -699,6 +699,20 @@ runsRouter.post('/projects/:projectId/rollback', async (c) => {
   if (!success) return c.json({ error: 'Rollback failed' }, 500);
 
   return c.json({ ok: true });
+});
+
+// Create a user milestone snapshot (commit pending changes + tag)
+runsRouter.post('/projects/:projectId/snapshot', async (c) => {
+  const projectId = c.req.param('projectId');
+  const body = await c.req.json().catch(() => ({}));
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  if (!name) return c.json({ error: 'name is required' }, 400);
+
+  const projectDir = await resolveProjectDir(projectId);
+  const hash = await createUserSnapshot(projectDir, name);
+  if (!hash) return c.json({ error: 'Failed to create snapshot' }, 500);
+
+  return c.json({ ok: true, hash, tag: `milestone-${name}` });
 });
 
 export default runsRouter;

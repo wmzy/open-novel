@@ -242,6 +242,7 @@ export default function ProjectPage() {
   const { readFile, loading: previewLoading } = useFilePreview(id!);
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [snapshotSaving, setSnapshotSaving] = useState(false);
 
   const queryClient = useQueryClient();
   const { data: project, isLoading, error, refetch: refetchProject } = useQuery({
@@ -391,6 +392,29 @@ export default function ProjectPage() {
     }
   };
 
+  const handleSaveSnapshot = async () => {
+    const name = window.prompt('请输入版本名称（如：第3章初稿）');
+    if (!name || !name.trim()) return;
+    setSnapshotSaving(true);
+    try {
+      const res = await fetch(`/api/runs/projects/${id}/snapshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success(`已保存版本「${name.trim()}」`);
+      } else {
+        toast.error(data.error || '保存版本失败');
+      }
+    } catch {
+      toast.error('保存版本失败');
+    } finally {
+      setSnapshotSaving(false);
+    }
+  };
+
   const handleUndo = async () => {
     try {
       const res = await fetch(`/api/runs/projects/${id}/snapshots`);
@@ -461,6 +485,9 @@ export default function ProjectPage() {
             <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown">MD</button>
             <button className={previewToggle} onClick={() => handleExport('text')} title="导出 TXT">TXT</button>
             <button className={previewToggle} onClick={handleUndo} title="撤销上次更改">撤销</button>
+            <button className={previewToggle} onClick={handleSaveSnapshot} disabled={snapshotSaving} title="保存当前状态为版本标记">
+              {snapshotSaving ? '保存中...' : '存版本'}
+            </button>
             <button className={previewToggle} onClick={handleSync} disabled={syncing} title="同步到远程仓库">
               {syncing ? '同步中...' : '同步'}
             </button>
