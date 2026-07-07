@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 
 interface Props {
   targetFile: string;
@@ -70,6 +70,12 @@ const lineContext = css`
   color: var(--haze-color-text-secondary, #888);
 `;
 
+const lineContextExpand = css`
+  cursor: pointer;
+  padding: 0.5rem;
+  text-align: center;
+`;
+
 const MAX_LINES_BEFORE_COLLAPSE = 200;
 const VISIBLE_LINES_WHEN_COLLAPSED = 50;
 
@@ -107,8 +113,7 @@ export default function RevisionDiffPanel({ targetFile, diff, addedLines, remove
         })}
         {shouldCollapse && !expanded && (
           <div
-            className={lineContext}
-            style={{ cursor: 'pointer', padding: '0.5rem', textAlign: 'center' }}
+            className={cx(lineContext, lineContextExpand)}
             onClick={() => setExpanded(true)}
           >
             ▾ 展开全部（共 {lines.length} 行）

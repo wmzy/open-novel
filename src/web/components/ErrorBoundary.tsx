@@ -48,6 +48,11 @@ const details = css`
   color: var(--haze-color-text-secondary);
 `;
 
+const errorStack = css`
+  margin-top: 0.5rem;
+  font-size: 0.7rem;
+`;
+
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
@@ -90,7 +95,7 @@ export default class ErrorBoundary extends Component<Props, State> {
               <summary>错误详情</summary>
               <pre>{this.state.error.message}</pre>
               {this.state.error.stack && (
-                <pre style={{ marginTop: '0.5rem', fontSize: '0.7rem' }}>
+                <pre className={errorStack}>
                   {this.state.error.stack}
                 </pre>
               )}

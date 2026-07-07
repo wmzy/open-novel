@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
@@ -53,6 +53,11 @@ const charFields = css`
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0.4rem;
+`;
+
+const charNameEmpty = css`
+  opacity: 0.55;
+  font-weight: 400;
 `;
 
 /** 子节标题（外貌/性格/背景等）。 */
@@ -177,7 +182,7 @@ export default function CharacterView({ projectId }: Props) {
                     ))}
                   </>
                 ) : (
-                  <span className={charName} style={{ opacity: 0.55, fontWeight: 400 }}>暂无字段</span>
+                  <span className={cx(charName, charNameEmpty)}>暂无字段</span>
                 )}
               </div>
             </div>

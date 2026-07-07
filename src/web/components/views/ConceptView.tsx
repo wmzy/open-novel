@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
@@ -35,6 +35,11 @@ const loglineText = css`
   font-weight: 600;
   line-height: 1.6;
   color: var(--haze-color-text);
+`;
+
+const loglineEmpty = css`
+  opacity: 0.55;
+  font-weight: 400;
 `;
 
 /** 五句话简介编号列表。 */
@@ -123,7 +128,7 @@ export default function ConceptView({ projectId }: Props) {
           s.body.length > 0 ? (
             <p className={loglineText}>{s.body.join(' ')}</p>
           ) : (
-            <p className={loglineText} style={{ opacity: 0.55, fontWeight: 400 }}>暂未填写</p>
+            <p className={cx(loglineText, loglineEmpty)}>暂未填写</p>
           )
         ) : (
           <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />

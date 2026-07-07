@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ToolCard, { toolFamily } from './ToolCard';
@@ -118,6 +118,59 @@ const errorBanner = css`
   margin-top: 0.5rem;
 `;
 
+/** 消息列表顶部 Edit 按钮 */
+const editBtn = css`
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  font-size: 0.7rem;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: 3px;
+`;
+
+/** 底部操作行 */
+const actionRow = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+`;
+
+/** 回复按钮 */
+const replyBtn = css`
+  background: none;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  color: var(--haze-color-text-secondary);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.125rem 0.5rem;
+`;
+
+/** thinking 代码块 pre */
+const thinkingPre = css`
+  white-space: pre-wrap;
+  margin: 0;
+`;
+
+/** thinking 折叠态 */
+const thinkingCollapsed = css`
+  opacity: 0.7;
+`;
+
+/** 工具组 Done 标记 */
+const doneMark = css`
+  color: var(--haze-color-success, #22c55e);
+`;
+
+/** 等待提示（This may take a while） */
+const waitingHint = css`
+  font-size: 0.7rem;
+  opacity: 0.6;
+`;
+
 interface Props {
   role: 'user' | 'assistant';
   content: string;
@@ -220,7 +273,7 @@ export default function AgentMessage({ role, content, events, startedAt, endedAt
           {onResend && (
             <button
               onClick={() => onResend(content)}
-              style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.7)', cursor: 'pointer', fontSize: '0.7rem', marginLeft: '0.5rem', padding: '0.125rem 0.375rem', borderRadius: '3px' }}
+              className={editBtn}
               title="Edit and resend"
             >
               Edit
@@ -253,11 +306,11 @@ export default function AgentMessage({ role, content, events, startedAt, endedAt
 
         {error && <div className={errorBanner}>{error}</div>}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
+        <div className={actionRow}>
           {onReply && content && (
             <button
               onClick={() => onReply(content)}
-              style={{ background: 'none', border: '1px solid var(--haze-color-border)', borderRadius: '4px', color: 'var(--haze-color-text-secondary)', cursor: 'pointer', fontSize: '0.7rem', padding: '0.125rem 0.5rem' }}
+              className={replyBtn}
               title="Reply to this message"
             >
               Reply
@@ -286,9 +339,9 @@ function ThinkingBlock({ text }: { text: string }) {
         {expanded ? '[-]' : '[+]'} Thinking
       </button>
       {expanded ? (
-        <div className={thinkingBlock}><pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{text}</pre></div>
+        <div className={thinkingBlock}><pre className={thinkingPre}>{text}</pre></div>
       ) : (
-        <div className={thinkingBlock} style={{ opacity: 0.7 }}>{preview}</div>
+        <div className={cx(thinkingBlock, thinkingCollapsed)}>{preview}</div>
       )}
     </div>
   );
@@ -313,7 +366,7 @@ function ToolGroupBlock({ items }: { items: Array<{ use: AgentEvent & { kind: 't
     <div className={toolGroup}>
       <button className={toolGroupPill} onClick={() => setExpanded(!expanded)}>
         {expanded ? '[-]' : '[+]'} {familyIcon(family)} {capitalize(family)} x{items.length}
-        {allDone && <span style={{ color: 'var(--haze-color-success, #22c55e)' }}> Done</span>}
+        {allDone && <span className={doneMark}> Done</span>}
       </button>
       {expanded && items.map((item, i) => (
         <ToolCard key={item.use.id || i} use={item.use} result={item.result} streaming={!item.result} />
@@ -336,7 +389,7 @@ function WaitingPill({ startedAt }: { startedAt: number }) {
     <div className={waitingPill}>
       <span className={waitingDot} />
       <span>Thinking{seconds > 0 ? ` ${seconds}s` : ''}...</span>
-      {seconds > 12 && <span style={{ fontSize: '0.7rem', opacity: 0.6 }}>This may take a while</span>}
+      {seconds > 12 && <span className={waitingHint}>This may take a while</span>}
     </div>
   );
 }

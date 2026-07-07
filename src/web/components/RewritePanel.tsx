@@ -39,6 +39,7 @@ const statusLabel = css`
   padding: 0.125rem 0.5rem;
   border-radius: 10px;
   font-weight: 500;
+  color: #fff;
 `;
 
 const statusSelect = css`
@@ -112,6 +113,7 @@ const presetBtn = css`
 const customRow = css`
   display: flex;
   gap: 0.5rem;
+  margin-top: 0.5rem;
 `;
 
 const customInput = css`
@@ -177,6 +179,7 @@ const resultActions = css`
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
+  margin-top: 0.5rem;
 `;
 
 const statusRunning = css`
@@ -348,7 +351,7 @@ export default function RewritePanel({ projectId, chapterNum, agentId = 'claude'
       <div className={toolbar}>
         <div className={toolbarLeft}>
           <span>第 {chapterNum} 章 · 局部重写</span>
-          <span className={statusLabel} style={{ background: statusMeta.bg, color: 'white' }}>{statusMeta.label}</span>
+          <span className={statusLabel} style={{ background: statusMeta.bg }}>{statusMeta.label}</span>
           {saveLabel && <span className={hint}>{saveLabel}</span>}
         </div>
         <div className={toolbarRight}>
@@ -394,7 +397,7 @@ export default function RewritePanel({ projectId, chapterNum, agentId = 'claude'
               </button>
             ))}
           </div>
-          <div className={customRow} style={{ marginTop: '0.5rem' }}>
+          <div className={customRow}>
             <input
               className={customInput}
               value={instruction}
@@ -416,7 +419,7 @@ export default function RewritePanel({ projectId, chapterNum, agentId = 'claude'
             {error && <div className={errorMsg}>{error}</div>}
             <div className={resultBox}>{result || (isRunning ? '…' : '')}</div>
             {!isRunning && result && (
-              <div className={resultActions} style={{ marginTop: '0.5rem' }}>
+              <div className={resultActions}>
                 <button className={ghostBtn} onClick={handleReject}>拒绝</button>
                 <button className={primaryBtn} onClick={handleAccept}>接受并写回</button>
               </div>

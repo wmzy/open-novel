@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import { EntityMarkdown } from '../EntityMarkdown';
 import { useEntityDict } from '@/web/hooks/useEntityDict';
 import { isPlaceholder, parseSections } from './parseSections';
@@ -162,6 +162,27 @@ export const fieldValEmpty = css`
   color: var(--haze-color-text-secondary);
   opacity: 0.55;
   font-style: italic;
+`;
+
+/** 有序列表容器。 */
+const fieldOrderedList = css`
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+`;
+
+/** 有序列表项。 */
+const fieldOrderedItem = css`
+  margin-bottom: 0.25rem;
+`;
+
+/** 原始内容兜底的 pre 标签。 */
+const rawFallbackPre = css`
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--haze-font-mono);
+  font-size: 0.8rem;
+  color: var(--haze-color-text-secondary);
 `;
 
 /** 段落正文。 */
@@ -349,9 +370,9 @@ export function renderBlock(block: BlockLike, emphasize?: (key: string) => CSSPr
         <div key={`i${i}`} className={fieldInline}>{it}</div>
       ))}
       {block.ordered.length > 0 && (
-        <ol style={{ margin: '0.25rem 0 0', paddingLeft: '1.25rem' }}>
+        <ol className={fieldOrderedList}>
           {block.ordered.map((o, i) => (
-            <li key={`o${i}`} className={fieldInline} style={{ marginBottom: '0.25rem' }}>{o}</li>
+            <li key={`o${i}`} className={cx(fieldInline, fieldOrderedItem)}>{o}</li>
           ))}
         </ol>
       )}
@@ -367,7 +388,7 @@ export function RawFallback({ text }: { text: string }) {
   return (
     <div className={card}>
       <div className={cardTitle}>原始内容</div>
-      <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--haze-font-mono)', fontSize: '0.8rem', color: 'var(--haze-color-text-secondary)' }}>
+      <pre className={rawFallbackPre}>
         {text.trim()}
       </pre>
     </div>

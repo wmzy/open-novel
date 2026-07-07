@@ -9,6 +9,7 @@ import { useFileAutocomplete } from '@/web/hooks/useFileAutocomplete';
 import { REVISE_TO_CHAT_EVENT } from '@/web/hooks/useFileRevision';
 import AgentMessage from './AgentMessage';
 import RevisionDiffPanel from './RevisionDiffPanel';
+import { css, cx } from '@linaria/core';
 import {
   panel, toolbar, select, iconBtn, messages, statusStrip, statusDot,
   inputArea, textarea, sendBtn, stopBtn, jumpBtn, emptyState,
@@ -40,6 +41,28 @@ const DEFAULT_MODELS = [
   { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   { id: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
 ];
+
+/** 空状态提示文字 */
+const emptyHint = css`
+  font-size: 0.75rem;
+  opacity: 0.7;
+`;
+
+/** 活跃运行数标记 */
+const activeCount = css`
+  opacity: 0.7;
+`;
+
+/** 错误重试包裹 */
+const errorRetryWrap = css`
+  padding: 0.5rem 1rem;
+`;
+
+/** 重试按钮全宽 */
+const retryBtnFull = css`
+  width: 100%;
+  font-size: 0.8rem;
+`;
 
 export default function ChatPanel({ projectId, agentId, skillId, stage, onStageChange, onAgentChange }: Props) {
   const [input, setInput] = useState('');
@@ -342,7 +365,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         {chatMessages.length === 0 && (
           <div className={emptyState}>
             <div>开始对话</div>
-            <div style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+            <div className={emptyHint}>
               输入消息开始与 AI 助手协作创作
             </div>
           </div>
@@ -394,13 +417,13 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         <div className={statusStrip}>
           <span className={statusDot} />
           <span>{status || '运行中...'}</span>
-          {activeRunCount > 1 && <span style={{ opacity: 0.7 }}>({activeRunCount} active)</span>}
+          {activeRunCount > 1 && <span className={activeCount}>({activeRunCount} active)</span>}
         </div>
       )}
 
       {hasError && !isRunning && (
-        <div style={{ padding: '0.5rem 1rem' }}>
-          <button className={stopBtn} style={{ width: '100%', fontSize: '0.8rem' }} onClick={handleRetry}>
+        <div className={errorRetryWrap}>
+          <button className={cx(stopBtn, retryBtnFull)} onClick={handleRetry}>
             重试
           </button>
         </div>
@@ -507,7 +530,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         </div>
       )}
 
-      <div className={inputArea} style={{ position: 'relative' }}>
+      <div className={inputArea}>
         {pendingRevise && (
           <div className={reviseBanner}>
             <span>📌 正在修订 {pendingRevise.targetFile}{pendingRevise.sectionTitle ? ` · ${pendingRevise.sectionTitle}` : ''}</span>

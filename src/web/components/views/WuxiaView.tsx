@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import { useQueries } from '@tanstack/react-query';
 import {
   useNovelFile,
@@ -181,6 +181,11 @@ const subEmpty = css`
   color: var(--haze-color-text-secondary);
   opacity: 0.55;
   font-style: italic;
+`;
+
+/** 角色武学路数维度标题：固定青色，区别于其它维度的动态色。 */
+const martialDimTitle = css`
+  color: #0ea5e9;
 `;
 
 /** 从角色标题提取姓名："一、林冲（主角）" → "林冲"。 */
@@ -429,7 +434,7 @@ export default function WuxiaView({ projectId }: Props) {
         <>
           <hr className={divider} />
           <div className={dimHeading}>
-            <span className={dimTitle} style={{ color: '#0ea5e9' } as CSSProperties}>
+            <span className={cx(dimTitle, martialDimTitle)}>
               角色武学路数
             </span>
             <span className={dimHint}>各角色的能力、手段、武学传承</span>

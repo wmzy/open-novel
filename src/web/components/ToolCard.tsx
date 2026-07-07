@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import type { AgentEvent } from '@/agent/types';
 
 const card = css`
@@ -110,6 +110,39 @@ const selectedOption = css`
   color: white;
 `;
 
+const errorOutput = css`
+  color: var(--haze-color-error, #ef4444);
+`;
+
+const answeredLabel = css`
+  font-size: 0.8rem;
+  color: var(--haze-color-text-secondary);
+`;
+
+const questionTitle = css`
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+`;
+
+const questionHeader = css`
+  color: var(--haze-color-primary);
+  margin-right: 0.5rem;
+`;
+
+const optionDescription = css`
+  font-size: 0.75rem;
+  opacity: 0.8;
+`;
+
+const submitBtn = css`
+  margin-top: 0.75rem;
+  background: var(--haze-color-primary);
+  color: white;
+  border: none;
+  text-align: center;
+`;
+
 interface Props {
   use: AgentEvent & { kind: 'tool_use' };
   result?: AgentEvent & { kind: 'tool_result' };
@@ -149,7 +182,7 @@ export default function ToolCard({ use, result, streaming, runId }: Props) {
         <OutputBlock content={result.content} />
       )}
       {result?.isError && result.content && (
-        <div className={output} style={{ color: 'var(--haze-color-error, #ef4444)' }}>{truncate(result.content, 4000)}</div>
+        <div className={cx(output, errorOutput)}>{truncate(result.content, 4000)}</div>
       )}
     </div>
   );
@@ -187,7 +220,7 @@ function AskUserQuestionCard({ use, result, runId }: Props) {
   if (result || submitted) {
     return (
       <div className={questionCard}>
-        <div style={{ fontSize: '0.8rem', color: 'var(--haze-color-text-secondary)' }}>
+        <div className={answeredLabel}>
           Answered
         </div>
       </div>
@@ -201,8 +234,8 @@ function AskUserQuestionCard({ use, result, runId }: Props) {
         const multiSelect = q.multiSelect === true;
         return (
           <div key={qi}>
-            <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-              {q.header ? <span style={{ color: 'var(--haze-color-primary)', marginRight: '0.5rem' }}>{String(q.header)}</span> : null}
+            <div className={questionTitle}>
+              {q.header ? <span className={questionHeader}>{String(q.header)}</span> : null}
               {String(q.question)}
             </div>
             {options.map((opt: Record<string, unknown>, oi: number) => {
@@ -220,7 +253,7 @@ function AskUserQuestionCard({ use, result, runId }: Props) {
                   }}
                 >
                   <strong>{String(opt.label)}</strong>
-                  {opt.description ? <div style={{ fontSize: '0.75rem', opacity: 0.8 }}>{String(opt.description)}</div> : null}
+                  {opt.description ? <div className={optionDescription}>{String(opt.description)}</div> : null}
                 </button>
               );
             })}
@@ -228,8 +261,7 @@ function AskUserQuestionCard({ use, result, runId }: Props) {
         );
       })}
       <button
-        className={optionBtn}
-        style={{ marginTop: '0.75rem', background: 'var(--haze-color-primary)', color: 'white', border: 'none', textAlign: 'center' }}
+        className={cx(optionBtn, submitBtn)}
         onClick={handleSubmit}
         disabled={Object.keys(answers).length === 0}
       >

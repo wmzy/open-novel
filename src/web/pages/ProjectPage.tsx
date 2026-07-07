@@ -196,6 +196,26 @@ const retryBtn = css`
   &:hover { background: var(--haze-color-bg); }
 `;
 
+/* 编辑器与重写面板外层容器 */
+const editorWrap = css`
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: 100%;
+`;
+
+const editorContent = css`
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+`;
+
+const toolbarActions = css`
+  display: flex;
+  gap: 0.375rem;
+  margin-left: auto;
+`;
+
 function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: { activeView: string; projectId: string; onViewChange: (view: string) => void; agentId: string; skillId: string }) {
   if (activeView === 'dashboard') return <DashboardView projectId={projectId} />;
   if (activeView === 'concept') return <ConceptView projectId={projectId} />;
@@ -211,8 +231,8 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: {
   if (activeView.startsWith('chapter-')) {
     const num = parseInt(activeView.replace('chapter-', ''), 10);
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%' }}>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+      <div className={editorWrap}>
+        <div className={editorContent}>
           <EditorPanel projectId={projectId} chapterNum={num} agentId={agentId} skillId={skillId} />
         </div>
         <details className={rewriteDetails}>
@@ -481,7 +501,7 @@ export default function ProjectPage() {
           <Link to="/" className={backLink}>← 首页</Link>
           <h2>{project.title}</h2>
           <WorkflowProgress currentStage={project.currentStage} onStageClick={handleViewChange} />
-          <div style={{ display: 'flex', gap: '0.375rem', marginLeft: 'auto' }}>
+          <div className={toolbarActions}>
             <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown">MD</button>
             <button className={previewToggle} onClick={() => handleExport('text')} title="导出 TXT">TXT</button>
             <button className={previewToggle} onClick={handleUndo} title="撤销上次更改">撤销</button>

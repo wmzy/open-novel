@@ -88,6 +88,13 @@ const emptyHint = css`
   & h3 { margin-bottom: 0.5rem; color: var(--haze-color-text); }
 `;
 
+/** 章节右侧操作栏。 */
+const chapterActions = css`
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+`;
+
 const statusLabels: Record<string, string> = {
   draft: '草稿',
   review: '审阅中',
@@ -147,7 +154,7 @@ export default function WritingView({
               第 {c.number} 章 {c.title}
               <span className={statusBadge}>{statusLabels[c.status] || c.status}</span>
             </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span className={chapterActions}>
               <span className={chapterMeta}>{(c.wordCount || 0).toLocaleString()} 字</span>
               <button
                 className={reviseBtn}

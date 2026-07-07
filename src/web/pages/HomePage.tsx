@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import { toast } from 'sonner';
 import { useProjects, useCreateProject, useDeleteProject, type ProjectWithMeta } from '@/hooks/useProject';
 import { pageContainer, pageTitle, card, primaryBtn, input, emptyState } from '@/styles/shared';
@@ -100,6 +100,29 @@ const pageInfo = css`
   font-size: 0.8rem;
 `;
 
+/* style={{}} 重构 — 纯静态样式抽取 */
+const pageRoot = css`height:100%;width:100%;display:flex;flex-direction:column;overflow-y:auto;`;
+
+const secondaryBtn = css`background:var(--haze-color-bg-secondary);color:var(--haze-color-text);`;
+
+const cardGap = css`margin-bottom:1rem;`;
+
+const formGrid = css`display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;`;
+
+const fullWidth = css`grid-column:1 / -1;`;
+
+const inputFull = css`width:100%;`;
+
+const fieldLabel = css`display:block;font-size:0.8rem;margin-bottom:0.25rem;color:var(--haze-color-text-secondary);`;
+
+const actionRow = css`margin-top:0.75rem;display:flex;gap:0.5rem;`;
+
+const importGrid = css`display:grid;gap:0.75rem;`;
+
+const pathMissingBadge = css`display:inline-block;background:#fef3c7;color:#92400e;padding:0.125rem 0.375rem;border-radius:4px;font-size:0.7rem;margin-left:0.5rem;`;
+
+const projectMeta = css`margin-top:0.5rem;color:var(--haze-color-text-secondary);font-size:0.875rem;`;
+
 const genreLabels: Record<string, string> = {
   general: '通用',
   wuxia: '武侠',
@@ -198,7 +221,7 @@ export default function HomePage() {
   };
 
   return (
-    <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+    <div className={pageRoot}>
       <NavHeader />
       <div className={pageContainer}>
       <div className={header}>
@@ -207,18 +230,18 @@ export default function HomePage() {
           <input className={input} placeholder="搜索项目..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         </div>
         <button className={primaryBtn} onClick={() => setShowCreate(true)}>新建项目</button>
-        <button className={primaryBtn} onClick={() => setShowImport(true)} style={{ background: 'var(--haze-color-bg-secondary)', color: 'var(--haze-color-text)' }}>打开项目</button>
+        <button className={cx(primaryBtn, secondaryBtn)} onClick={() => setShowImport(true)}>打开项目</button>
       </div>
 
       {showCreate && (
-        <div className={card} style={{ marginBottom: '1rem' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <input className={input} placeholder="小说标题" value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleCreate()} style={{ width: '100%' }} />
+        <div className={cx(card, cardGap)}>
+          <div className={formGrid}>
+            <div className={fullWidth}>
+              <input className={cx(input, inputFull)} placeholder="小说标题" value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleCreate()} />
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>类型</label>
-              <select className={input} value={genre} onChange={(e) => setGenre(e.target.value)} style={{ width: '100%' }}>
+              <label className={fieldLabel}>类型</label>
+              <select className={cx(input, inputFull)} value={genre} onChange={(e) => setGenre(e.target.value)}>
                 <option value="general">通用</option>
                 <option value="wuxia">武侠</option>
                 <option value="fantasy">奇幻</option>
@@ -229,27 +252,26 @@ export default function HomePage() {
               </select>
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>目标字数</label>
-              <input className={input} type="number" value={targetWords} onChange={(e) => setTargetWords(e.target.value)} style={{ width: '100%' }} />
+              <label className={fieldLabel}>目标字数</label>
+              <input className={cx(input, inputFull)} type="number" value={targetWords} onChange={(e) => setTargetWords(e.target.value)} />
             </div>
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>章节数</label>
-              <input className={input} type="number" value={chapterCount} onChange={(e) => setChapterCount(e.target.value)} style={{ width: '100%' }} />
+              <label className={fieldLabel}>章节数</label>
+              <input className={cx(input, inputFull)} type="number" value={chapterCount} onChange={(e) => setChapterCount(e.target.value)} />
             </div>
-            <div style={{ gridColumn: '1 / -1' }}>
-              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
+            <div className={fullWidth}>
+              <label className={fieldLabel}>
                 项目目录
               </label>
               <input
-                className={input}
+                className={cx(input, inputFull)}
                 placeholder="/home/user/novels/my-novel"
                 value={projectPath}
                 onChange={(e) => setProjectPath(e.target.value)}
-                style={{ width: '100%' }}
               />
             </div>
           </div>
-          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+          <div className={actionRow}>
             <button className={primaryBtn} onClick={handleCreate}>创建</button>
             <button onClick={() => setShowCreate(false)}>取消</button>
           </div>
@@ -257,23 +279,22 @@ export default function HomePage() {
       )}
 
       {showImport && (
-        <div className={card} style={{ marginBottom: '1rem' }}>
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
+        <div className={cx(card, cardGap)}>
+          <div className={importGrid}>
             <div>
-              <label style={{ display: 'block', fontSize: '0.8rem', marginBottom: '0.25rem', color: 'var(--haze-color-text-secondary)' }}>
+              <label className={fieldLabel}>
                 项目目录（包含 .novel/ 结构）
               </label>
               <input
-                className={input}
+                className={cx(input, inputFull)}
                 placeholder="/home/user/novels/my-novel"
                 value={importPath}
                 onChange={(e) => setImportPath(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleImport()}
-                style={{ width: '100%' }}
               />
             </div>
           </div>
-          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+          <div className={actionRow}>
             <button className={primaryBtn} onClick={handleImport}>打开</button>
             <button onClick={() => { setShowImport(false); setImportPath(''); }}>取消</button>
           </div>
@@ -295,11 +316,11 @@ export default function HomePage() {
                 <h3>{p.title}</h3>
                 <span className={genreBadge}>{genreLabels[p.genre] || p.genre}</span>
                 {p.pathExists === false && (
-                  <span style={{ display: 'inline-block', background: '#fef3c7', color: '#92400e', padding: '0.125rem 0.375rem', borderRadius: '4px', fontSize: '0.7rem', marginLeft: '0.5rem' }}>
+                  <span className={pathMissingBadge}>
                     路径不存在
                   </span>
                 )}
-                <p style={{ marginTop: '0.5rem', color: 'var(--haze-color-text-secondary)', fontSize: '0.875rem' }}>
+                <p className={projectMeta}>
                   {p.chapterCount} 章 · {p.targetWords.toLocaleString()} 字
                 </p>
                 <p className={projectPath} title={p.path}>

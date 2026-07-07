@@ -86,6 +86,7 @@ export const inputArea = css`
   padding: 0.75rem;
   display: flex;
   gap: 0.5rem;
+  position: relative;
 `;
 
 export const textarea = css`

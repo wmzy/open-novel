@@ -102,6 +102,23 @@ const snapshotItem = css`
   font-family: var(--haze-font-mono);
 `;
 
+/** 章节概览字数。 */
+const recentWordCount = css`
+  margin-left: auto;
+  color: var(--haze-color-text-secondary);
+  font-size: 0.75rem;
+`;
+
+/** 快照哈希。 */
+const snapshotHash = css`
+  color: var(--haze-color-primary);
+`;
+
+/** 快照日期。 */
+const snapshotDate = css`
+  margin-left: auto;
+`;
+
 interface Props {
   projectId: string;
 }
@@ -182,7 +199,7 @@ export default function DashboardView({ projectId }: Props) {
               <div key={ch.number} className={recentItem}>
                 <span className={recentDot} style={{ background: (ch.wordCount ?? 0) > 0 ? 'var(--haze-color-success)' : 'var(--haze-color-border)' }} />
                 <span>第 {ch.number} 章 {ch.title || ''}</span>
-                <span style={{ marginLeft: 'auto', color: 'var(--haze-color-text-secondary)', fontSize: '0.75rem' }}>
+                <span className={recentWordCount}>
                   {ch.wordCount || 0} 字
                 </span>
               </div>
@@ -209,13 +226,13 @@ export default function DashboardView({ projectId }: Props) {
                     ? { background: 'var(--haze-color-bg-secondary)', borderLeft: '3px solid var(--haze-color-primary)' }
                     : undefined
                 }>
-                  <span style={{ color: 'var(--haze-color-primary)' }}>{s.hash.slice(0, 8)}</span>
+                  <span className={snapshotHash}>{s.hash.slice(0, 8)}</span>
                   <span>
                     {(s.tags || []).length > 0
                       ? `🏷 ${s.tags!.join(', ').replace(/milestone-/g, '')}`
                       : s.message}
                   </span>
-                  <span style={{ marginLeft: 'auto' }}>{new Date(s.date).toLocaleDateString()}</span>
+                  <span className={snapshotDate}>{new Date(s.date).toLocaleDateString()}</span>
                 </div>
               ))}
           </div>

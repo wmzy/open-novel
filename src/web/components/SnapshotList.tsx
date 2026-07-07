@@ -119,6 +119,13 @@ const autoToggle = css`
   &:hover { color: var(--haze-color-text); }
 `;
 
+const refreshBtn = css`
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--haze-color-primary);
+`;
 
 interface Snapshot {
   hash: string;
@@ -185,7 +192,7 @@ export default function SnapshotList({ projectId }: Props) {
     <div className={container}>
       <div className={header}>
         <span>快照</span>
-        <button onClick={loadSnapshots} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.75rem', color: 'var(--haze-color-primary)' }}>
+        <button onClick={loadSnapshots} className={refreshBtn}>
           刷新
         </button>
       </div>

@@ -34,6 +34,10 @@ const activeLink = css`
   font-weight: 500;
 `;
 
+const navSpacer = css`
+  margin-left: auto;
+`;
+
 export default function NavHeader() {
   const location = useLocation();
   const isActive = (path: string) => location.pathname === path;
@@ -45,7 +49,7 @@ export default function NavHeader() {
         <Link to="/" className={`${link} ${isActive('/') ? activeLink : ''}`}>首页</Link>
         <Link to="/settings" className={`${link} ${isActive('/settings') ? activeLink : ''}`}>设置</Link>
       </div>
-      <div style={{ marginLeft: 'auto' }}>
+      <div className={navSpacer}>
         <ThemeToggle />
       </div>
     </nav>

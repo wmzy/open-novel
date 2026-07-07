@@ -15,6 +15,31 @@ const label = css`
   margin-bottom: 0.25rem;
 `;
 
+/* 设置页面根布局 */
+const settingsLayout = css`
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+`;
+
+const agentSectionTitle = css`
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+`;
+
+const agentItem = css`
+  margin-bottom: 0.5rem;
+  padding: 0.5rem;
+  background: var(--haze-color-bg-secondary);
+  border-radius: 6px;
+`;
+
+const installLink = css`
+  margin-left: 0.5rem;
+`;
+
 export default function SettingsPage() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({
@@ -49,7 +74,7 @@ export default function SettingsPage() {
   }, [settings]);
 
   return (
-    <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
+    <div className={settingsLayout}>
       <NavHeader />
       <div className={pageContainer}>
       <h1 className={pageTitle}>设置</h1>
@@ -63,11 +88,11 @@ export default function SettingsPage() {
             ))}
           </select>
         </div>
-        <h3 style={{ marginTop: '2rem', marginBottom: '1rem' }}>可用 Agent</h3>
+        <h3 className={agentSectionTitle}>可用 Agent</h3>
         {agents?.map((a: { id: string; name: string; available: boolean; version?: string; installUrl?: string }) => (
-          <div key={a.id} style={{ marginBottom: '0.5rem', padding: '0.5rem', background: 'var(--haze-color-bg-secondary)', borderRadius: '6px' }}>
+          <div key={a.id} className={agentItem}>
             <strong>{a.name}</strong> — {a.available ? `✓ ${a.version}` : `✗ 未安装`}
-            {a.installUrl && !a.available && <a href={a.installUrl} target="_blank" rel="noopener" style={{ marginLeft: '0.5rem' }}>安装指南</a>}
+            {a.installUrl && !a.available && <a href={a.installUrl} target="_blank" rel="noopener" className={installLink}>安装指南</a>}
           </div>
         ))}
       </div>

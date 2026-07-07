@@ -12,6 +12,7 @@ const step = css`
   height: 4px;
   border-radius: 2px;
   background: var(--haze-color-border);
+  cursor: pointer;
 `;
 
 const stepActive = css`
@@ -41,7 +42,7 @@ export default function WorkflowProgress({ currentStage, onStageClick }: Props) 
     <div data-testid="workflow-progress">
       <div className={container}>
         {STAGES.map((s, i) => (
-          <div key={s.id} className={`${step} ${i < currentIdx ? stepCompleted : i === currentIdx ? stepActive : ''}`} onClick={() => onStageClick(s.viewId)} style={{ cursor: 'pointer' }} />
+          <div key={s.id} className={`${step} ${i < currentIdx ? stepCompleted : i === currentIdx ? stepActive : ''}`} onClick={() => onStageClick(s.viewId)} />
         ))}
       </div>
       <div className={labels}>

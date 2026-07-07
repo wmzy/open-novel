@@ -54,6 +54,14 @@ const toggle = css`
   gap: 0.25rem;
 `;
 
+const addedCount = css`
+  color: var(--haze-color-success, #22c55e);
+`;
+
+const removedCount = css`
+  color: var(--haze-color-error, #ef4444);
+`;
+
 interface Props {
   filePath: string;
   hunks: DiffHunk[];
@@ -70,8 +78,8 @@ export default function DiffView({ filePath, hunks, totalAdded, totalRemoved }: 
     <div className={container}>
       <button className={toggle} onClick={() => setExpanded(!expanded)}>
         {expanded ? '[-]' : '[+]'}
-        <span style={{ color: 'var(--haze-color-success, #22c55e)' }}>+{totalAdded}</span>
-        <span style={{ color: 'var(--haze-color-error, #ef4444)' }}>-{totalRemoved}</span>
+        <span className={addedCount}>+{totalAdded}</span>
+        <span className={removedCount}>-{totalRemoved}</span>
         <span>{filePath}</span>
       </button>
       {expanded && (

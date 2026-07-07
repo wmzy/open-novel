@@ -5,7 +5,13 @@ import { lightTheme, spacing, typography } from 'haze-ui';
 import { Toaster } from 'sonner';
 import { AppQueryProvider } from './hooks/useQueryClient';
 import { globalStyles } from './styles/global';
+import { css } from '@linaria/core';
 import ErrorBoundary from './web/components/ErrorBoundary';
+
+const appShell = css`
+  height: 100%;
+  width: 100%;
+`;
 import { useKeyboard, shortcutActions } from './web/hooks/useKeyboard';
 
 // Global keyboard shortcuts
@@ -26,7 +32,7 @@ export default function App() {
   return (
     <AppQueryProvider>
       <BrowserRouter>
-        <div className={cx(globalStyles, lightTheme, spacing, typography)} style={{ height: '100%', width: '100%' }}>
+        <div className={cx(globalStyles, lightTheme, spacing, typography, appShell)}>
           <KeyboardShortcuts />
           <Toaster position="top-right" richColors />
           <ErrorBoundary>

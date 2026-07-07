@@ -181,6 +181,7 @@ const issueList = css`
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  margin-top: 0.5rem;
 `;
 
 const issueItem = css`
@@ -219,6 +220,7 @@ const groupTitle = css`
   font-weight: 600;
   margin: 0.25rem 0;
   color: var(--haze-color-text);
+  margin-top: 0.75rem;
 `;
 
 const warnItem = css`
@@ -427,7 +429,7 @@ function AiPatternsResult({ report }: { report: AiPatternReport }) {
       {report.issues.length === 0 ? (
         <div className={emptyHint}>未检测到明显 AI 味问题</div>
       ) : (
-        <ul className={issueList} style={{ marginTop: '0.5rem' }}>
+        <ul className={issueList}>
           {report.issues.map((issue, i) => (
             <li key={i} className={issueItem}>
               <span className={issueType}>{issue.type}</span>
@@ -461,7 +463,7 @@ function ForeshadowResult({ report }: { report: ForeshadowReport }) {
         </ul>
       )}
 
-      <p className={groupTitle} style={{ marginTop: '0.75rem' }}>✅ 已回收（{report.resolved.length}）</p>
+      <p className={groupTitle}>✅ 已回收（{report.resolved.length}）</p>
       {report.resolved.length === 0 ? (
         <div className={emptyHint}>无</div>
       ) : (
@@ -477,7 +479,7 @@ function ForeshadowResult({ report }: { report: ForeshadowReport }) {
         </ul>
       )}
 
-      <p className={groupTitle} style={{ marginTop: '0.75rem' }}>💚 正常跟踪（{report.healthy.length}）</p>
+      <p className={groupTitle}>💚 正常跟踪（{report.healthy.length}）</p>
       {report.healthy.length === 0 ? (
         <div className={emptyHint}>无</div>
       ) : (
