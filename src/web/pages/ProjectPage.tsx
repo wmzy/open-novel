@@ -544,7 +544,7 @@ export default function ProjectPage() {
         data-testid="chat-panel"
         data-resizing={isResizing ? 'true' : undefined}
       >
-        <ChatPanel projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleViewChange} />
+        <ChatPanel key={id} projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleViewChange} />
       </div>
     </div>
   );

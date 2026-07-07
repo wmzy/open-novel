@@ -36,6 +36,18 @@ interface Props {
   onAgentChange?: (agentId: string) => void;
 }
 
+/** 按 projectId 持久化当前会话 id，刷新后恢复上次会话内容。 */
+const convKey = (pid: string) => `open-novel:active-conversation:${pid}`;
+function readStoredConvId(pid: string): string | null {
+  try { return localStorage.getItem(convKey(pid)); } catch { return null; }
+}
+function writeStoredConvId(pid: string, id: string | null) {
+  try {
+    if (id) localStorage.setItem(convKey(pid), id);
+    else localStorage.removeItem(convKey(pid));
+  } catch { /* ignore */ }
+}
+
 const DEFAULT_MODELS = [
   { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
   { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
@@ -70,7 +82,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isPinned, setIsPinned] = useState(true);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(() => readStoredConvId(projectId));
   const [activeCmdIndex, setActiveCmdIndex] = useState(0);
   const [showCommands, setShowCommands] = useState(false);
 
@@ -114,6 +126,11 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     }
   }, [isRunning, hookConversationId, activeConversationId]);
 
+  // 持久化 activeConversationId（变更即写入）
+  useEffect(() => {
+    writeStoredConvId(projectId, activeConversationId);
+  }, [projectId, activeConversationId]);
+
   // Fetch available models
   const { data: models } = useModels(agentId);
   const availableModels = (models && models.length > 0 ? models : DEFAULT_MODELS).filter((m) => m.id !== 'default');
@@ -123,6 +140,15 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
   // Fetch conversations for this project
   const { data: conversations } = useConversations(projectId);
+
+  // 校验恢复的会话 id 仍存在；已被删除则回退到最新会话或清空
+  useEffect(() => {
+    if (!conversations || activeConversationId === null) return;
+    const stillExists = conversations.some((c) => c.id === activeConversationId);
+    if (!stillExists) {
+      setActiveConversationId(conversations[0]?.id ?? null);
+    }
+  }, [conversations, activeConversationId]);
 
   // Fetch detected agents
   const { data: agents, isLoading: agentsLoading } = useAgents();
