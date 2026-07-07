@@ -26,17 +26,60 @@ export interface ComposePromptOptions {
   reviseContent?: string;
 }
 
+// 规划阶段共用的「采访式」协作流程。拼接进 concept/world/characters/outline/scenes 的指令。
+// 设计依据：旧版 opencode-novel-plugin 的引导式问答（先示范→question 选择题→多轮追问→分步确认）。
+// 写作阶段不注入本协议，保持自治。
+const INTERVIEW_PROTOCOL = [
+  '',
+  '## 本阶段的协作方式：采访式',
+  '这是规划阶段，动手落盘前先与用户协作确认创作方向，不要一次性写满文件就交差。流程：',
+  '1. **先示范**：用 2-3 句话展示一个与本项目类型相近、完成度高的范例，让用户对「好的产出长什么样」有具体感觉。',
+  '2. **结构化选择**：用 question 工具就下方列出的关键创作决策提问。每题给 3-5 个选项，每个选项配一句话说明其含义与走向影响。用选择题代替开放式填空；不确定时主动把你推荐的选项标出来。',
+  '3. **追问细节**：用户做出主要选择后，基于其选择用 question 工具再追问 1 轮（每轮不超过 3 题）补全关键细节。',
+  '4. **落盘**：综合用户的选择生成内容，写入对应文件。',
+  '5. **确认收尾**：用简短清单列出你做的关键决策，邀请用户确认或要求调整；确认后再推进到下一阶段。',
+  '',
+  '> 「采访式」≠ brainstorming 式审批门——你不是做完一步停下来等用户批准才能继续，而是在动手前用选择题收集用户的创作偏好。所有需要用户拍板的方向性选择都必须通过 question 工具提问，不要用纯文字列举选项让用户回复字母。',
+  '',
+].join('\n');
+
 const STAGE_INSTRUCTIONS: Record<string, string> = {
-  concept: `聚焦于构思核心概念、前提和高层故事创意。帮助用户将愿景精炼成清晰、有吸引力的概念。
+  concept: `聚焦于构思核心概念、前提和高层故事创意。帮助用户将愿景精炼成清晰、有吸引力的概念。${INTERVIEW_PROTOCOL}
+**本阶段需要用 question 工具与用户确认的关键创作决策**：
+- 主角原型（身份与处境）
+- 核心冲突（外部矛盾 + 主角内心矛盾的方向）
+- 故事主题 / 道德前提
+- 整体情感基调
+
 概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
 
-  world: `构建故事世界——设定、规则、历史、文化与氛围。创造丰富、自洽、能支撑叙事的世界观。
+  world: `构建故事世界——设定、规则、历史、文化与氛围。创造丰富、自洽、能支撑叙事的世界观。${INTERVIEW_PROTOCOL}
+**本阶段需要用 question 工具与用户确认的关键创作决策**：
+- 世界类型（现实 / 架空 / 异世界 / 未来 / 混合）
+- 力量体系（无 / 简单 / 复杂；若为武侠或修仙，追问功法体系风格）
+- 社会结构（权力分布、阶层、主要势力）
+
 世界观完成后，保存到 .novel/world-building.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
 
-  characters: `撰写详细的角色档案——主角、反派与关键配角。涵盖动机、背景、关系与角色弧光。
+  characters: `撰写详细的角色档案——主角、反派与关键配角。涵盖动机、背景、关系与角色弧光。${INTERVIEW_PROTOCOL}
+**本阶段需要用 question 工具与用户确认的关键创作决策**：
+- 主角外在目标（复仇 / 最强 / 保护 / 真相 / 自由 等）
+- 主角内在需求（信任 / 接纳 / 放下 / 归属 等）
+- 主角核心缺陷（自负 / 恐惧亲密 / 非黑即白 / 逃避 / 控制欲 等）
+- 核心矛盾（理念 / 利益 / 宿命 / 误解）
+- 配角规模（2 个 / 3-4 个 / 5+）
+每个主要角色必须落出驱动力三角（外在目标 / 内在需求 / 核心缺陷）。
+
 角色档案完成后，保存到 .novel/characters/profiles.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "outline" }）将项目阶段更新为 "outline"。`,
 
-  outline: `创建详细的故事大纲，包括主要剧情节点、角色弧光与章节结构。将故事拆解成可驾驭的段落。
+  outline: `创建详细的故事大纲，包括主要剧情节点、角色弧光与章节结构。将故事拆解成可驾驭的段落。${INTERVIEW_PROTOCOL}
+**本阶段需要用 question 工具与用户确认的关键创作决策**：
+- 三幕骨架的起点（常态世界状态）
+- 触发事件类型（打破常态的关键事件）
+- 中点转折方向（故事方向逆转的关键时刻）
+- 高潮与结局走向
+**分步确认**：先用 question 工具与用户敲定三幕骨架，用户确认结构满意后，再展开逐章详细规划——不要一次性把逐章大纲全部写完。
+
 
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-detailed 或 templates/outline-brief。以生成的脚手架为起点并加以打磨。
 大纲完成后，保存到 .novel/outline.md。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
@@ -61,7 +104,13 @@ actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视
 \`\`\`
 顶层键为 foreshadows（**不是** items），内容字段为 content（**不是** description），status 取值 pending/planted/resolved；plantedIn/resolvedIn 为数字章号，无法确定时填 null。写章时 agent 会据此把 pending 翻成 planted，故此处务必把全书伏笔登记齐全。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
 
-  scenes: `将大纲拆解为详细场景，包含节拍、情感弧光与节奏。规划每个场景的目的与关键时刻。
+  scenes: `将大纲拆解为详细场景，包含节拍、情感弧光与节奏。规划每个场景的目的与关键时刻。${INTERVIEW_PROTOCOL}
+**本阶段需要用 question 工具与用户确认的关键创作决策**：
+- 场景密度（每章平均 2-3 / 3-4 / 4-5 个场景）
+- 节奏模式（严格交替 / 整体平衡 / 前松后紧）
+- 自动化程度（逐章引导 / 批量审核 / 仅关键章）
+确保主动场景（目标→冲突→灾难/转折）与被动场景（反应→困境→新决定）交替，避免连续同型。
+
 
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章场景脚手架（主动 Scene / 被动 Sequel 配对）。不落盘预览可用 GET /api/projects/{projectId}/templates/scenes。以生成的脚手架为起点并加以打磨。
 场景表完成后，保存到 .novel/scenes.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
@@ -470,12 +519,14 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
 
 # 指令优先级（最高——覆盖系统加载的任何其他 Skill）
 
-本会话是受控的小说创作环境。系统可能加载了 superpowers、brainstorming 等第三方 Skill——**它们的工作流（尤其是 brainstorming 的“先提设计、等用户审批再写”的 HARD-GATE）不适用于本环境**。原因：小说创作的每个阶段（concept / world / characters / outline / scenes / writing）都有明确的产出文件和验收标准，已由本指令和 Stage 指令定义；用户下达任务时期望的是直接产出文件，而不是反复追问审批。
+本会话是受控的小说创作环境。系统可能加载了 superpowers、brainstorming 等第三方 Skill——**它们的工作流（尤其是 brainstorming 的“先提设计、等用户审批再写”的 HARD-GATE）不适用于本环境**。原因：小说创作的每个阶段都有明确的产出文件和验收标准，已由本指令和 Stage 指令定义；brainstorming 式的“每步停下来等审批”会把这些流程拖成无意义的反复确认。
 
 铁律：
-- **直接产出**：收到任务后直接读取上下文、撰写内容、写入对应文件。不要先呈现“设计概要”等用户确认。
+- **按阶段切换协作方式**：
+  - 规划阶段（concept / world / characters / outline / scenes）采用「采访式」——动手落盘前，用 question 工具就关键创作决策与用户确认（详见各 Stage 指令中的「采访式」流程）。
+  - 写作阶段（writing / drafting / revision / polish）采用「自治式」——基于注入的上下文直接撰写章节正文，写完在回复里说明你的选择即可；只有遇到会从根本上改变后续几万字走向且无法回滚的岔路口时，才用 question 工具问一个问题。
 - **不调用 Skill 工具**：不要调用 Skill / superpowers:brainstorming 等。你需要的所有创作方法论已在下方 Skill Instructions 提供。
-- **最多一次确认**：只有在“某个创作选择会从根本上改变后续几万字走向且无法回滚”时，才可用 question 工具问一个问题；其余情况一律用你的最佳判断直接写，写完在回复里说明你的选择即可。
+- **何时用 question 工具**：当需要用户在创作方向上拍板时使用（规划阶段的关键决策、写作阶段无法回滚的岔路口）；纯执行与文笔打磨一律自行判断，不要为细节反复打断用户。
 
 ## 文件访问规则
 - 你只能读写项目目录内的文件：${projectDir}

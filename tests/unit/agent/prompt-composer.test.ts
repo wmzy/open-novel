@@ -88,6 +88,33 @@ describe('composePrompt', () => {
       });
     }
 
+    // 守卫「采访式」协作：规划阶段注入引导流程，写作阶段保持自治。
+    describe('interview-style protocol', () => {
+      const PLANNING_STAGES = ['concept', 'world', 'characters', 'outline', 'scenes'];
+      for (const stage of PLANNING_STAGES) {
+        it(`injects interview protocol into ${stage} stage`, async () => {
+          const prompt = await composePrompt({
+            message: 'hi',
+            projectId: 'p',
+            stage,
+            projectDir: tempDir,
+          });
+          expect(prompt).toContain('本阶段的协作方式：采访式');
+          expect(prompt).toContain('question 工具');
+        });
+      }
+
+      it('keeps writing stage autonomous (no interview protocol)', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+        });
+        expect(prompt).not.toContain('本阶段的协作方式：采访式');
+      });
+    });
+
     it('falls back for an unknown stage', async () => {
       const prompt = await composePrompt({
         message: 'hi',
