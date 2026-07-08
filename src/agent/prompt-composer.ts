@@ -43,43 +43,61 @@ const INTERVIEW_PROTOCOL = [
   '',
 ].join('\n');
 
-const STAGE_INSTRUCTIONS: Record<string, string> = {
-  concept: `聚焦于构思核心概念、前提和高层故事创意。帮助用户将愿景精炼成清晰、有吸引力的概念。${INTERVIEW_PROTOCOL}
-**本阶段需要用 question 工具与用户确认的关键创作决策**：
+/** 规划阶段核心任务的首句（头部）。交互协议（采访式/自治式）与决策清单由 buildStageInstructions 动态拼接。 */
+const STAGE_HEAD: Record<string, string> = {
+  concept: '聚焦于构思核心概念、前提和高层故事创意。帮助用户将愿景精炼成清晰、有吸引力的概念。',
+  world: '构建故事世界——设定、规则、历史、文化与氛围。创造丰富、自洽、能支撑叙事的世界观。',
+  characters: '撰写详细的角色档案——主角、反派与关键配角。涵盖动机、背景、关系与角色弧光。',
+  outline: '创建详细的故事大纲，包括主要剧情节点、角色弧光与章节结构。将故事拆解成可驾驭的段落。',
+  scenes: '将大纲拆解为详细场景，包含节拍、情感弧光与节奏。规划每个场景的目的与关键时刻。',
+};
+
+/** 规划阶段「关键创作决策」清单——仅在采访式（非自治）模式下注入。 */
+const DECISION_PROMPTS: Record<string, string> = {
+  concept: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
 - 主角原型（身份与处境）
 - 核心冲突（外部矛盾 + 主角内心矛盾的方向）
 - 故事主题 / 道德前提
-- 整体情感基调
+- 整体情感基调`,
 
-概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
-
-  world: `构建故事世界——设定、规则、历史、文化与氛围。创造丰富、自洽、能支撑叙事的世界观。${INTERVIEW_PROTOCOL}
-**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  world: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
 - 世界类型（现实 / 架空 / 异世界 / 未来 / 混合）
 - 力量体系（无 / 简单 / 复杂；若为武侠或修仙，追问功法体系风格）
-- 社会结构（权力分布、阶层、主要势力）
+- 社会结构（权力分布、阶层、主要势力）`,
 
-世界观完成后，保存到 .novel/world-building.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
-
-  characters: `撰写详细的角色档案——主角、反派与关键配角。涵盖动机、背景、关系与角色弧光。${INTERVIEW_PROTOCOL}
-**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  characters: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
 - 主角外在目标（复仇 / 最强 / 保护 / 真相 / 自由 等）
 - 主角内在需求（信任 / 接纳 / 放下 / 归属 等）
 - 主角核心缺陷（自负 / 恐惧亲密 / 非黑即白 / 逃避 / 控制欲 等）
 - 核心矛盾（理念 / 利益 / 宿命 / 误解）
-- 配角规模（2 个 / 3-4 个 / 5+）
-每个主要角色必须落出驱动力三角（外在目标 / 内在需求 / 核心缺陷）。
+- 配角规模（2 个 / 3-4 个 / 5+）`,
 
-角色档案完成后，保存到 .novel/characters/profiles.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "outline" }）将项目阶段更新为 "outline"。`,
-
-  outline: `创建详细的故事大纲，包括主要剧情节点、角色弧光与章节结构。将故事拆解成可驾驭的段落。${INTERVIEW_PROTOCOL}
-**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  outline: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
 - 三幕骨架的起点（常态世界状态）
 - 触发事件类型（打破常态的关键事件）
 - 中点转折方向（故事方向逆转的关键时刻）
 - 高潮与结局走向
-**分步确认**：先用 question 工具与用户敲定三幕骨架，用户确认结构满意后，再展开逐章详细规划——不要一次性把逐章大纲全部写完。
+**分步确认**：先用 question 工具与用户敲定三幕骨架，用户确认结构满意后，再展开逐章详细规划——不要一次性把逐章大纲全部写完。`,
 
+  scenes: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
+- 场景密度（每章平均 2-3 / 3-4 / 4-5 个场景）
+- 节奏模式（严格交替 / 整体平衡 / 前松后紧）
+- 自动化程度（逐章引导 / 批量审核 / 仅关键章）`,
+};
+
+/** 规划阶段的完成/落盘指令（尾部）。采访式与自治式共用。 */
+const STAGE_TAIL: Record<string, string> = {
+  concept: `
+概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
+
+  world: `
+世界观完成后，保存到 .novel/world-building.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
+
+  characters: `
+每个主要角色必须落出驱动力三角（外在目标 / 内在需求 / 核心缺陷）。
+角色档案完成后，保存到 .novel/characters/profiles.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "outline" }）将项目阶段更新为 "outline"。`,
+
+  outline: `
 
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-detailed 或 templates/outline-brief。以生成的脚手架为起点并加以打磨。
 大纲完成后，保存到 .novel/outline.md。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
@@ -104,16 +122,45 @@ actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视
 \`\`\`
 顶层键为 foreshadows（**不是** items），内容字段为 content（**不是** description），status 取值 pending/planted/resolved；plantedIn/resolvedIn 为数字章号，无法确定时填 null。写章时 agent 会据此把 pending 翻成 planted，故此处务必把全书伏笔登记齐全。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
 
-  scenes: `将大纲拆解为详细场景，包含节拍、情感弧光与节奏。规划每个场景的目的与关键时刻。${INTERVIEW_PROTOCOL}
-**本阶段需要用 question 工具与用户确认的关键创作决策**：
-- 场景密度（每章平均 2-3 / 3-4 / 4-5 个场景）
-- 节奏模式（严格交替 / 整体平衡 / 前松后紧）
-- 自动化程度（逐章引导 / 批量审核 / 仅关键章）
+  scenes: `
 确保主动场景（目标→冲突→灾难/转折）与被动场景（反应→困境→新决定）交替，避免连续同型。
-
 
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章场景脚手架（主动 Scene / 被动 Sequel 配对）。不落盘预览可用 GET /api/projects/{projectId}/templates/scenes。以生成的脚手架为起点并加以打磨。
 场景表完成后，保存到 .novel/scenes.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
+};
+
+/** 自治协议（替代采访式，用于无人值守的夜间探索等场景）。结构与 INTERVIEW_PROTOCOL 平行。 */
+const AUTONOMOUS_PROTOCOL = [
+  '',
+  '## 本阶段的协作方式：自治式',
+  '这是无人值守的自治运行。你不需要等待用户输入——所有创作决策由你自主做出。流程：',
+  '1. **理解方向**：仔细阅读 User Request 中给定的创作方向（种子概念/世界类型/主角原型等）。',
+  '2. **自主决策**：对于本阶段需要确定的创作选择（角色原型、世界类型、核心冲突等），基于给定方向自主选择最契合、最有戏剧张力的方案。不要用 question 工具提问。',
+  '3. **高质量产出**：按照 Skill Instructions 的质量标准，产出完整的阶段产出文件。',
+  '4. **落盘**：将内容写入对应的 .novel/ 文件。',
+  '5. **不要调用 PATCH API 推进阶段**——阶段推进由外部调度器控制。',
+  '',
+].join('\n');
+
+/**
+ * 按自治/采访模式组装规划阶段的指令。
+ * - 采访式（默认）：STAGE_HEAD + INTERVIEW_PROTOCOL + 决策清单 + STAGE_TAIL
+ * - 自治式：STAGE_HEAD + AUTONOMOUS_PROTOCOL + STAGE_TAIL
+ * 非规划阶段（writing/drafting/revision/polish/decompose/enrich）返回空串，由调用方回退到 STAGE_INSTRUCTIONS。
+ */
+function buildStageInstructions(stage: string, autonomous: boolean): string {
+  const head = STAGE_HEAD[stage];
+  if (head === undefined) return '';
+  const tail = STAGE_TAIL[stage] ?? '';
+  if (autonomous) {
+    return head + AUTONOMOUS_PROTOCOL + '\n' + tail;
+  }
+  return head + INTERVIEW_PROTOCOL + '\n' + (DECISION_PROMPTS[stage] ?? '') + tail;
+}
+
+// 仅保留写作阶段；规划阶段（concept/world/characters/outline/scenes）指令
+// 由 buildStageInstructions(stage, autonomous) 动态组装，见上方。
+const STAGE_INSTRUCTIONS: Record<string, string> = {
 
   writing: `**写章前**：本章大纲与出场角色档案已注入上方上下文。无需再 Read 这些文件——直接基于注入内容写作。仅在需要查阅未注入细节（如某角色完整弧线、某武学体系全貌）时才 Read。
 
@@ -506,7 +553,9 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
         })
       : currentStage === 'enrich'
         ? buildEnrichPrompt({ projectDir })
-        : STAGE_INSTRUCTIONS[currentStage] || `着手推进小说项目的「${currentStage}」阶段。`;
+        : buildStageInstructions(currentStage, false)
+          || STAGE_INSTRUCTIONS[currentStage]
+          || `着手推进小说项目的「${currentStage}」阶段。`;
 
   // Compose the full prompt
   const parts: string[] = [];
