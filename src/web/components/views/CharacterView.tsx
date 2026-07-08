@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildRelationshipGraph } from '../../../shared/diagram-builders';
 import NamingPanel from '../NamingPanel';
+import InspirationPicker from '../InspirationPicker';
 import type { CSSProperties } from 'react';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
 
@@ -104,8 +105,20 @@ const namingToggleBtn = css`
   &:hover { background: var(--haze-color-bg-hover, rgba(255,255,255,0.05)); }
 `;
 
+/** 灵感按钮切换：与 namingToggleBtn 同尺寸。 */
+const inspireToggleBtn = css`
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+  &:hover { background: var(--haze-color-bg-hover, rgba(255,255,255,0.05)); }
+`;
+
 export default function CharacterView({ projectId }: Props) {
   const [showNaming, setShowNaming] = useState(false);
+  const [showInspiration, setShowInspiration] = useState(false);
   const { data, isLoading } = useNovelFile(projectId, 'characters', 'characters/profiles.md');
 
   // 额外读取 state.json 获取角色关系数据
@@ -147,9 +160,16 @@ export default function CharacterView({ projectId }: Props) {
         >
           {showNaming ? '▾ 收起起名工具' : '▸ 起名工具'}
         </button>
+        <button
+          className={inspireToggleBtn}
+          onClick={() => setShowInspiration((v) => !v)}
+        >
+          {showInspiration ? '▾ 收起灵感' : '💡 灵感'}
+        </button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
       {showNaming && <NamingPanel projectId={projectId} />}
+      {showInspiration && <InspirationPicker />}
       <CollapsibleDiagram chart={relGraph} title="人物关系" />
       <div className={charGrid}>
         {sections.map((s, i) => {
