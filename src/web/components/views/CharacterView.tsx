@@ -7,6 +7,7 @@ import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildRelationshipGraph } from '../../../shared/diagram-builders';
 import NamingPanel from '../NamingPanel';
 import InspirationPicker from '../InspirationPicker';
+import InlineInspiration from '../InlineInspiration';
 import type { CSSProperties } from 'react';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
 
@@ -189,6 +190,7 @@ export default function CharacterView({ projectId }: Props) {
                 {name && <span className={charName}>{name}</span>}
                 <button className={cardReviseBtn} onClick={() => revision.openRevise(undefined, s.title)} title="修订这一组">✎</button>
                 <button className={cardReviseBtn} onClick={() => revision.openRename()} title="重命名">⇄</button>
+                {name && <InlineInspiration mode="enrich-character" characterName={name} />}
               </div>
               <div className={charFields}>
                 {hasDirect || hasSubs ? (

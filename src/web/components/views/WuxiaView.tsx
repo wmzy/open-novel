@@ -18,6 +18,7 @@ import {
 } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
+import InlineInspiration from '../InlineInspiration';
 
 interface Props {
   projectId: string;
@@ -387,7 +388,12 @@ export default function WuxiaView({ projectId }: Props) {
                   className={card}
                   style={{ borderLeft: `3px solid ${group.color}` } as CSSProperties}
                 >
-                  <div className={cardTitle}>{item.title}</div>
+                  <div className={cardTitle}>
+                    {item.title}
+                    {group.key === 'sect-detail' && (
+                      <InlineInspiration mode="generate-in-faction" factionName={item.title} />
+                    )}
+                  </div>
                   <CardContent rawMd={item.rawMd} mode={viewMode} projectId={projectId} />
                 </div>
               ))}
