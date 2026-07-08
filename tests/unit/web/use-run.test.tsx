@@ -109,76 +109,59 @@ describe('useRun — 流结束时 flush 最后一批 text_delta', () => {
   });
 });
 
-describe('useRun — 刷新后恢复运行中的 run', () => {
+describe('useRun — mount 连 conversation 流追回历史 + 活跃 run', () => {
   afterEach(() => {
-    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it('mount 检测到 active run 时轮询追赶消息，run 结束后停止', async () => {
-    vi.useFakeTimers();
-    let activeRunExists = true;
+  it('有历史但无活跃 run：一次性推完历史后流关闭，isRunning 保持 false', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       const u = url.toString();
-      if (u.includes('/active-run')) {
-        return new Response(JSON.stringify({ runId: activeRunExists ? 'r1' : null }), {
-          status: 200, headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/messages')) {
-        // 后端增量持久化：assistant content 随轮询增长
-        return new Response(JSON.stringify([
-          { id: 'm1', role: 'user', content: '写第一章' },
-          { id: 'm2', role: 'assistant', content: '正在生成的部分内容' },
-        ]), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (u.includes('/conversations/conv1/stream')) {
+        // 一次性排空：历史 messages + 无活跃 run → 直接关闭
+        return sseResponse([
+          { event: 'message', data: { id: 'm1', role: 'user', content: '写第一章' } },
+          { event: 'message', data: { id: 'm2', role: 'assistant', content: '已完成的内容' } },
+        ]);
       }
       return new Response('404', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const { result } = renderHook(() => useRun('conv1'));
+    // 等待 SSE 流消费完成
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
 
-    // mount effect：初始 load + active-run 检测 → isRunning
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-
-    expect(result.current.isRunning).toBe(true);
     expect(result.current.messages).toHaveLength(2);
-    expect(result.current.messages[1].content).toBe('正在生成的部分内容');
-
-    // run 结束：active-run 返回 null，轮询停止
-    activeRunExists = false;
-    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
-
+    expect(result.current.messages[0].content).toBe('写第一章');
+    expect(result.current.messages[1].content).toBe('已完成的内容');
     expect(result.current.isRunning).toBe(false);
   });
 
-  it('无 active run 时不启动轮询，isRunning 保持 false', async () => {
-    vi.useFakeTimers();
+  it('有活跃 run：历史 messages + agent 事件实时跟随', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       const u = url.toString();
-      if (u.includes('/active-run')) {
-        return new Response(JSON.stringify({ runId: null }), {
-          status: 200, headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (u.includes('/messages')) {
-        return new Response(JSON.stringify([
-          { id: 'm1', role: 'user', content: 'hi' },
-          { id: 'm2', role: 'assistant', content: 'done' },
-        ]), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (u.includes('/conversations/conv2/stream')) {
+        // 历史 + 活跃 run 的 agent 事件 + end
+        return sseResponse([
+          { event: 'message', data: { id: 'm1', role: 'user', content: '继续写' } },
+          ...textFrames('流式增量'),
+          { event: 'end', data: {} },
+        ]);
       }
       return new Response('404', { status: 404 });
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const { result } = renderHook(() => useRun('conv2'));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
 
-    expect(result.current.isRunning).toBe(false);
+    // 历史 user 消息 + 流式 assistant 消息
     expect(result.current.messages).toHaveLength(2);
-    // 推进多个 interval 周期，确认没有轮询发起新请求
-    const callsBefore = fetchMock.mock.calls.length;
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect(fetchMock.mock.calls.length).toBe(callsBefore);
+    expect(result.current.messages[0].role).toBe('user');
+    // assistant 消息通过 agent 事件构建
+    expect(result.current.messages[1].role).toBe('assistant');
+    expect(result.current.messages[1].content).toBe('流式增量');
+    expect(result.current.isRunning).toBe(false); // end 事件触发
   });
 });

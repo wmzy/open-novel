@@ -27,73 +27,104 @@ export function useRun(conversationId?: string) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string | null>(conversationId || null);
   const assistantContentRef = useRef<string>('');
-  /** 恢复轮询定时器：刷新后发现有运行中的 run 时启动，run 结束自动停止。 */
-  const recoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const assistantEventsRef = useRef<AgentEvent[] | null>(null);
   const assistantArtifactsRef = useRef<{ count: number; paths: string[] } | null>(null);
 
-  // Load existing messages when conversationId is provided on mount.
-  // 若该 conversation 有仍在运行的 run（如刷新中断流式响应），启动轮询追赶
-  // 后端增量持久化的内容，直到 run 结束——避免「刷新后响应消失」。
+  // mount/刷新时连 conversation 流——一次性排空历史 messages + 活跃 run 事件。
+  // 刷新后自动追回错过的响应内容，无需轮询。
+  // sendMessage 保持独立的 per-run SSE（用户发新消息时的实时跟随）。
   useEffect(() => {
     if (!conversationId) return;
-    let cancelled = false;
-
-    const loadMessages = async () => {
-      try {
-        const res = await fetch(`/api/conversations/${conversationId}/messages`);
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setMessages(data.map((m: { role: string; content: string; events?: AgentEvent[]; artifacts?: { count: number; paths: string[] } }) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-          events: m.events ?? undefined,
-          artifacts: m.artifacts ?? undefined,
-        })));
-      } catch { /* ignore load errors */ }
-    };
-
-    const startRecoveryPoll = async () => {
-      try {
-        const res = await fetch(`/api/runs/conversations/${conversationId}/active-run`);
-        if (!res.ok || cancelled) return;
-        const { runId } = await res.json() as { runId: string | null };
-        if (cancelled || !runId) return;
-        // 有运行中的 run：标记 running 并轮询追赶增量持久化的内容
-        setIsRunning(true);
-        recoveryPollRef.current = setInterval(async () => {
-          await loadMessages();
-          // run 是否仍活跃；结束则最后一次加载并停止轮询
-          try {
-            const r = await fetch(`/api/runs/conversations/${conversationId}/active-run`);
-            if (!r.ok) return;
-            const { runId: still } = await r.json() as { runId: string | null };
-            if (!still) {
-              await loadMessages();
-              setIsRunning(false);
-              if (recoveryPollRef.current) {
-                clearInterval(recoveryPollRef.current);
-                recoveryPollRef.current = null;
-              }
-            }
-          } catch { /* ignore */ }
-        }, 1500);
-      } catch { /* ignore */ }
-    };
+    let aborted = false;
+    const controller = new AbortController();
 
     (async () => {
-      await loadMessages();
-      if (!cancelled) await startRecoveryPoll();
+      try {
+        const res = await fetch(`/api/runs/conversations/${conversationId}/stream`, {
+          signal: controller.signal,
+        });
+        if (!res.ok || aborted) return;
+        const body = res.body;
+        if (!body) return;
+        const reader = body.getReader();
+
+        for await (const frame of consumeSseStream(reader, controller.signal)) {
+          if (aborted) break;
+          const data = frame.data as Record<string, unknown>;
+          switch (frame.event) {
+            case 'message': {
+              // 历史/固化的完整消息
+              setMessages((prev) => [...prev, {
+                role: data.role as 'user' | 'assistant',
+                content: data.content as string,
+                events: data.events as AgentEvent[] | undefined,
+                artifacts: data.artifacts as { count: number; paths: string[] } | undefined,
+                endedAt: data.role === 'assistant' ? Date.now() : undefined,
+              }]);
+              break;
+            }
+            case 'agent': {
+              // 确保有 assistant 占位消息来累加 delta
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last?.role !== 'assistant') {
+                  return [...prev, { role: 'assistant', content: '', events: [], startedAt: Date.now() }];
+                }
+                return prev;
+              });
+              setIsRunning(true);
+              handleAgentEvent(data);
+              if (data.type === 'error') {
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const last = updated[updated.length - 1];
+                  if (last?.role === 'assistant') last.endedAt = Date.now();
+                  return updated;
+                });
+              }
+              break;
+            }
+            case 'artifacts': {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last?.role === 'assistant') {
+                  last.artifacts = {
+                    count: Number(data.count || 0),
+                    paths: Array.isArray(data.paths) ? data.paths : [],
+                  };
+                }
+                return updated;
+              });
+              break;
+            }
+            case 'end': {
+              setIsRunning(false);
+              setStatus('');
+              break;
+            }
+            case 'stderr': {
+              setMessages((prev) => {
+                const updated = [...prev];
+                const last = updated[updated.length - 1];
+                if (last?.role === 'assistant') {
+                  last.events = [...(last.events || []), { kind: 'raw', line: String(data.text || '') }];
+                }
+                return updated;
+              });
+              break;
+            }
+          }
+        }
+      } catch { /* abort or load error */ }
     })();
 
     return () => {
-      cancelled = true;
-      if (recoveryPollRef.current) {
-        clearInterval(recoveryPollRef.current);
-        recoveryPollRef.current = null;
-      }
+      aborted = true;
+      controller.abort();
     };
+    // handleAgentEvent / flushDeltas 是函数声明（hoisted），在 effect 闭包中可用
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
   const sendMessage = useCallback(async (params: {
@@ -112,11 +143,6 @@ export function useRun(conversationId?: string) {
   }) => {
     // Add user message
     setMessages((prev) => [...prev, { role: 'user', content: params.message }]);
-    // 用户发新消息时停止恢复轮询，改走正常 SSE 流
-    if (recoveryPollRef.current) {
-      clearInterval(recoveryPollRef.current);
-      recoveryPollRef.current = null;
-    }
     setIsRunning(true);
     setStatus('starting');
 
@@ -513,10 +539,6 @@ export function useRun(conversationId?: string) {
   }, []);
 
   const resetConversation = useCallback(() => {
-    if (recoveryPollRef.current) {
-      clearInterval(recoveryPollRef.current);
-      recoveryPollRef.current = null;
-    }
     conversationIdRef.current = null;
     setMessages([]);
   }, []);
