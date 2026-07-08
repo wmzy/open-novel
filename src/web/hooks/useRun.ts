@@ -134,6 +134,8 @@ export function useRun(conversationId?: string) {
     stage: string;
     message: string;
     model?: string;
+    /** 自治模式：跳过采访式协议，前期阶段改为自主决策。 */
+    autonomous?: boolean;
     /** 运行模式：generate（默认）或 revise（修订已有文件）。 */
     mode?: 'generate' | 'revise';
     /** revise 模式：目标文件相对 .novel/ 的路径。 */

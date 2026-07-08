@@ -183,6 +183,11 @@ describe('explore helpers', () => {
     it('throws when project-dir missing in single mode', () => {
       expect(() => parseArgs(['--mode', 'single'])).toThrow('project-dir');
     });
+
+    it('parses --model', () => {
+      const args = parseArgs(['--seed', 's', '--model', 'claude-sonnet-4-20250514']);
+      expect(args.model).toBe('claude-sonnet-4-20250514');
+    });
   });
 });
 
@@ -248,6 +253,7 @@ describe('buildReport', () => {
     api: 'http://localhost:3006',
     baseDir: '/tmp/test',
     agent: 'claude',
+    model: null,
     skill: 'wuxia',
     pollIntervalMs: 1000,
     mode: 'diverge',

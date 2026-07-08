@@ -290,6 +290,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     { name: '/import', description: '导入源文本并逆向拆书（/import <文件或目录路径>）', source: 'app' },
     { name: '/enrich', description: '补全缺失的结构化数据（state/outline-meta/关系图，只增不覆盖）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage: 'enrich', message: '扫描并补全缺失的结构化数据' }); } },
     { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage, message: last.content }); } },
+    { name: '/explore', description: '自治推进当前阶段（不提问，AI 自主决策并落盘）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage, message: '自治推进当前阶段，所有创作决策自主做出', autonomous: true, model: selectedModel !== 'default' ? selectedModel : undefined }); } },
   ];
 
   // Agent 端 slash command（omp 经 ACP available_commands_update 推送，无 action → 填入输入框发给 agent）

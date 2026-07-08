@@ -21,6 +21,8 @@ export interface ExploreOptions {
   api: string;
   baseDir: string;
   agent: string | null;
+  /** 指定模型（不传则用 agent 默认） */
+  model: string | null;
   skill: string;
   pollIntervalMs: number;
   /** diverge（多路发散）| single（单路自治，复用已有项目） */
@@ -37,6 +39,7 @@ export function parseArgs(argv: string[]): ExploreOptions {
     api: process.env.EXPLORE_API || 'http://localhost:3006',
     baseDir: `./_explore/night-${Date.now()}`,
     agent: null,
+    model: null,
     skill: 'wuxia',
     pollIntervalMs: 10_000,
   };
@@ -51,6 +54,7 @@ export function parseArgs(argv: string[]): ExploreOptions {
       case '--api': opts.api = argv[++i]; break;
       case '--base-dir': opts.baseDir = argv[++i]; break;
       case '--agent': opts.agent = argv[++i]; break;
+      case '--model': opts.model = argv[++i]; break;
       case '--skill': opts.skill = argv[++i]; break;
       case '--poll-interval': opts.pollIntervalMs = parseInt(argv[++i], 10) * 1000; break;
     }
@@ -95,6 +99,7 @@ export async function triggerRun(
     stage: string;
     message: string;
     skillId?: string;
+    model?: string | null;
   },
 ): Promise<RunInfo> {
   const res = await fetch(`${api}/api/runs`, {
@@ -118,6 +123,7 @@ export async function retryRun(
     stage: string;
     message: string;
     skillId?: string;
+    model?: string | null;
     conversationId: string;
   },
 ): Promise<RunInfo> {
@@ -295,6 +301,7 @@ export async function diverge(
     stage: 'concept',
     message,
     skillId: opts.skill,
+    model: opts.model ?? undefined,
   });
 
   let status = await waitForRun(opts.api, runId, { pollIntervalMs: opts.pollIntervalMs });
@@ -307,6 +314,7 @@ export async function diverge(
       stage: 'concept',
       message,
       skillId: opts.skill,
+      model: opts.model ?? undefined,
       conversationId,
     });
     status = await waitForRun(opts.api, retryRunId, { pollIntervalMs: opts.pollIntervalMs });
@@ -339,6 +347,7 @@ async function runStages(
   agentId: string,
   skillId: string,
   pollIntervalMs: number,
+  model: string | null,
 ): Promise<{ completed: string[]; failedAt: string | null }> {
   const completed: string[] = [];
   let failedAt: string | null = null;
@@ -357,6 +366,7 @@ async function runStages(
       stage,
       message,
       skillId,
+      model: model ?? undefined,
     });
 
     let status = await waitForRun(api, runId, { pollIntervalMs });
@@ -368,6 +378,7 @@ async function runStages(
         stage,
         message,
         skillId,
+        model: model ?? undefined,
         conversationId,
       });
       status = await waitForRun(api, retryRunId, { pollIntervalMs });
@@ -401,7 +412,7 @@ export async function expandRoute(
 
   const stages = STAGE_ORDER[opts.depth] || STAGE_ORDER.outline;
   const { completed, failedAt } = await runStages(
-    opts.api, project, stages, agentId, opts.skill, opts.pollIntervalMs,
+    opts.api, project, stages, agentId, opts.skill, opts.pollIntervalMs, opts.model,
   );
 
   return { index: route.index, project, stages: completed, failedAt, conceptSummary: route.summary };
@@ -419,7 +430,7 @@ export async function singleExpand(
 
   const stages = STAGE_ORDER[opts.depth] || STAGE_ORDER.outline;
   const { completed, failedAt } = await runStages(
-    opts.api, project, stages, agentId, opts.skill, opts.pollIntervalMs,
+    opts.api, project, stages, agentId, opts.skill, opts.pollIntervalMs, opts.model,
   );
 
   return { index: 1, project, stages: completed, failedAt, conceptSummary: '(已有项目)' };
