@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const fetchSpy = vi.fn();
 globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-const { createProject, triggerRun, waitForRun, parseArgs, retryRun } =
+const { createProject, triggerRun, waitForRun, parseArgs, retryRun, importProject } =
   await import('../../../scripts/explore');
 
 import type { ExploreOptions } from '../../../scripts/explore';
@@ -128,6 +128,32 @@ describe('explore helpers', () => {
     });
   });
 
+  describe('importProject', () => {
+    it('returns existing project when path already imported', async () => {
+      // 第一次 GET 查询时已有
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ projects: [{ id: 'proj_existing', path: '/abs/my-novel' }] }),
+      });
+      const result = await importProject('http://localhost:3006', '/abs/my-novel');
+      expect(result).toEqual({ id: 'proj_existing', path: '/abs/my-novel' });
+      // 不应调 import 端点
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('imports via POST when not yet imported', async () => {
+      // GET 返回空
+      fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({ projects: [] }) });
+      // POST import
+      fetchSpy.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ project: { id: 'proj_new', path: '/abs/new' } }),
+      });
+      const result = await importProject('http://localhost:3006', '/abs/new');
+      expect(result).toEqual({ id: 'proj_new', path: '/abs/new' });
+    });
+  });
+
   describe('parseArgs', () => {
     it('parses seed, routes, depth', () => {
       const args = parseArgs(['--seed', '武侠失忆剑客', '--routes', '3', '--depth', 'outline']);
@@ -143,8 +169,19 @@ describe('explore helpers', () => {
       expect(args.api).toBe('http://localhost:3006');
     });
 
-    it('throws when seed missing', () => {
+    it('throws when seed missing in diverge mode', () => {
       expect(() => parseArgs([])).toThrow('seed');
+    });
+
+    it('parses single mode with project-dir', () => {
+      const args = parseArgs(['--mode', 'single', '--project-dir', '/tmp/my-novel', '--depth', 'characters']);
+      expect(args.mode).toBe('single');
+      expect(args.projectDir).toBe('/tmp/my-novel');
+      expect(args.depth).toBe('characters');
+    });
+
+    it('throws when project-dir missing in single mode', () => {
+      expect(() => parseArgs(['--mode', 'single'])).toThrow('project-dir');
     });
   });
 });
@@ -213,6 +250,7 @@ describe('buildReport', () => {
     agent: 'claude',
     skill: 'wuxia',
     pollIntervalMs: 1000,
+    mode: 'diverge',
   };
 
   it('marks fully completed route with checkmark', () => {

@@ -13,6 +13,7 @@
 // ===== CLI 参数 =====
 
 export interface ExploreOptions {
+  /** diverge 模式必需 */
   seed: string;
   routes: number;
   /** world | characters | outline | scenes */
@@ -22,10 +23,15 @@ export interface ExploreOptions {
   agent: string | null;
   skill: string;
   pollIntervalMs: number;
+  /** diverge（多路发散）| single（单路自治，复用已有项目） */
+  mode: 'diverge' | 'single';
+  /** single 模式必需：已有 .novel/ 目录的项目路径 */
+  projectDir?: string;
 }
 
 export function parseArgs(argv: string[]): ExploreOptions {
   const opts: Partial<ExploreOptions> = {
+    mode: 'diverge',
     routes: 3,
     depth: 'outline',
     api: process.env.EXPLORE_API || 'http://localhost:3006',
@@ -37,6 +43,8 @@ export function parseArgs(argv: string[]): ExploreOptions {
 
   for (let i = 0; i < argv.length; i++) {
     switch (argv[i]) {
+      case '--mode': opts.mode = argv[++i] as 'diverge' | 'single'; break;
+      case '--project-dir': opts.projectDir = argv[++i]; break;
       case '--seed': opts.seed = argv[++i]; break;
       case '--routes': opts.routes = parseInt(argv[++i], 10); break;
       case '--depth': opts.depth = argv[++i]; break;
@@ -48,7 +56,8 @@ export function parseArgs(argv: string[]): ExploreOptions {
     }
   }
 
-  if (!opts.seed) throw new Error('--seed 是必需参数');
+  if (opts.mode === 'diverge' && !opts.seed) throw new Error('diverge 模式需要 --seed');
+  if (opts.mode === 'single' && !opts.projectDir) throw new Error('single 模式需要 --project-dir');
   return opts as ExploreOptions;
 }
 
@@ -119,6 +128,30 @@ export async function retryRun(
   });
   if (!res.ok) throw new Error(`retryRun failed: ${res.statusText}`);
   return (await res.json()) as RunInfo;
+}
+
+/**
+ * 导入已有项目（目录下须有 .novel/ 结构）。已导入过则直接返回已有记录。
+ */
+export async function importProject(api: string, projectDir: string): Promise<ProjectInfo> {
+  const absPath = nodePath.resolve(projectDir);
+
+  // 先查是否已导入
+  const listRes = await fetch(`${api}/api/projects`);
+  if (listRes.ok) {
+    const data = (await listRes.json()) as { projects: ProjectInfo[] };
+    const existing = data.projects.find((p) => p.path === absPath);
+    if (existing) return existing;
+  }
+
+  const res = await fetch(`${api}/api/projects/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: absPath }),
+  });
+  if (!res.ok) throw new Error(`importProject failed: ${res.statusText}（确保目录下有 .novel/ 结构）`);
+  const data = (await res.json()) as { project: ProjectInfo };
+  return data.project;
 }
 
 interface RunStatusResponse {
@@ -295,6 +328,61 @@ export interface RouteResult {
   conceptSummary: string;
 }
 
+/**
+ * 串行推进一组阶段（PATCH 阶段 → triggerRun → waitForRun → 失败重试一次）。
+ * expandRoute 和 singleExpand 共用。
+ */
+async function runStages(
+  api: string,
+  project: ProjectInfo,
+  stages: string[],
+  agentId: string,
+  skillId: string,
+  pollIntervalMs: number,
+): Promise<{ completed: string[]; failedAt: string | null }> {
+  const completed: string[] = [];
+  let failedAt: string | null = null;
+
+  for (const stage of stages) {
+    await fetch(`${api}/api/projects/${project.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentStage: stage }),
+    });
+
+    const message = buildExpandMessage(stage);
+    const { runId, conversationId } = await triggerRun(api, {
+      projectId: project.id,
+      agentId,
+      stage,
+      message,
+      skillId,
+    });
+
+    let status = await waitForRun(api, runId, { pollIntervalMs });
+
+    if (status === 'failed') {
+      const { runId: retryRunId } = await retryRun(api, {
+        projectId: project.id,
+        agentId,
+        stage,
+        message,
+        skillId,
+        conversationId,
+      });
+      status = await waitForRun(api, retryRunId, { pollIntervalMs });
+    }
+
+    if (status === 'failed') {
+      failedAt = stage;
+      break;
+    }
+    completed.push(stage);
+  }
+
+  return { completed, failedAt };
+}
+
 export async function expandRoute(
   opts: ExploreOptions,
   route: ConceptRoute,
@@ -312,49 +400,29 @@ export async function expandRoute(
   await fs.writeFile(nodePath.join(routePath, '.novel', 'concept.md'), route.content);
 
   const stages = STAGE_ORDER[opts.depth] || STAGE_ORDER.outline;
-  const completed: string[] = [];
-  let failedAt: string | null = null;
-
-  for (const stage of stages) {
-    // 推进项目阶段
-    await fetch(`${opts.api}/api/projects/${project.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ currentStage: stage }),
-    });
-
-    const message = buildExpandMessage(stage);
-    const { runId, conversationId } = await triggerRun(opts.api, {
-      projectId: project.id,
-      agentId,
-      stage,
-      message,
-      skillId: opts.skill,
-    });
-
-    let status = await waitForRun(opts.api, runId, { pollIntervalMs: opts.pollIntervalMs });
-
-    // 重试一次
-    if (status === 'failed') {
-      const { runId: retryRunId } = await retryRun(opts.api, {
-        projectId: project.id,
-        agentId,
-        stage,
-        message,
-        skillId: opts.skill,
-        conversationId,
-      });
-      status = await waitForRun(opts.api, retryRunId, { pollIntervalMs: opts.pollIntervalMs });
-    }
-
-    if (status === 'failed') {
-      failedAt = stage;
-      break;
-    }
-    completed.push(stage);
-  }
+  const { completed, failedAt } = await runStages(
+    opts.api, project, stages, agentId, opts.skill, opts.pollIntervalMs,
+  );
 
   return { index: route.index, project, stages: completed, failedAt, conceptSummary: route.summary };
+}
+
+/**
+ * 单路自治：导入已有项目（有 concept.md），串行推进指定阶段。
+ * 不做发散、不拷贝 concept、不生成对比报告。
+ */
+export async function singleExpand(
+  opts: ExploreOptions,
+  agentId: string,
+): Promise<RouteResult> {
+  const project = await importProject(opts.api, opts.projectDir!);
+
+  const stages = STAGE_ORDER[opts.depth] || STAGE_ORDER.outline;
+  const { completed, failedAt } = await runStages(
+    opts.api, project, stages, agentId, opts.skill, opts.pollIntervalMs,
+  );
+
+  return { index: 1, project, stages: completed, failedAt, conceptSummary: '(已有项目)' };
 }
 
 // ===== 报告生成 =====
@@ -393,9 +461,6 @@ export function buildReport(opts: ExploreOptions, results: RouteResult[]): strin
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  console.log(`[${new Date().toISOString()}] 夜间探索启动`);
-  console.log(`  种子：${opts.seed}`);
-  console.log(`  路线数：${opts.routes}，深度：${opts.depth}`);
 
   // 健康检查
   const health = await fetch(`${opts.api}/api/projects`);
@@ -403,6 +468,21 @@ async function main() {
     console.error(`API 不可达（${opts.api}），请先运行 pnpm dev`);
     process.exit(1);
   }
+
+  const agentId = opts.agent || (await detectFirstAgent(opts.api));
+
+  if (opts.mode === 'single') {
+    await runSingle(opts, agentId);
+    return;
+  }
+
+  await runDiverge(opts, agentId);
+}
+
+async function runDiverge(opts: ExploreOptions, agentId: string) {
+  console.log(`[${new Date().toISOString()}] 夜间探索启动`);
+  console.log(`  种子：${opts.seed}`);
+  console.log(`  路线数：${opts.routes}，深度：${opts.depth}`);
 
   // 发散
   console.log(`\n[发散阶段] 生成 ${opts.routes} 条概念方向...`);
@@ -415,7 +495,6 @@ async function main() {
 
   // 展开
   console.log(`\n[展开阶段] 逐条推进至 ${opts.depth}...`);
-  const agentId = opts.agent || (await detectFirstAgent(opts.api));
   const results: RouteResult[] = [];
   let consecutiveFailures = 0;
 
@@ -443,6 +522,22 @@ async function main() {
   console.log(`\n[${new Date().toISOString()}] 探索完成`);
   console.log(`  报告：${reportPath}`);
   console.log(`  完成 ${results.filter((r) => !r.failedAt).length}/${routes.length} 条路线`);
+}
+
+async function runSingle(opts: ExploreOptions, agentId: string) {
+  console.log(`[${new Date().toISOString()}] 单路自治启动`);
+  console.log(`  项目：${opts.projectDir}`);
+  console.log(`  深度：${opts.depth}（阶段：${(STAGE_ORDER[opts.depth] || STAGE_ORDER.outline).join('→')}）`);
+
+  const result = await singleExpand(opts, agentId);
+
+  if (result.failedAt) {
+    console.log(`\n⚠️ 部分完成：${result.stages.join('→')} 后在 ${result.failedAt} 失败`);
+  } else {
+    console.log(`\n✅ 完成：${result.stages.join('→')}`);
+  }
+  console.log(`  项目路径：${result.project.path}`);
+  console.log(`[${new Date().toISOString()}] 完成`);
 }
 
 import { fileURLToPath } from 'node:url';
