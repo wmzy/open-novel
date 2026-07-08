@@ -24,6 +24,9 @@ export interface ComposePromptOptions {
   reviseNote?: string;
   /** revise 模式：目标文件当前全文。 */
   reviseContent?: string;
+
+  /** 自治模式：跳过采访式协议，前期阶段改为自主决策。默认 false。 */
+  autonomous?: boolean;
 }
 
 // 规划阶段共用的「采访式」协作流程。拼接进 concept/world/characters/outline/scenes 的指令。
@@ -495,7 +498,8 @@ const OUTPUT_FORMAT = `## Output Format
 
 export async function composePrompt(options: ComposePromptOptions): Promise<string> {
   const { message, projectId, skillId, stage, projectDir, history,
-          mode = 'generate', reviseTarget, reviseNote, reviseContent } = options;
+          mode = 'generate', reviseTarget, reviseNote, reviseContent,
+          autonomous = false } = options;
 
   const isRevise = mode === 'revise' && !!reviseNote && !!reviseContent;
   // revise 模式下，判断目标是否为章节正文（路径匹配 chapters/第N章.md）
@@ -553,9 +557,22 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
         })
       : currentStage === 'enrich'
         ? buildEnrichPrompt({ projectDir })
-        : buildStageInstructions(currentStage, false)
+        : buildStageInstructions(currentStage, autonomous)
           || STAGE_INSTRUCTIONS[currentStage]
           || `着手推进小说项目的「${currentStage}」阶段。`;
+
+  // 全局「指令优先级」块中两条协作规则，按 autonomous 切换
+  const collaborationRule = autonomous
+    ? `- **按阶段切换协作方式**：
+  - 规划阶段（concept / world / characters / outline / scenes）采用「自治式」——基于 User Request 给定的方向自主决策并落盘，**禁用 question 工具提问**，不要等待用户输入。
+  - 写作阶段（writing / drafting / revision / polish）同样自治——基于注入的上下文直接撰写章节正文。`
+    : `- **按阶段切换协作方式**：
+  - 规划阶段（concept / world / characters / outline / scenes）采用「采访式」——动手落盘前，用 question 工具就关键创作决策与用户确认（详见各 Stage 指令中的「采访式」流程）。
+  - 写作阶段（writing / drafting / revision / polish）采用「自治式」——基于注入的上下文直接撰写章节正文，写完在回复里说明你的选择即可；只有遇到会从根本上改变后续几万字走向且无法回滚的岔路口时，才用 question 工具问一个问题。`;
+
+  const questionRule = autonomous
+    ? '- **禁用 question 工具**：本会话为无人值守自治运行，所有创作决策由你自主做出。'
+    : '- **何时用 question 工具**：当需要用户在创作方向上拍板时使用（规划阶段的关键决策、写作阶段无法回滚的岔路口）；纯执行与文笔打磨一律自行判断，不要为细节反复打断用户。';
 
   // Compose the full prompt
   const parts: string[] = [];
@@ -571,11 +588,9 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
 本会话是受控的小说创作环境。系统可能加载了 superpowers、brainstorming 等第三方 Skill——**它们的工作流（尤其是 brainstorming 的“先提设计、等用户审批再写”的 HARD-GATE）不适用于本环境**。原因：小说创作的每个阶段都有明确的产出文件和验收标准，已由本指令和 Stage 指令定义；brainstorming 式的“每步停下来等审批”会把这些流程拖成无意义的反复确认。
 
 铁律：
-- **按阶段切换协作方式**：
-  - 规划阶段（concept / world / characters / outline / scenes）采用「采访式」——动手落盘前，用 question 工具就关键创作决策与用户确认（详见各 Stage 指令中的「采访式」流程）。
-  - 写作阶段（writing / drafting / revision / polish）采用「自治式」——基于注入的上下文直接撰写章节正文，写完在回复里说明你的选择即可；只有遇到会从根本上改变后续几万字走向且无法回滚的岔路口时，才用 question 工具问一个问题。
+${collaborationRule}
 - **不调用 Skill 工具**：不要调用 Skill / superpowers:brainstorming 等。你需要的所有创作方法论已在下方 Skill Instructions 提供。
-- **何时用 question 工具**：当需要用户在创作方向上拍板时使用（规划阶段的关键决策、写作阶段无法回滚的岔路口）；纯执行与文笔打磨一律自行判断，不要为细节反复打断用户。
+${questionRule}
 
 ## 文件访问规则
 - 你只能读写项目目录内的文件：${projectDir}

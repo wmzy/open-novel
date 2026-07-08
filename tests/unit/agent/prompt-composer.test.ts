@@ -115,6 +115,63 @@ describe('composePrompt', () => {
       });
     });
 
+    describe('autonomous mode', () => {
+      const PLANNING_STAGES = ['concept', 'world', 'characters', 'outline', 'scenes'];
+      for (const stage of PLANNING_STAGES) {
+        it(`injects autonomous protocol (not interview) into ${stage} stage when autonomous=true`, async () => {
+          const prompt = await composePrompt({
+            message: 'hi',
+            projectId: 'p',
+            stage,
+            projectDir: tempDir,
+            autonomous: true,
+          });
+          // 自治协议存在
+          expect(prompt).toContain('本阶段的协作方式：自治式');
+          expect(prompt).toContain('自主决策');
+          // 采访式协议不存在
+          expect(prompt).not.toContain('本阶段的协作方式：采访式');
+          // 决策清单不存在（autonomous 跳过）
+          expect(prompt).not.toContain('本阶段需要用 question 工具与用户确认的关键创作决策');
+        });
+      }
+
+      it('keeps writing stage unaffected by autonomous flag', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+          autonomous: true,
+        });
+        expect(prompt).not.toContain('本阶段的协作方式：自治式');
+        expect(prompt).not.toContain('本阶段的协作方式：采访式');
+      });
+
+      it('autonomous mode changes global priority block to forbid questions', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'concept',
+          projectDir: tempDir,
+          autonomous: true,
+        });
+        expect(prompt).toContain('采用「自治式」');
+        expect(prompt).toContain('禁用 question 工具');
+      });
+
+      it('default (no autonomous) keeps interview protocol unchanged', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'concept',
+          projectDir: tempDir,
+        });
+        expect(prompt).toContain('本阶段的协作方式：采访式');
+        expect(prompt).not.toContain('本阶段的协作方式：自治式');
+      });
+    });
+
     it('falls back for an unknown stage', async () => {
       const prompt = await composePrompt({
         message: 'hi',
