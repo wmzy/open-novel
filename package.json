@@ -12,6 +12,7 @@
     "build:server": "node scripts/build-server.mjs",
     "build": "npm run build:client && npm run build:server",
     "start": "node dist/server/api.js",
+    "explore": "node scripts/explore.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
