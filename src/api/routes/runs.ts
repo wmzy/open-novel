@@ -656,6 +656,74 @@ runsRouter.get('/conversations/:id/active-run', async (c) => {
   return c.json({ runId: latest.id });
 });
 
+/**
+ * Conversation 级 SSE 流——前端 mount/刷新时的主入口。
+ *
+ * 一次性排空：推历史 messages + 桥接活跃 RunStream 事件。run 结束后推固化
+ * 的完整消息，然后关闭。不是长期连接——用户发新消息时走 sendMessage 的
+ * per-run SSE（现有机制不变）。此端点纯粹用于「刷新后追回错过的」场景。
+ */
+runsRouter.get('/conversations/:id/stream', async (c) => {
+  const convId = c.req.param('id');
+
+  return stream(c, async (streamWriter) => {
+    c.header('Content-Type', 'text/event-stream');
+    c.header('Cache-Control', 'no-cache, no-transform');
+    c.header('Connection', 'keep-alive');
+    c.header('X-Accel-Buffering', 'no');
+
+    const write = async (event: string, data: unknown) => {
+      try { await streamWriter.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+      catch { /* disconnected */ }
+    };
+
+    // 1. 推历史 messages（已固化的完整对话）
+    const historyMsgs = await db.select().from(messages)
+      .where(eq(messages.conversationId, convId))
+      .orderBy(messages.createdAt);
+    for (const m of historyMsgs) {
+      await write('message', { id: m.id, role: m.role, content: m.content, events: m.events, artifacts: m.artifacts });
+    }
+
+    // 2. 查活跃 run
+    const [latestRun] = await db.select().from(runsTable)
+      .where(eq(runsTable.conversationId, convId))
+      .orderBy(desc(runsTable.createdAt))
+      .limit(1);
+
+    if (!latestRun || latestRun.status !== 'running') {
+      // 无活跃 run：历史已推完，一次性流结束
+      return;
+    }
+
+    const run = getRun(latestRun.id);
+    if (!run) return;
+
+    // 3. 桥接活跃 RunStream 事件（重放 fromSeq 0 + 实时推送）
+    let unsub: (() => void) | null = null;
+    unsub = run.stream.subscribe(0, async (event, data, id) => {
+      try { await streamWriter.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+      catch {}
+    });
+
+    streamWriter.onAbort(() => { if (unsub) unsub(); });
+
+    // 4. 等 run 结束
+    await run.finished;
+    await new Promise((r) => setTimeout(r, 100));
+    if (unsub) unsub();
+
+    // 5. 推 run 结束后固化的完整 assistant 消息（补充 events/artifacts）
+    const finalMsgs = await db.select().from(messages)
+      .where(eq(messages.conversationId, convId))
+      .orderBy(messages.createdAt);
+    const newMsgs = finalMsgs.slice(historyMsgs.length);
+    for (const m of newMsgs) {
+      await write('message', { id: m.id, role: m.role, content: m.content, events: m.events, artifacts: m.artifacts });
+    }
+  });
+});
+
 // Retry a failed run
 runsRouter.post('/:id/retry', async (c) => {
   const runId = c.req.param('id');
