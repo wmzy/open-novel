@@ -7,6 +7,8 @@ globalThis.fetch = fetchSpy as unknown as typeof fetch;
 const { createProject, triggerRun, waitForRun, parseArgs, retryRun } =
   await import('../../../scripts/explore');
 
+import type { ExploreOptions } from '../../../scripts/explore';
+
 describe('explore helpers', () => {
   beforeEach(() => fetchSpy.mockReset());
 
@@ -144,5 +146,88 @@ describe('explore helpers', () => {
     it('throws when seed missing', () => {
       expect(() => parseArgs([])).toThrow('seed');
     });
+  });
+});
+
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+
+const { parseConceptRoutes, buildDivergeMessage, buildExpandMessage, STAGE_ORDER, buildReport } =
+  await import('../../../scripts/explore');
+
+describe('diverge', () => {
+  it('parseConceptRoutes extracts concept-route-{N}.md files', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'explore-'));
+    await fs.mkdir(path.join(dir, '.novel'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.novel', 'concept-route-1.md'), '# 路线1\n核心：复仇');
+    await fs.writeFile(path.join(dir, '.novel', 'concept-route-2.md'), '# 路线2\n核心：救赎');
+    const routes = await parseConceptRoutes(dir);
+    expect(routes).toHaveLength(2);
+    expect(routes[0].content).toContain('复仇');
+    expect(routes[1].content).toContain('救赎');
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('parseConceptRoutes returns empty array when no files', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'explore-'));
+    const routes = await parseConceptRoutes(dir);
+    expect(routes).toEqual([]);
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('buildDivergeMessage contains seed, route count, and differentiation directive', () => {
+    const msg = buildDivergeMessage('武侠·失忆剑客', 3);
+    expect(msg).toContain('武侠·失忆剑客');
+    expect(msg).toContain('3');
+    expect(msg).toContain('concept-route-1.md');
+    expect(msg).toContain('实质性差异');
+  });
+
+  it('buildExpandMessage references concept seed and forbids PATCH', () => {
+    const msg = buildExpandMessage('world');
+    expect(msg).toContain('concept.md');
+    expect(msg).toContain('不要调用 PATCH');
+  });
+});
+
+describe('STAGE_ORDER', () => {
+  it('orders stages from world to outline by default depth', () => {
+    expect(STAGE_ORDER.outline).toEqual(['world', 'characters', 'outline']);
+  });
+  it('stops at world for shallow depth', () => {
+    expect(STAGE_ORDER.world).toEqual(['world']);
+  });
+  it('includes scenes for full depth', () => {
+    expect(STAGE_ORDER.scenes).toEqual(['world', 'characters', 'outline', 'scenes']);
+  });
+});
+
+describe('buildReport', () => {
+  const opts: ExploreOptions = {
+    seed: '测试种子',
+    routes: 2,
+    depth: 'outline',
+    api: 'http://localhost:3006',
+    baseDir: '/tmp/test',
+    agent: 'claude',
+    skill: 'wuxia',
+    pollIntervalMs: 1000,
+  };
+
+  it('marks fully completed route with checkmark', () => {
+    const report = buildReport(opts, [
+      { index: 1, project: { id: 'p1', path: '/tmp/r1' }, stages: ['world', 'characters', 'outline'], failedAt: null, conceptSummary: '复仇线' },
+    ]);
+    expect(report).toContain('✅');
+    expect(report).toContain('复仇线');
+  });
+
+  it('marks partially completed route with warning', () => {
+    const report = buildReport(opts, [
+      { index: 2, project: { id: 'p2', path: '/tmp/r2' }, stages: ['world'], failedAt: 'characters', conceptSummary: '救赎线' },
+    ]);
+    expect(report).toContain('⚠️');
+    expect(report).toContain('characters');
   });
 });
