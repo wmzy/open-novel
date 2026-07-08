@@ -26,6 +26,11 @@ export function useRun(conversationId?: string) {
   const activeRunsRef = useRef(new Set<string>());
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string | null>(conversationId || null);
+  // 当外部 prop conversationId 变化时（用户切换会话），同步 ref。
+  // 没有这个同步，prop 变化后 ref 仍是旧值，导致返回的 conversationId 错误。
+  useEffect(() => {
+    conversationIdRef.current = conversationId || null;
+  }, [conversationId]);
   const assistantContentRef = useRef<string>('');
   const assistantEventsRef = useRef<AgentEvent[] | null>(null);
   const assistantArtifactsRef = useRef<{ count: number; paths: string[] } | null>(null);

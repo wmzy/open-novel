@@ -136,12 +136,14 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const { data: prefetchedCommands } = useAgentCommands(agentId);
   const effectiveCommands = availableCommands.length > 0 ? availableCommands : (prefetchedCommands ?? []);
 
-  // Sync conversationId from hook back to state after a run completes
+  // Sync conversationId from hook back to state after a run completes.
+  // hookConversationId 来自 ref，不放入依赖数组（按值比较即可，避免渲染循环）。
   useEffect(() => {
     if (!isRunning && hookConversationId && hookConversationId !== activeConversationId) {
       setActiveConversationId(hookConversationId);
     }
-  }, [isRunning, hookConversationId, activeConversationId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRunning, activeConversationId]);
 
   // 持久化 activeConversationId（变更即写入）
   useEffect(() => {
