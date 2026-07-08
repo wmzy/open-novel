@@ -1,5 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { db, ensureDbReady } from '../../../src/db/drizzle';
+import { projects } from '../../../src/db/schema';
+import { eq } from 'drizzle-orm';
+import apiApp from '../../../src/api-app';
 import { sanitizeStderr } from '../../../src/api/routes/runs';
+
+// 仅用于 autonomous 透传测试：mock composePrompt 使其在被调用后即抛错，
+// 避免路由继续 launch 子进程；同时可断言传入参数。
+const { mockCompose } = vi.hoisted(() => ({ mockCompose: vi.fn() }));
+vi.mock('../../../src/agent/prompt-composer', () => ({ composePrompt: mockCompose }));
+vi.mock('../../../src/agent/registry', () => ({ getAgentDef: () => ({ id: 'claude', label: 'Claude' }) }));
+vi.mock('../../../src/agent/detection', () => ({ detectAgents: async () => [{ id: 'claude', available: true }] }));
 
 describe('sanitizeStderr', () => {
   it('redacts OpenAI/Anthropic-style API keys (sk-...)', () => {
@@ -47,5 +61,43 @@ describe('sanitizeStderr', () => {
 
   it('handles empty string', () => {
     expect(sanitizeStderr('')).toBe('');
+  });
+});
+
+describe('POST /api/runs — autonomous 透传', () => {
+  let tempDir: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    await ensureDbReady();
+    mockCompose.mockReset();
+    mockCompose.mockRejectedValue(new Error('stop-before-launch'));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'runs-api-'));
+    projectId = 'test_proj_autonomous';
+    await db.delete(projects).where(eq(projects.id, projectId));
+    await db.insert(projects).values({ id: projectId, title: 't', path: tempDir, genre: 'wuxia' });
+  });
+
+  afterEach(async () => {
+    await db.delete(projects).where(eq(projects.id, projectId)).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('body 中 autonomous=true 透传给 composePrompt', async () => {
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'concept', message: 'seed', autonomous: true }),
+    });
+    expect(mockCompose).toHaveBeenCalledWith(expect.objectContaining({ autonomous: true }));
+  });
+
+  it('缺省时 autonomous 为 false', async () => {
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'concept', message: 'seed' }),
+    });
+    expect(mockCompose).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
   });
 });

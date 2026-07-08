@@ -224,7 +224,7 @@ const runsRouter = new Hono();
 runsRouter.post('/', async (c) => {
   const body = await c.req.json();
   const { projectId, agentId, skillId, stage, message, conversationId, model,
-          mode = 'generate', targetFile, revisionNote } = body;
+          mode = 'generate', targetFile, revisionNote, autonomous = false } = body;
 
   const def = getAgentDef(agentId);
   if (!def) return c.json({ error: 'Agent not found' }, 404);
@@ -290,6 +290,7 @@ runsRouter.post('/', async (c) => {
     reviseTarget: targetFile,
     reviseNote: revisionNote,
     reviseContent,
+    autonomous,
   });
 
   /**
