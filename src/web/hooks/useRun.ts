@@ -27,28 +27,73 @@ export function useRun(conversationId?: string) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string | null>(conversationId || null);
   const assistantContentRef = useRef<string>('');
+  /** 恢复轮询定时器：刷新后发现有运行中的 run 时启动，run 结束自动停止。 */
+  const recoveryPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const assistantEventsRef = useRef<AgentEvent[] | null>(null);
   const assistantArtifactsRef = useRef<{ count: number; paths: string[] } | null>(null);
 
-  // Load existing messages when conversationId is provided on mount
+  // Load existing messages when conversationId is provided on mount.
+  // 若该 conversation 有仍在运行的 run（如刷新中断流式响应），启动轮询追赶
+  // 后端增量持久化的内容，直到 run 结束——避免「刷新后响应消失」。
   useEffect(() => {
     if (!conversationId) return;
     let cancelled = false;
-    (async () => {
+
+    const loadMessages = async () => {
       try {
         const res = await fetch(`/api/conversations/${conversationId}/messages`);
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (cancelled) return;
-        setMessages(data.messages.map((m: { role: string; content: string; events?: AgentEvent[]; artifacts?: { count: number; paths: string[] } }) => ({
+        setMessages(data.map((m: { role: string; content: string; events?: AgentEvent[]; artifacts?: { count: number; paths: string[] } }) => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
           events: m.events ?? undefined,
           artifacts: m.artifacts ?? undefined,
         })));
       } catch { /* ignore load errors */ }
+    };
+
+    const startRecoveryPoll = async () => {
+      try {
+        const res = await fetch(`/api/runs/conversations/${conversationId}/active-run`);
+        if (!res.ok || cancelled) return;
+        const { runId } = await res.json() as { runId: string | null };
+        if (cancelled || !runId) return;
+        // 有运行中的 run：标记 running 并轮询追赶增量持久化的内容
+        setIsRunning(true);
+        recoveryPollRef.current = setInterval(async () => {
+          await loadMessages();
+          // run 是否仍活跃；结束则最后一次加载并停止轮询
+          try {
+            const r = await fetch(`/api/runs/conversations/${conversationId}/active-run`);
+            if (!r.ok) return;
+            const { runId: still } = await r.json() as { runId: string | null };
+            if (!still) {
+              await loadMessages();
+              setIsRunning(false);
+              if (recoveryPollRef.current) {
+                clearInterval(recoveryPollRef.current);
+                recoveryPollRef.current = null;
+              }
+            }
+          } catch { /* ignore */ }
+        }, 1500);
+      } catch { /* ignore */ }
+    };
+
+    (async () => {
+      await loadMessages();
+      if (!cancelled) await startRecoveryPoll();
     })();
-    return () => { cancelled = true; };
+
+    return () => {
+      cancelled = true;
+      if (recoveryPollRef.current) {
+        clearInterval(recoveryPollRef.current);
+        recoveryPollRef.current = null;
+      }
+    };
   }, [conversationId]);
 
   const sendMessage = useCallback(async (params: {
@@ -67,6 +112,11 @@ export function useRun(conversationId?: string) {
   }) => {
     // Add user message
     setMessages((prev) => [...prev, { role: 'user', content: params.message }]);
+    // 用户发新消息时停止恢复轮询，改走正常 SSE 流
+    if (recoveryPollRef.current) {
+      clearInterval(recoveryPollRef.current);
+      recoveryPollRef.current = null;
+    }
     setIsRunning(true);
     setStatus('starting');
 
@@ -463,6 +513,10 @@ export function useRun(conversationId?: string) {
   }, []);
 
   const resetConversation = useCallback(() => {
+    if (recoveryPollRef.current) {
+      clearInterval(recoveryPollRef.current);
+      recoveryPollRef.current = null;
+    }
     conversationIdRef.current = null;
     setMessages([]);
   }, []);
@@ -473,7 +527,7 @@ export function useRun(conversationId?: string) {
       const res = await fetch(`/api/conversations/${convId}/messages`);
       if (!res.ok) return;
       const data = await res.json();
-      setMessages(data.messages.map((m: { role: string; content: string; events?: AgentEvent[]; artifacts?: { count: number; paths: string[] } }) => ({
+      setMessages(data.map((m: { role: string; content: string; events?: AgentEvent[]; artifacts?: { count: number; paths: string[] } }) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
         events: m.events ?? undefined,

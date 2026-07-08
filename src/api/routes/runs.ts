@@ -21,7 +21,8 @@ import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, projects, runs as runsTable } from '../../db/schema';
 import { generateId } from '../../utils/id';
-import { eq } from 'drizzle-orm';
+import { IncrementalAssistantMessage } from '../../agent/incremental-message';
+import { eq, desc } from 'drizzle-orm';
 
 // ===== 流层 watchdog 配置 =====
 /** 滑动窗口大小（字符数）。窗口内统计 2-gram 重复率。 */
@@ -301,6 +302,10 @@ runsRouter.post('/', async (c) => {
    * @param retryOf  Run ID this attempt is retrying (for logging). null on first attempt.
    * @returns The RunSession for this attempt.
    */
+  // assistant 消息增量持久化（跨 retry attempt 共享同一条消息）：
+  // 流式过程中惰性插入 + 节流更新，避免刷新导致响应「完全消失」。
+  const incremental = new IncrementalAssistantMessage(convId);
+
   async function launchAndTrack(retryOf: string | null): Promise<RunSession> {
   if (!def) throw new Error('Agent definition missing');
   const run = createRun({ projectId, agentId, skillId, stage });
@@ -354,6 +359,7 @@ runsRouter.post('/', async (c) => {
   const emitWithWatchdog = (event: StreamEvent) => {
     if (event.type === 'text_delta' && typeof event.delta === 'string') {
       if (watchdogTriggered) return;
+      incremental.onTextDelta(event.delta);
       watchdogBuffer = (watchdogBuffer + event.delta).slice(-WATCHDOG_WINDOW_SIZE);
       if (watchdogBuffer.length >= WATCHDOG_WINDOW_SIZE) {
         const result = detectDegradation(watchdogBuffer, { excludeGrams });
@@ -410,6 +416,7 @@ runsRouter.post('/', async (c) => {
     clearTimeout(timeoutTimer);
     emitEvent(run, 'agent', { type: 'error', message: err.message });
     handler.flush();
+    incremental.dispose();
     finishRun(run, 'failed');
     db.update(runsTable).set({ status: run.status, finishedAt: new Date() }).where(eq(runsTable.id, run.id)).execute();
   });
@@ -446,6 +453,9 @@ runsRouter.post('/', async (c) => {
 
     // P0: 以下所有收尾操作完成后再 finishRun — 'end' 事件 = 管道完全收尾
 
+    // 增量持久化的最新文本先落盘（防止 close 收尾期间刷新丢尾部 delta）
+    incremental.flush();
+
     // Persist assistant message (authoritative — frontend no longer persists).
     // Even if the SSE client disconnected, the message is durably stored here.
     // 失败的 run（code !== 0）只要有 agent 输出也持久化，加标记前缀，避免用户「丢失」已有响应。
@@ -453,16 +463,28 @@ runsRouter.post('/', async (c) => {
       const { content: assistantContent, events: agentEventList } = transformStreamEvents(agentEvents);
       if (assistantContent || agentEventList.length > 0) {
         const failed = code !== 0;
-        await db.insert(messages).values({
-          id: generateId('msg_'),
-          conversationId: convId,
-          role: 'assistant',
-          content: failed
-            ? `[执行异常${acpStopReason ? `(${acpStopReason})` : ''}] ${assistantContent || '(无文本输出)'}`
-            : assistantContent || '(无文本输出)',
-          events: agentEventList,
-          artifacts: writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null,
-        }).catch(() => {});
+        const finalContent = failed
+          ? `[执行异常${acpStopReason ? `(${acpStopReason})` : ''}] ${assistantContent || '(无文本输出)'}`
+          : assistantContent || '(无文本输出)';
+        const finalArtifacts = writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null;
+        if (incremental.messageId) {
+          // 增量已插入占位消息 → update 为权威结果（补 events/artifacts/最终 content）
+          await db.update(messages).set({
+            content: finalContent,
+            events: agentEventList,
+            artifacts: finalArtifacts,
+          }).where(eq(messages.id, incremental.messageId)).execute().catch(() => {});
+        } else {
+          // 无增量（纯工具事件无 text_delta）→ insert
+          await db.insert(messages).values({
+            id: generateId('msg_'),
+            conversationId: convId,
+            role: 'assistant',
+            content: finalContent,
+            events: agentEventList,
+            artifacts: finalArtifacts,
+          }).catch(() => {});
+        }
       }
     }
 
@@ -536,6 +558,8 @@ runsRouter.post('/', async (c) => {
         message: 'Agent 未产出任何文件，正在自动重试…',
         retry: true,
       });
+      // 重置增量文本（复用同一 messageId），新 attempt 的输出覆盖旧内容
+      incremental.resetForRetry();
       // 短暂延迟后重试，避免额度瞬时冲击
       setTimeout(() => { void launchAndTrack(run.id); }, 2000);
       // 不 finishRun — 重试的 run 会接管事件流
@@ -651,6 +675,18 @@ runsRouter.get('/conversations/:id/messages', async (c) => {
     .orderBy(messages.createdAt);
 
   return c.json(msgs.map((m) => ({ id: m.id, role: m.role, content: m.content, events: m.events, artifacts: m.artifacts, createdAt: m.createdAt })));
+});
+
+// 返回某 conversation 最近一条仍在运行的 run，供前端刷新后恢复轮询。
+// 已完成/不存在则返回 null。
+runsRouter.get('/conversations/:id/active-run', async (c) => {
+  const convId = c.req.param('id');
+  const [latest] = await db.select().from(runsTable)
+    .where(eq(runsTable.conversationId, convId))
+    .orderBy(desc(runsTable.createdAt))
+    .limit(1);
+  if (!latest || latest.status !== 'running') return c.json({ runId: null });
+  return c.json({ runId: latest.id });
 });
 
 // Retry a failed run

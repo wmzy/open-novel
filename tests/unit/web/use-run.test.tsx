@@ -108,3 +108,77 @@ describe('useRun — 流结束时 flush 最后一批 text_delta', () => {
     expect(assistantText(last.events)).toBe('工具前的文本工具后的尾文本');
   });
 });
+
+describe('useRun — 刷新后恢复运行中的 run', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('mount 检测到 active run 时轮询追赶消息，run 结束后停止', async () => {
+    vi.useFakeTimers();
+    let activeRunExists = true;
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = url.toString();
+      if (u.includes('/active-run')) {
+        return new Response(JSON.stringify({ runId: activeRunExists ? 'r1' : null }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/messages')) {
+        // 后端增量持久化：assistant content 随轮询增长
+        return new Response(JSON.stringify([
+          { id: 'm1', role: 'user', content: '写第一章' },
+          { id: 'm2', role: 'assistant', content: '正在生成的部分内容' },
+        ]), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('404', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useRun('conv1'));
+
+    // mount effect：初始 load + active-run 检测 → isRunning
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    expect(result.current.isRunning).toBe(true);
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[1].content).toBe('正在生成的部分内容');
+
+    // run 结束：active-run 返回 null，轮询停止
+    activeRunExists = false;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+
+    expect(result.current.isRunning).toBe(false);
+  });
+
+  it('无 active run 时不启动轮询，isRunning 保持 false', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(async (url: string) => {
+      const u = url.toString();
+      if (u.includes('/active-run')) {
+        return new Response(JSON.stringify({ runId: null }), {
+          status: 200, headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/messages')) {
+        return new Response(JSON.stringify([
+          { id: 'm1', role: 'user', content: 'hi' },
+          { id: 'm2', role: 'assistant', content: 'done' },
+        ]), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('404', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useRun('conv2'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+    expect(result.current.isRunning).toBe(false);
+    expect(result.current.messages).toHaveLength(2);
+    // 推进多个 interval 周期，确认没有轮询发起新请求
+    const callsBefore = fetchMock.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(fetchMock.mock.calls.length).toBe(callsBefore);
+  });
+});
