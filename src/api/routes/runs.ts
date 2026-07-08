@@ -224,7 +224,7 @@ const runsRouter = new Hono();
 runsRouter.post('/', async (c) => {
   const body = await c.req.json();
   const { projectId, agentId, skillId, stage, message, conversationId, model,
-          mode = 'generate', targetFile, revisionNote } = body;
+          mode = 'generate', targetFile, revisionNote, autonomous = false } = body;
 
   const def = getAgentDef(agentId);
   if (!def) return c.json({ error: 'Agent not found' }, 404);
@@ -290,6 +290,7 @@ runsRouter.post('/', async (c) => {
     reviseTarget: targetFile,
     reviseNote: revisionNote,
     reviseContent,
+    autonomous,
   });
 
   /**
@@ -630,6 +631,14 @@ runsRouter.post('/:id/ask/:askId', async (c) => {
   const ok = resolveAsk(run, askId, { action, content });
   if (!ok) return c.json({ error: 'Ask not found or expired' }, 404);
   return c.json({ ok: true });
+});
+
+// 返回 run 的当前状态 + 挂起的 elicitation askId 列表（供夜间探索等无人值守调度器轮询）。
+runsRouter.get('/:id/status', async (c) => {
+  const run = getRun(c.req.param('id'));
+  if (!run) return c.json({ error: 'Not found' }, 404);
+  const pendingAskIds = run._pendingAsks.size > 0 ? [...run._pendingAsks.keys()] : [];
+  return c.json({ status: run.status, pendingAskIds });
 });
 
 runsRouter.get('/conversations/:id/messages', async (c) => {
