@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { createRun, emitEvent, finishRun, cancelRun } from '../../agent/run';
-import { eventStore } from '../../agent/event-store';
 import { composePrompt } from '../../agent/prompt-composer';
 import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
@@ -76,8 +75,8 @@ rewriteRouter.post('/', async (c) => {
     projectDir,
   });
 
-  // 创建 run（不绑定对话）
-  const run = createRun({ projectId, agentId, skillId: skillId || '', stage: 'revision' });
+  // 创建 run（不绑定对话；RunStream 需要 conversationId 但重写不固化消息）
+  const run = createRun({ projectId, agentId, skillId: skillId || '', stage: 'revision', conversationId: `rewrite_${Date.now()}` });
   await db.insert(runsTable).values({ id: run.id, agent: agentId, status: 'running' });
 
   // 启动 agent 子进程
@@ -141,10 +140,9 @@ rewriteRouter.post('/', async (c) => {
       code = isAcpFailure(acpStopReason) ? 1 : 0;
     }
 
-    // 从 eventStore（DB 完整存储）读取全部事件，而非 run.events（200 条滑动窗口）。
-    // 理由同 runs.ts：大量 tool 事件会把早期 agent 文本挤出窗口。
-    await eventStore.flush(run.id);
-    const allEvents = await eventStore.replay(run.id, 0, run.events);
+    // 从 RunStream（DB + 内存窗口合并）读取全部事件
+    await run.stream.flush();
+    const allEvents = await run.stream.replay(0);
     const agentEvents = allEvents
       .filter((e) => e.event === 'agent')
       .map((e) => e.data as Record<string, unknown>);

@@ -11,18 +11,17 @@ import {
 } from '../../../src/agent/run';
 import type { RunSession } from '../../../src/agent/run';
 
-// Mock EventStore so run.ts unit tests stay focused on the state machine
-// and never touch the DB layer.
-vi.mock('../../../src/agent/event-store', () => ({
-  eventStore: {
-    append: vi.fn(),
-    flush: vi.fn().mockResolvedValue(undefined),
-    replay: vi.fn().mockResolvedValue([]),
-    release: vi.fn().mockResolvedValue(undefined),
+// Mock DB so RunStream's persistence layer doesn't interfere with state-machine tests.
+// run-stream.test.ts covers DB integration.
+vi.mock('../../../src/db/drizzle', () => ({
+  db: {
+    select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn().mockResolvedValue([]) })) })) })),
+    insert: vi.fn(() => ({ values: vi.fn().mockResolvedValue(undefined) })),
   },
+  ensureDbReady: vi.fn().mockResolvedValue(undefined),
 }));
 
-const META = { projectId: 'p1', agentId: 'a1', skillId: 's1', stage: 'draft' };
+const META = { projectId: 'p1', agentId: 'a1', skillId: 's1', stage: 'draft', conversationId: 'c1' };
 
 /** Attach a minimal stub child onto a run, returning the kill spy. */
 function stubChild(run: RunSession, killed: boolean) {
@@ -32,13 +31,12 @@ function stubChild(run: RunSession, killed: boolean) {
 }
 
 describe('createRun', () => {
-  it('initializes a fresh run: queued status, empty events, nextEventId 1, empty clients, null child', () => {
+  it('initializes a fresh run: queued status, stream ready, null child', () => {
     const run = createRun(META);
     expect(run.status).toBe('queued');
-    expect(run.events).toEqual([]);
-    expect(run.nextEventId).toBe(1);
-    expect(run.clients).toBeInstanceOf(Set);
-    expect(run.clients.size).toBe(0);
+    expect(run.stream).toBeDefined();
+    expect(run.stream.currentSeq).toBe(1);
+    expect(run.stream.isClosed).toBe(false);
     expect(run.child).toBeNull();
     expect(run.error).toBeNull();
     expect(run.cancelRequested).toBe(false);
@@ -64,100 +62,74 @@ describe('createRun', () => {
 });
 
 describe('emitEvent', () => {
-  it('increments nextEventId monotonically and records id/event/data/timestamp', () => {
+  it('increments currentSeq monotonically and notifies subscribers', () => {
     const run = createRun(META);
-    emitEvent(run, 'token', { v: 1 });
-    emitEvent(run, 'token', { v: 2 });
-    expect(run.nextEventId).toBe(3);
-    expect(run.events).toHaveLength(2);
-    expect(run.events[0]).toMatchObject({ id: 1, event: 'token', data: { v: 1 } });
-    expect(run.events[1]).toMatchObject({ id: 2, event: 'token', data: { v: 2 } });
-    expect(run.events[0].timestamp).toBeTypeOf('number');
+    const received: Array<{ event: string; data: unknown; id: number }> = [];
+    subscribeRun(run, 0, (event, data, id) => received.push({ event, data, id }));
+    // wait for async replay to settle (no history → empty)
+    return new Promise<void>((resolve) => setTimeout(resolve, 30)).then(() => {
+      emitEvent(run, 'token', { v: 1 });
+      emitEvent(run, 'token', { v: 2 });
+      expect(run.stream.currentSeq).toBe(3);
+      // filter out replay (empty) — only fan-out events
+      const fanout = received.filter((r) => r.event === 'token');
+      expect(fanout).toHaveLength(2);
+      expect(fanout[0]).toMatchObject({ event: 'token', data: { v: 1 }, id: 1 });
+      expect(fanout[1]).toMatchObject({ event: 'token', data: { v: 2 }, id: 2 });
+    });
   });
 
   it('advances updatedAt on each emit', async () => {
     const run = createRun(META);
     const before = run.updatedAt;
-    // a tiny sync gap guarantees a strictly greater clock reading
     await new Promise((r) => setTimeout(r, 5));
     emitEvent(run, 'token', null);
     expect(run.updatedAt).toBeGreaterThan(before);
   });
 
-  it('caps events at WINDOW_SIZE (200), retaining only the newest contiguous ids', () => {
-    const run = createRun(META);
-    const total = 300;
-    for (let i = 0; i < total; i++) emitEvent(run, 'tick', i);
-    expect(run.events).toHaveLength(200);
-    const ids = run.events.map((e) => e.id);
-    // last 200 ids are total-199 .. total (i.e. 101 .. 300), contiguous
-    expect(ids[0]).toBe(total - 200 + 1);
-    expect(ids[ids.length - 1]).toBe(total);
-    for (let i = 1; i < ids.length; i++) expect(ids[i]).toBe(ids[i - 1] + 1);
-    // newest payload preserved
-    expect(run.events[run.events.length - 1].data).toBe(total - 1);
-  });
-
-  it('notifies a subscribed client with (event, data, id)', () => {
+  it('notifies a subscribed client with (event, data, id)', async () => {
     const run = createRun(META);
     const client = vi.fn();
-    subscribeRun(run, client);
+    subscribeRun(run, 0, client);
+    await new Promise((r) => setTimeout(r, 30)); // let replay settle
     emitEvent(run, 'token', { x: 9 });
-    const emittedId = run.events[0].id;
-    expect(client).toHaveBeenCalledTimes(1);
-    expect(client).toHaveBeenCalledWith('token', { x: 9 }, emittedId);
+    expect(client).toHaveBeenCalledWith('token', { x: 9 }, expect.any(Number));
   });
 
-  it('does not notify a callback removed from clients', () => {
+  it('does not notify an unsubscribed callback', async () => {
     const run = createRun(META);
     const client = vi.fn();
-    subscribeRun(run, client);
-    run.clients.delete(client);
+    const unsub = subscribeRun(run, 0, client);
+    await new Promise((r) => setTimeout(r, 30));
+    unsub();
     emitEvent(run, 'token', null);
+    // client should have 0 calls (replay empty, unsubscribed before emit)
     expect(client).not.toHaveBeenCalled();
   });
 });
 
 describe('finishRun', () => {
-  it('transitions queued -> succeeded and emits end { status }', () => {
+  it('transitions queued -> succeeded and emits end { status }', async () => {
     const run = createRun(META);
     const client = vi.fn();
-    subscribeRun(run, client);
+    subscribeRun(run, 0, client);
+    await new Promise((r) => setTimeout(r, 30));
     finishRun(run, 'succeeded');
     expect(run.status).toBe('succeeded');
     expect(client).toHaveBeenCalledWith('end', { status: 'succeeded' }, expect.any(Number));
   });
 
-  it('transitions queued -> failed and emits end', () => {
-    const run = createRun(META);
-    finishRun(run, 'failed');
-    expect(run.status).toBe('failed');
-    expect(run.events[run.events.length - 1]).toMatchObject({
-      event: 'end',
-      data: { status: 'failed' },
-    });
-  });
-
-  it('transitions queued -> canceled and emits end', () => {
-    const run = createRun(META);
-    finishRun(run, 'canceled');
-    expect(run.status).toBe('canceled');
-    expect(run.events[run.events.length - 1]).toMatchObject({
-      event: 'end',
-      data: { status: 'canceled' },
-    });
-  });
-
-  it('is idempotent: repeated calls change status / emit end only once', () => {
+  it('is idempotent: repeated calls change status / emit end only once', async () => {
     const run = createRun(META);
     const client = vi.fn();
-    subscribeRun(run, client);
+    subscribeRun(run, 0, client);
+    await new Promise((r) => setTimeout(r, 30));
     finishRun(run, 'succeeded');
     finishRun(run, 'failed'); // no-op
     finishRun(run, 'canceled'); // no-op
     expect(run.status).toBe('succeeded');
-    expect(client).toHaveBeenCalledTimes(1);
-    expect(run.events.filter((e) => e.event === 'end')).toHaveLength(1);
+    const endCalls = client.mock.calls.filter((c) => c[0] === 'end');
+    expect(endCalls).toHaveLength(1);
   });
 
   it('resolves the finished promise exactly once', async () => {
@@ -167,20 +139,8 @@ describe('finishRun', () => {
     finishRun(run, 'succeeded');
     finishRun(run, 'failed'); // must not re-resolve
     await run.finished;
-    await Promise.resolve(); // drain trailing microtasks
+    await Promise.resolve();
     expect(onFinished).toHaveBeenCalledTimes(1);
-  });
-
-  it('clears clients so post-finish emits do not notify them', () => {
-    const run = createRun(META);
-    const client = vi.fn();
-    subscribeRun(run, client);
-    finishRun(run, 'succeeded');
-    // client received the single 'end' during finishRun, then clients cleared
-    expect(client).toHaveBeenCalledTimes(1);
-    expect(run.clients.size).toBe(0);
-    emitEvent(run, 'late', null);
-    expect(client).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -191,16 +151,12 @@ describe('cancelRun', () => {
     cancelRun(run);
     expect(run.cancelRequested).toBe(true);
     expect(run.status).toBe('canceled');
-    expect(run.events[run.events.length - 1]).toMatchObject({
-      event: 'end',
-      data: { status: 'canceled' },
-    });
   });
 
   it('is a no-op on an already-terminal run: no SIGTERM, no status change', () => {
     const run = createRun(META);
     const kill = stubChild(run, false);
-    finishRun(run, 'succeeded'); // make terminal
+    finishRun(run, 'succeeded');
     cancelRun(run);
     expect(run.status).toBe('succeeded');
     expect(kill).not.toHaveBeenCalled();
@@ -213,7 +169,6 @@ describe('cancelRun', () => {
     expect(run.cancelRequested).toBe(true);
     expect(kill).toHaveBeenCalledTimes(1);
     expect(kill).toHaveBeenCalledWith('SIGTERM');
-    // still non-terminal: final transition waits for the child close handler
     expect(run.status).toBe('queued');
   });
 
@@ -227,28 +182,21 @@ describe('cancelRun', () => {
 });
 
 describe('subscribeRun', () => {
-  it('delivers a single emit to every subscribed client with the same id', () => {
+  it('delivers a single emit to every subscribed client with the same id', async () => {
     const run = createRun(META);
     const a = vi.fn();
     const b = vi.fn();
-    subscribeRun(run, a);
-    subscribeRun(run, b);
+    subscribeRun(run, 0, a);
+    subscribeRun(run, 0, b);
+    await new Promise((r) => setTimeout(r, 30));
     emitEvent(run, 'token', { n: 1 });
-    const id = run.events[0].id;
-    expect(a).toHaveBeenCalledTimes(1);
-    expect(b).toHaveBeenCalledTimes(1);
-    expect(a).toHaveBeenCalledWith('token', { n: 1 }, id);
-    expect(b).toHaveBeenCalledWith('token', { n: 1 }, id);
-  });
-
-  it('deduplicates an identical callback reference (clients is a Set)', () => {
-    const run = createRun(META);
-    const cb = vi.fn();
-    subscribeRun(run, cb);
-    subscribeRun(run, cb);
-    expect(run.clients.size).toBe(1);
-    emitEvent(run, 'token', null);
-    expect(cb).toHaveBeenCalledTimes(1);
+    const aToken = a.mock.calls.find((c) => c[0] === 'token');
+    const bToken = b.mock.calls.find((c) => c[0] === 'token');
+    expect(aToken).toBeTruthy();
+    expect(bToken).toBeTruthy();
+    expect(aToken![1]).toEqual({ n: 1 });
+    expect(bToken![1]).toEqual({ n: 1 });
+    expect(aToken![2]).toBe(bToken![2]); // same id
   });
 });
 

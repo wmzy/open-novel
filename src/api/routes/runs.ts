@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun, resolveAsk } from '../../agent/run';
 import type { RunSession } from '../../agent/run';
-import { eventStore } from '../../agent/event-store';
 import { composePrompt } from '../../agent/prompt-composer';
 import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
@@ -21,7 +20,6 @@ import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, projects, runs as runsTable } from '../../db/schema';
 import { generateId } from '../../utils/id';
-import { IncrementalAssistantMessage } from '../../agent/incremental-message';
 import { eq, desc } from 'drizzle-orm';
 
 // ===== 流层 watchdog 配置 =====
@@ -302,26 +300,25 @@ runsRouter.post('/', async (c) => {
    * @param retryOf  Run ID this attempt is retrying (for logging). null on first attempt.
    * @returns The RunSession for this attempt.
    */
-  // assistant 消息增量持久化（跨 retry attempt 共享同一条消息）：
-  // 流式过程中惰性插入 + 节流更新，避免刷新导致响应「完全消失」。
-  const incremental = new IncrementalAssistantMessage(convId);
-
-  async function launchAndTrack(retryOf: string | null): Promise<RunSession> {
+  async function launchAndTrack(retryOf: string | null, existingRun?: RunSession): Promise<RunSession> {
   if (!def) throw new Error('Agent definition missing');
-  const run = createRun({ projectId, agentId, skillId, stage });
+  // retry 复用同一 run/stream，前端 SSE 不断流、事件累积在同一流中
+  const run = existingRun ?? createRun({ projectId, agentId, skillId, stage, conversationId: convId });
   run.status = 'running';
 
-  // Store run in DB（mode + payload 区分修订/重命名运行）
-  void db.insert(runsTable).values({
-    id: run.id,
-    conversationId: convId,
-    agent: agentId,
-    status: 'running',
-    mode,
-    payload: mode === 'revise' && targetFile
-      ? { targetFile, revisionNote, baseSnapshot }
-      : null,
-  }).execute();
+  // Store run in DB（仅首次创建时插入；retry 复用同一记录）
+  if (!existingRun) {
+    void db.insert(runsTable).values({
+      id: run.id,
+      conversationId: convId,
+      agent: agentId,
+      status: 'running',
+      mode,
+      payload: mode === 'revise' && targetFile
+        ? { targetFile, revisionNote, baseSnapshot }
+        : null,
+    }).execute();
+  }
 
   // Launch agent
   const { child } = launchAgent(def, composedPrompt, projectDir, [], model);
@@ -359,7 +356,6 @@ runsRouter.post('/', async (c) => {
   const emitWithWatchdog = (event: StreamEvent) => {
     if (event.type === 'text_delta' && typeof event.delta === 'string') {
       if (watchdogTriggered) return;
-      incremental.onTextDelta(event.delta);
       watchdogBuffer = (watchdogBuffer + event.delta).slice(-WATCHDOG_WINDOW_SIZE);
       if (watchdogBuffer.length >= WATCHDOG_WINDOW_SIZE) {
         const result = detectDegradation(watchdogBuffer, { excludeGrams });
@@ -416,7 +412,6 @@ runsRouter.post('/', async (c) => {
     clearTimeout(timeoutTimer);
     emitEvent(run, 'agent', { type: 'error', message: err.message });
     handler.flush();
-    incremental.dispose();
     finishRun(run, 'failed');
     db.update(runsTable).set({ status: run.status, finishedAt: new Date() }).where(eq(runsTable.id, run.id)).execute();
   });
@@ -433,11 +428,9 @@ runsRouter.post('/', async (c) => {
       code = isAcpFailure(acpStopReason) ? 1 : 0;
     }
 
-    // 从 eventStore（DB 完整存储）读取全部事件，而非 run.events（200 条滑动窗口）。
-    // enrich/逆向等场景 omp 大量调用工具，tool_call/tool_result 事件会把早期
-    // agent 文本输出挤出内存窗口，导致消息持久化只拿到尾部片段。
-    await eventStore.flush(run.id);
-    const allEvents = await eventStore.replay(run.id, 0, run.events);
+    // 从 RunStream 读取全部事件（DB + 内存窗口合并），提取写入路径 + emit artifacts
+    await run.stream.flush();
+    const allEvents = await run.stream.replay(0);
     const agentEvents = allEvents
       .filter((e) => e.event === 'agent')
       .map((e) => e.data as Record<string, unknown>);
@@ -452,41 +445,6 @@ runsRouter.post('/', async (c) => {
     }
 
     // P0: 以下所有收尾操作完成后再 finishRun — 'end' 事件 = 管道完全收尾
-
-    // 增量持久化的最新文本先落盘（防止 close 收尾期间刷新丢尾部 delta）
-    incremental.flush();
-
-    // Persist assistant message (authoritative — frontend no longer persists).
-    // Even if the SSE client disconnected, the message is durably stored here.
-    // 失败的 run（code !== 0）只要有 agent 输出也持久化，加标记前缀，避免用户「丢失」已有响应。
-    if (agentEvents.length > 0) {
-      const { content: assistantContent, events: agentEventList } = transformStreamEvents(agentEvents);
-      if (assistantContent || agentEventList.length > 0) {
-        const failed = code !== 0;
-        const finalContent = failed
-          ? `[执行异常${acpStopReason ? `(${acpStopReason})` : ''}] ${assistantContent || '(无文本输出)'}`
-          : assistantContent || '(无文本输出)';
-        const finalArtifacts = writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null;
-        if (incremental.messageId) {
-          // 增量已插入占位消息 → update 为权威结果（补 events/artifacts/最终 content）
-          await db.update(messages).set({
-            content: finalContent,
-            events: agentEventList,
-            artifacts: finalArtifacts,
-          }).where(eq(messages.id, incremental.messageId)).execute().catch(() => {});
-        } else {
-          // 无增量（纯工具事件无 text_delta）→ insert
-          await db.insert(messages).values({
-            id: generateId('msg_'),
-            conversationId: convId,
-            role: 'assistant',
-            content: finalContent,
-            events: agentEventList,
-            artifacts: finalArtifacts,
-          }).catch(() => {});
-        }
-      }
-    }
 
     // Sync file changes back to DB
     const projectDir = await resolveProjectDir(projectId);
@@ -558,15 +516,24 @@ runsRouter.post('/', async (c) => {
         message: 'Agent 未产出任何文件，正在自动重试…',
         retry: true,
       });
-      // 重置增量文本（复用同一 messageId），新 attempt 的输出覆盖旧内容
-      incremental.resetForRetry();
-      // 短暂延迟后重试，避免额度瞬时冲击
-      setTimeout(() => { void launchAndTrack(run.id); }, 2000);
-      // 不 finishRun — 重试的 run 会接管事件流
+      // 短暂延迟后重试，复用同一 run/stream（前端 SSE 不断流）
+      setTimeout(() => { void launchAndTrack(run.id, run); }, 2000);
+      // 不 finishRun 也不 close stream — 重试复用同一事件流
       return;
     }
 
     // P0: 最后才 finishRun — 'end' 事件表示管道完全收尾
+
+    // 固化 assistant 消息到 messages 表（RunStream.close 内部完成聚合 + 写入）
+    // 失败的 run（code !== 0）只要有 agent 输出也持久化，加标记前缀。
+    // 放在 retry 检查之后：retry 时不 close，保留 stream 给重试 attempt。
+    const finalArtifacts = writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null;
+    await run.stream.close(transformStreamEvents, {
+      failed: code !== 0,
+      failLabel: acpStopReason || undefined,
+      artifacts: finalArtifacts,
+    });
+
     finishRun(run, code === 0 ? 'succeeded' : 'failed');
   });
 
@@ -593,24 +560,24 @@ runsRouter.get('/:id/events', async (c) => {
 
     const lastEventId = Number(c.req.header('Last-Event-ID') || 0);
 
-    // Replay missed events (DB history + in-memory window, merged & deduped by seq)
-    const missed = await eventStore.replay(run.id, lastEventId, run.events);
-    for (const record of missed) {
-      await streamWriter.write(`id: ${record.id}\nevent: ${record.event}\ndata: ${JSON.stringify(record.data)}\n\n`);
-    }
-
-    // If already finished, close
-    if (['succeeded', 'failed', 'canceled'].includes(run.status)) {
-      return;
-    }
-
-    // Subscribe for live events
+    // Subscribe for replay (from lastEventId) + live events
     const send = async (event: string, data: unknown, id: number) => {
       try {
         await streamWriter.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
       } catch { /* client disconnected */ }
     };
-    subscribeRun(run, send);
+
+    // If already finished, just replay and close
+    if (['succeeded', 'failed', 'canceled'].includes(run.status)) {
+      const missed = await run.stream.replay(lastEventId);
+      for (const record of missed) {
+        await send(record.event, record.data, record.id);
+      }
+      return;
+    }
+
+    // Subscribe: replay missed + live events (single source)
+    const unsub = subscribeRun(run, lastEventId, send);
 
     // Keep-alive heartbeat
     const heartbeat = setInterval(async () => {
@@ -620,7 +587,7 @@ runsRouter.get('/:id/events', async (c) => {
 
     streamWriter.onAbort(() => {
       clearInterval(heartbeat);
-      run.clients.delete(send);
+      unsub();
     });
 
     // Wait until run finishes (event-driven, no polling)
