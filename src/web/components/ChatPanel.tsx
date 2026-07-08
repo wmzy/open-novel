@@ -7,6 +7,7 @@ import { useAgents } from '@/web/hooks/useAgents';
 import { useAgentCommands } from '@/web/hooks/useAgentCommands';
 import { useFileAutocomplete } from '@/web/hooks/useFileAutocomplete';
 import { REVISE_TO_CHAT_EVENT } from '@/web/hooks/useFileRevision';
+import { INSPIRE_TO_CHAT_EVENT } from './InspirationPicker';
 import AgentMessage from './AgentMessage';
 import RevisionDiffPanel from './RevisionDiffPanel';
 import { css, cx } from '@linaria/core';
@@ -108,6 +109,22 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const fileAutocomplete = useFileAutocomplete(projectId);
 
   const { messages: chatMessages, isRunning, status, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+
+  // 灵感注入：来自视图 💡 按钮 dispatch 的事件，直接 sendMessage（消息已组装好）
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { message: string };
+      sendMessage({
+        projectId,
+        agentId,
+        skillId,
+        stage,
+        message: detail.message,
+      });
+    };
+    window.addEventListener(INSPIRE_TO_CHAT_EVENT, handler);
+    return () => window.removeEventListener(INSPIRE_TO_CHAT_EVENT, handler);
+  }, [sendMessage, projectId, agentId, skillId, stage]);
 
   // pendingAsk 变化时重置临时状态
   useEffect(() => {
