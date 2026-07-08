@@ -633,6 +633,14 @@ runsRouter.post('/:id/ask/:askId', async (c) => {
   return c.json({ ok: true });
 });
 
+// 返回 run 的当前状态 + 挂起的 elicitation askId 列表（供夜间探索等无人值守调度器轮询）。
+runsRouter.get('/:id/status', async (c) => {
+  const run = getRun(c.req.param('id'));
+  if (!run) return c.json({ error: 'Not found' }, 404);
+  const pendingAskIds = run._pendingAsks.size > 0 ? [...run._pendingAsks.keys()] : [];
+  return c.json({ status: run.status, pendingAskIds });
+});
+
 runsRouter.get('/conversations/:id/messages', async (c) => {
   const convId = c.req.param('id');
   const existing = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
