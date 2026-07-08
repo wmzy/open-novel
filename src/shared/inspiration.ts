@@ -17,7 +17,7 @@ export type Dimension =
 export interface DimensionParams {
   /** 门派/势力名（faction 必填）。 */
   faction?: string;
-  /** 原型人物名（archetype 必填）。 */
+  /** 原型人物名（可选；留空时由 AI 自由挑选原型）。 */
   archetype?: string;
   /** 功能定位（role 必填）。 */
   role?: '盟友' | '导师' | '镜面' | '障碍' | '叛徒' | '救星';
@@ -52,8 +52,10 @@ function buildDimensionPrefix(dimension: Dimension, params: DimensionParams): st
       return `这 3 个角色都隶属「${params.faction}」——`;
     }
     case 'archetype': {
-      if (!params.archetype) throw new Error('archetype 维度需要 archetype 参数');
-      return `这 3 个角色都以「${params.archetype}」为蓝本，抽取其核心特质转译到本世界，不要照搬历史事迹——`;
+      if (params.archetype) {
+        return `这 3 个角色都以「${params.archetype}」为蓝本，抽取其核心特质转译到本世界，不要照搬历史事迹——`;
+      }
+      return `这 3 个角色各以一个历史/现实人物为原型蓝本（由你挑选，可以是真实人物或经典虚构角色），抽取其核心特质转译到本世界，不要照搬原型事迹，每个标注参考了谁——`;
     }
     case 'role': {
       if (!params.role) throw new Error('role 维度需要 role 参数');
@@ -72,4 +74,38 @@ function buildDimensionPrefix(dimension: Dimension, params: DimensionParams): st
       return `这 3 个角色风格差异最大、来自不同维度——`;
     }
   }
+}
+
+// ── 角色丰富（内嵌灵感：针对单个已有角色）──────────────────────────────
+
+/** 角色丰富方向。用于卡片内嵌的轻量方向选择。 */
+export type EnrichDirection = 'deeds' | 'role' | 'backstory';
+
+/** 各方向的中文标签与定向指令。 */
+export const ENRICH_DIRECTION_LABELS: Record<EnrichDirection, string> = {
+  deeds: '补充事迹',
+  role: '强化定位',
+  backstory: '挖掘背景',
+};
+
+const ENRICH_INSTRUCTIONS: Record<EnrichDirection, string> = {
+  deeds: '为这个角色设计 3 个关键事件或转折点，说明每个如何推动现有剧情',
+  role: '厘清这个角色在故事里的叙事功能与存在意义，给 3 个可强化的定位方向',
+  backstory: '为这个角色挖掘登场前的来历、秘密或前史，给 3 个有张力的背景选项',
+};
+
+/** 共用片段：丰富现有角色（区别于生成新角色种子）。 */
+const ENRICH_COMMON = [
+  '请**跳过采访流程**，直接给候选方向。',
+  '**不要改写现有档案**，只给方向和建议，我挑中后再展开。',
+].join('');
+
+/**
+ * 针对单个已有角色，组装「丰富该角色」的灵感请求。
+ * 角色名为空时抛 Error——调用方应保证传入有效角色名。
+ */
+export function buildCharacterEnrichMessage(characterName: string, direction: EnrichDirection): string {
+  const name = characterName.trim();
+  if (!name) throw new Error('角色名不能为空');
+  return `请帮我丰富现有角色「${name}」，方向：${ENRICH_DIRECTION_LABELS[direction]}。${ENRICH_INSTRUCTIONS[direction]}。${ENRICH_COMMON}`;
 }

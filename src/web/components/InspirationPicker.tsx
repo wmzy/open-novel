@@ -91,7 +91,7 @@ const generateBtn = css`
 function paramsComplete(dimension: Dimension, params: DimensionParams): boolean {
   switch (dimension) {
     case 'faction': return !!params.faction?.trim();
-    case 'archetype': return !!params.archetype?.trim();
+    case 'archetype': return true; // 原型可选，留空则 AI 自由发挥
     case 'role': return !!params.role;
     case 'tension': return !!params.tension?.target?.trim() && !!params.tension?.type;
     case 'triangle':
@@ -149,7 +149,7 @@ export default function InspirationPicker() {
       {dimension === 'archetype' && (
         <div className={row}>
           <span className={label}>原型人物：</span>
-          <input className={input} value={archetype} onChange={(e) => setArchetype(e.target.value)} placeholder="如：诸葛亮、白起、苏轼" />
+          <input className={input} value={archetype} onChange={(e) => setArchetype(e.target.value)} placeholder="如：诸葛亮、白起、苏轼（留空则 AI 自由发挥）" />
         </div>
       )}
       {dimension === 'role' && (

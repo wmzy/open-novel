@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildInspirationMessage } from '../../../src/shared/inspiration';
+import {
+  buildInspirationMessage,
+  buildCharacterEnrichMessage,
+  ENRICH_DIRECTION_LABELS,
+  type EnrichDirection,
+} from '../../../src/shared/inspiration';
 
 describe('buildInspirationMessage', () => {
   // 共用片段断言——所有维度都须包含
@@ -30,8 +35,11 @@ describe('buildInspirationMessage', () => {
       for (const p of COMMON_PATTERNS) expect(msg).toContain(p);
     });
 
-    it('缺 archetype 参数抛错', () => {
-      expect(() => buildInspirationMessage('archetype', {})).toThrow('archetype');
+    it('原型留空则由 AI 自由发挥', () => {
+      const msg = buildInspirationMessage('archetype', {});
+      expect(msg).toContain('由你挑选');
+      expect(msg).toContain('标注参考了谁');
+      for (const p of COMMON_PATTERNS) expect(msg).toContain(p);
     });
   });
 
@@ -79,5 +87,28 @@ describe('buildInspirationMessage', () => {
       expect(msg).toContain('风格差异最大');
       for (const p of COMMON_PATTERNS) expect(msg).toContain(p);
     });
+  });
+});
+
+describe('buildCharacterEnrichMessage', () => {
+  // 丰富现有角色，不生成新角色种子，共用片段不同
+  const ENRICH_PATTERNS = [
+    '跳过采访流程',
+    '不要改写现有档案',
+    '我挑中后再展开',
+  ];
+
+  it.each(Object.keys(ENRICH_DIRECTION_LABELS) as EnrichDirection[])(
+    '%s 方向：注入角色名 + 方向说明 + 丰富共用片段',
+    (dir) => {
+      const msg = buildCharacterEnrichMessage('林冲', dir);
+      expect(msg).toContain('林冲');
+      expect(msg).toContain(ENRICH_DIRECTION_LABELS[dir]);
+      for (const p of ENRICH_PATTERNS) expect(msg).toContain(p);
+    },
+  );
+
+  it('角色名留空抛错', () => {
+    expect(() => buildCharacterEnrichMessage('  ', 'deeds')).toThrow('角色名');
   });
 });
