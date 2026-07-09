@@ -449,3 +449,27 @@ export const deepenBanner = css`
   font-size: 0.75rem;
   color: var(--haze-color-text);
 `;
+
+/** 深化弹框：用户提示标签 */
+export const deepenHintLabel = css`
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8125rem;
+  color: var(--haze-color-text);
+`;
+
+/** 深化弹框：用户提示文本区 */
+export const deepenHintInput = css`
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 2.5rem;
+  &::placeholder { color: var(--haze-color-text-secondary); opacity: 0.7; }
+`;

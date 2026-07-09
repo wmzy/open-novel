@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DEEPEN_TO_CHAT_EVENT,
   DEEPEN_DIMENSIONS,
+  DEEPEN_MIN_ROUNDS,
   SATURATION_SIGNAL,
   buildDeepenMessage,
   detectSaturation,
@@ -28,6 +29,12 @@ describe('deepen', () => {
     });
   });
 
+  describe('DEEPEN_MIN_ROUNDS', () => {
+    it('is at least 5 to prevent premature saturation', () => {
+      expect(DEEPEN_MIN_ROUNDS).toBeGreaterThanOrEqual(5);
+    });
+  });
+
   describe('buildDeepenMessage', () => {
     it('includes stage name and round number', () => {
       const msg = buildDeepenMessage('characters', 3);
@@ -48,22 +55,46 @@ describe('deepen', () => {
       expect(msg).toContain('修订');
     });
 
-    it('includes saturation signal instructions', () => {
+    it('includes saturation signal instructions with strict 5-point threshold', () => {
       const msg = buildDeepenMessage('characters', 1);
-      expect(msg).toContain('4 分以上');
+      expect(msg).toContain('满分 5 分');
       expect(msg).toContain(SATURATION_SIGNAL);
     });
 
-    it('forbids question tool and stage advancement', () => {
+    it('forbids PATCH stage update and question tool', () => {
       const msg = buildDeepenMessage('outline', 1);
-      expect(msg).toContain('不要用 question 工具');
+      expect(msg).toContain('不要调用 PATCH');
       expect(msg).toContain('不要推进到下一阶段');
+      expect(msg).toContain('不要用 question 工具');
+    });
+
+    it('encourages creating new content, not just refining existing', () => {
+      const msg = buildDeepenMessage('characters', 1);
+      expect(msg).toContain('扩展');
+      expect(msg).toContain('补充');
+      expect(msg).toContain('创建新内容');
+    });
+
+    it('includes user hint when provided', () => {
+      const msg = buildDeepenMessage('characters', 1, '增加更多女性角色，强化反派动机');
+      expect(msg).toContain('用户特别指导');
+      expect(msg).toContain('增加更多女性角色，强化反派动机');
+    });
+
+    it('omits hint section when no user hint', () => {
+      const msg = buildDeepenMessage('characters', 1);
+      expect(msg).not.toContain('用户特别指导');
+    });
+
+    it('omits hint section when hint is whitespace-only', () => {
+      const msg = buildDeepenMessage('characters', 1, '   ');
+      expect(msg).not.toContain('用户特别指导');
     });
   });
 
   describe('detectSaturation', () => {
     it('detects saturation signal in log content', () => {
-      const log = `## 第3轮\n**维度评分**：动机 5, 关系 4\n${SATURATION_SIGNAL}`;
+      const log = `## 第3轮\n**维度评分**：动机 5, 关系 5\n${SATURATION_SIGNAL}`;
       expect(detectSaturation(log)).toBe(true);
     });
 

@@ -10,6 +10,7 @@ import { REVISE_TO_CHAT_EVENT } from '@/web/hooks/useFileRevision';
 import { INSPIRE_TO_CHAT_EVENT } from './InspirationPicker';
 import {
   DEEPEN_TO_CHAT_EVENT,
+  DEEPEN_MIN_ROUNDS,
   buildDeepenMessage,
   detectSaturation,
   parseDeadlineInput,
@@ -28,6 +29,7 @@ import {
   reviseBanner, reviseBannerClose,
   deepenOverlay, deepenDialog, deepenInput, deepenActions,
   deepenConfirmBtn, deepenCancelBtn, deepenBanner,
+  deepenHintLabel, deepenHintInput,
 } from './ChatPanel.styles';
 
 interface Command {
@@ -121,10 +123,12 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     deadline: number;
     round: number;
     consecutiveFailures: number;
+    userHint?: string;
   } | null>(null);
   const [showDeepenDialog, setShowDeepenDialog] = useState(false);
   const [deepenDialogStage, setDeepenDialogStage] = useState('');
   const [deadlineInput, setDeadlineInput] = useState('06:00');
+  const [deepenHint, setDeepenHint] = useState('');
   const prevIsRunningRef = useRef(false);
 
   useEffect(() => {
@@ -197,18 +201,29 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       return;
     }
     const ds = deepenDialogStage;
-    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0 });
+    const hint = deepenHint.trim() || undefined;
+
+    // 创建里程碑快照：深化前的回滚点，用户审核后可 restore
+    fetch(`/api/projects/${projectId}/snapshots/user`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: `deepen-${ds}-start` }),
+    }).then((r) => r.ok ? r.json() : null).then((data) => {
+      if (data?.hash) toast.success(`已创建回滚点 deepen-${ds}-start`);
+    }).catch(() => {});
+
+    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, userHint: hint });
     setShowDeepenDialog(false);
     sendMessage({
       projectId,
       agentId,
       skillId,
       stage: ds,
-      message: buildDeepenMessage(ds, 1),
+      message: buildDeepenMessage(ds, 1, hint),
       autonomous: true,
       model: selectedModel !== 'default' ? selectedModel : undefined,
     });
-  }, [deadlineInput, deepenDialogStage, sendMessage, projectId, agentId, skillId, selectedModel]);
+  }, [deadlineInput, deepenDialogStage, deepenHint, sendMessage, projectId, agentId, skillId, selectedModel]);
 
   /** 退出深化模式 */
   const exitDeepen = useCallback((reason: string) => {
@@ -239,18 +254,20 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
       // 饱和检测 + 时间检查是异步的（需 fetch deepen-log）
       (async () => {
-        // 停止条件 2：饱和检测——检查 deepen-log 是否有饱和信号
-        try {
-          const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-log.md')}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (detectSaturation(data.content || '')) {
-              exitDeepen('饱和检测：各维度已达 4+ 分');
-              prevIsRunningRef.current = isRunning;
-              return;
+        // 停止条件 2：饱和检测——仅在超过最低轮数后才检查
+        if (deepenMode.round >= DEEPEN_MIN_ROUNDS) {
+          try {
+            const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-log.md')}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (detectSaturation(data.content || '')) {
+                exitDeepen('饱和检测：各维度连续两轮满分');
+                prevIsRunningRef.current = isRunning;
+                return;
+              }
             }
-          }
-        } catch { /* 读文件失败不阻断 */ }
+          } catch { /* 读文件失败不阻断 */ }
+        }
 
         // 停止条件 3：截止时间到
         if (Date.now() >= deepenMode.deadline) {
@@ -267,7 +284,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           agentId,
           skillId,
           stage: deepenMode.stage,
-          message: buildDeepenMessage(deepenMode.stage, nextRound),
+          message: buildDeepenMessage(deepenMode.stage, nextRound, deepenMode.userHint),
           autonomous: true,
           model: selectedModel !== 'default' ? selectedModel : undefined,
         });
@@ -625,6 +642,16 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
                 onChange={(e) => setDeadlineInput(e.target.value)}
                 placeholder="HH:MM"
                 className={deepenInput}
+              />
+            </label>
+            <label className={deepenHintLabel}>
+              特别指导（可选）：
+              <textarea
+                value={deepenHint}
+                onChange={(e) => setDeepenHint(e.target.value)}
+                placeholder="如：增加更多女性角色 / 加强反派的动机深度 / 补充角色间的暧昧关系..."
+                className={deepenHintInput}
+                rows={3}
               />
             </label>
             <div className={deepenActions}>

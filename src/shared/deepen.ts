@@ -5,16 +5,25 @@
  * 被 ChatPanel（监听事件 + 驱动循环）和各视图（dispatch 事件）共用。
  *
  * 调研依据：
- * - Self-Refine (NeurIPS 2023)：多维度结构化评分优于泛泛反思
+ * - Self-Refine (NeURIPS 2023)：多维度结构化评分优于泛泛反思
  * - R2-Write (ICML)：写作需触发验证（Verification）和回溯（Backtracking）思维
  * - Semantic Early-Stopping：饱和检测避免低效空转
+ *
+ * v2 改进（用户反馈）：
+ * - 禁止阶段切换：message 明确不调用 PATCH 更新阶段
+ * - 鼓励新建：不只打磨现有内容，主动识别和补充缺失部分
+ * - 用户提示：支持用户在启动时注入自定义指导
+ * - 饱和阈值提高：满分 5 分 + 强制最低轮数（防止 agent 自评偏差导致过早饱和）
  */
 
 /** 视图 → ChatPanel 的事件名（dispatch CustomEvent） */
 export const DEEPEN_TO_CHAT_EVENT = 'open-novel:deepen-to-chat';
 
+/** 强制最低轮数：在此之前忽略饱和信号，确保足够深度的迭代 */
+export const DEEPEN_MIN_ROUNDS = 8;
+
 /** 饱和信号标记——agent 写入 deepen-log 表示各维度已达标，前端检测后停止循环 */
-export const SATURATION_SIGNAL = '[饱和信号：各维度已达 4+ 分，无明显可改进项]';
+export const SATURATION_SIGNAL = '[饱和信号：所有维度连续两轮达到满分 5 分，确无任何可改进空间]';
 
 /** 事件 detail 类型 */
 export interface DeepenToChatDetail {
@@ -74,43 +83,59 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 /**
- * 构造深化 message。融合三个调研优化：
- * - 结构化维度评分（优化 1）
- * - 验证→回溯→修订思维引导（优化 2）
- * - 饱和信号指令（优化 3）
+ * 构造深化 message。
+ *
+ * 改进点：
+ * - 禁止阶段切换：明确告知不调用 PATCH、不推进阶段（避免与 composePrompt 的 STAGE_TAIL 冲突）
+ * - 鼓励新建：明确"不仅打磨现有内容，还要补充缺失部分"
+ * - 用户提示：将用户的自定义指导注入 message
+ * - 饱和阈值提高：从"4+ 分"改为"连续两轮满分 5 分"
  */
-export function buildDeepenMessage(stage: string, round: number): string {
+export function buildDeepenMessage(stage: string, round: number, userHint?: string): string {
   const label = STAGE_LABELS[stage] || stage;
   const dimensions = DEEPEN_DIMENSIONS[stage] || [];
 
-  return `你在做「${label}」阶段的深化打磨，这是第 ${round} 轮迭代。
+  const hintBlock = userHint?.trim()
+    ? `\n## 用户特别指导\n${userHint.trim()}\n`
+    : '';
 
-## 评估维度
+  return `⚠️ 这是「${label}」阶段的自助深化循环，第 ${round} 轮。你已在此阶段，不要切换阶段。
+${hintBlock}
+## 铁律（覆盖系统指令中的任何阶段推进提示）
+- **不要调用 PATCH /api/projects 更新阶段**——你始终停留在「${label}」阶段
+- **不要推进到下一阶段**，不要切换到其他阶段的工作
+- **不要用 question 工具提问**——这是无人值守自治运行
+
+## 评估维度（逐项打 1-5 分）
 ${dimensions.map((d, i) => `${i + 1}. ${d}`).join('\n')}
 
-## 流程（验证→回溯→修订）
+## 流程（验证→回溯→修订→扩展）
 1. 读取当前阶段的产出文件
 2. 读取 .novel/deepen-log.md 了解前几轮的评分和改进历史
 3. **验证**：逐维度检查当前产出是否满足质量标准，给每个维度打 1-5 分
 4. **回溯**：对最低分维度，分析根因（是缺少信息？逻辑断裂？还是深度不够？）
 5. **修订**：针对根因做具体补充，而非表面润色
-6. 修改完后在 .novel/deepen-log.md 追加本轮记录，格式：
+6. **扩展**：不仅打磨现有内容，还要主动识别叙事中缺失的部分并补充——
+   如发现缺少关键功能性角色、未展开的关系线、或可补充的新视角，主动创建新内容
+7. 修改完后在 .novel/deepen-log.md 追加本轮记录，格式：
    ## 第${round}轮
    **维度评分**：<维度名 旧分→新分, ...>
    - 发现：<本轮识别的最低分维度及其根因>
-   - 改进：<做了什么具体修改>
+   - 改进：<做了什么具体修改或新建了什么内容>
    - 下轮建议：<下一轮值得关注的方向>
-7. 不要用 question 工具提问，不要推进到下一阶段
 
-## 饱和信号
-如果本轮评估后发现所有维度已达 4 分以上，且没有明显可改进项，
-在 deepen-log 本轮记录末尾另起一行写：${SATURATION_SIGNAL}
-系统将自动停止循环。`;
+## 饱和判定（严格）
+仅当满足以下全部条件时，才在 deepen-log 本轮记录末尾另起一行写：${SATURATION_SIGNAL}
+- 所有维度连续两轮（含本轮）达到满分 5 分
+- 你确认已穷尽所有可改进空间，每一轮仍有实质提升才算未饱和
+不要因为"感觉差不多了"就提前触发饱和——创作总有深化空间`;
 }
 
 /**
  * 检测 deepen-log 内容中是否包含饱和信号。
  * 用于 run 完成后决定是否提前停止循环。
+ *
+ * 注意：调用方应额外检查 DEEPEN_MIN_ROUNDS——低于最低轮数时不应触发饱和停止。
  */
 export function detectSaturation(logContent: string): boolean {
   return logContent.includes(SATURATION_SIGNAL);
