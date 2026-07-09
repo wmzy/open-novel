@@ -11,8 +11,9 @@ import { INSPIRE_TO_CHAT_EVENT } from './InspirationPicker';
 import {
   DEEPEN_TO_CHAT_EVENT,
   DEEPEN_MIN_ROUNDS,
+  isCritiqueRound,
   buildDeepenMessage,
-  detectSaturation,
+  detectNoImprovement,
   parseDeadlineInput,
   type DeepenToChatDetail,
 } from '../../shared/deepen';
@@ -123,6 +124,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     deadline: number;
     round: number;
     consecutiveFailures: number;
+    consecutiveNoImprovement: number;
     userHint?: string;
   } | null>(null);
   const [showDeepenDialog, setShowDeepenDialog] = useState(false);
@@ -212,7 +214,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       if (data?.hash) toast.success(`已创建回滚点 deepen-${ds}-start`);
     }).catch(() => {});
 
-    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, userHint: hint });
+    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, consecutiveNoImprovement: 0, userHint: hint });
     setShowDeepenDialog(false);
     sendMessage({
       projectId,
@@ -252,16 +254,23 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         return;
       }
 
-      // 饱和检测 + 时间检查是异步的（需 fetch deepen-log）
+      // 饱和检测 + 时间检查是异步的（需 fetch deepen-critique.md）
       (async () => {
-        // 停止条件 2：饱和检测——仅在超过最低轮数后才检查
-        if (deepenMode.round >= DEEPEN_MIN_ROUNDS) {
+        // 停止条件 2：改进验证饱和——仅在超过最低轮数后，且当前刚完成 Critique 轮时检查
+        let consecutiveNoImprovement = deepenMode.consecutiveNoImprovement;
+        if (deepenMode.round >= DEEPEN_MIN_ROUNDS && isCritiqueRound(deepenMode.round)) {
           try {
-            const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-log.md')}`);
+            const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-critique.md')}`);
             if (res.ok) {
               const data = await res.json();
-              if (detectSaturation(data.content || '')) {
-                exitDeepen('饱和检测：各维度连续两轮满分');
+              if (detectNoImprovement(data.content || '')) {
+                consecutiveNoImprovement++;
+              } else {
+                consecutiveNoImprovement = 0;
+              }
+              // 连续 2 个 Critique 轮报告无实质改进 → 真正饱和
+              if (consecutiveNoImprovement >= 2) {
+                exitDeepen('改进验证：连续 2 轮审查无实质改进');
                 prevIsRunningRef.current = isRunning;
                 return;
               }
@@ -278,7 +287,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
         // 继续下一轮
         const nextRound = deepenMode.round + 1;
-        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures });
+        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures, consecutiveNoImprovement });
         sendMessage({
           projectId,
           agentId,
@@ -757,7 +766,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         {deepenMode?.active && (
           <div className={deepenBanner}>
             <span>
-              🔁 深化中 · 第 {deepenMode.round} 轮 · 截止 {new Date(deepenMode.deadline).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+              🔁 深化中 · 第 {deepenMode.round} 轮{isCritiqueRound(deepenMode.round) ? '（审查）' : '（修订）'} · 截止 {new Date(deepenMode.deadline).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
             </span>
             <button className={reviseBannerClose} onClick={() => exitDeepen('手动停止')} title="停止深化循环">✕</button>
           </div>

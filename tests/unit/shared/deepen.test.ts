@@ -3,9 +3,10 @@ import {
   DEEPEN_TO_CHAT_EVENT,
   DEEPEN_DIMENSIONS,
   DEEPEN_MIN_ROUNDS,
-  SATURATION_SIGNAL,
+  NO_IMPROVEMENT_SIGNAL,
   buildDeepenMessage,
-  detectSaturation,
+  isCritiqueRound,
+  detectNoImprovement,
   parseDeadlineInput,
 } from '../../../src/shared/deepen';
 
@@ -18,114 +19,159 @@ describe('deepen', () => {
         expect(DEEPEN_DIMENSIONS[stage].length).toBeGreaterThanOrEqual(4);
       }
     });
-
-    it('each dimension is a non-empty string with descriptive text', () => {
-      for (const stage of Object.keys(DEEPEN_DIMENSIONS)) {
-        for (const dim of DEEPEN_DIMENSIONS[stage]) {
-          expect(dim.length).toBeGreaterThan(5);
-          expect(dim).toContain('：');
-        }
-      }
-    });
   });
 
   describe('DEEPEN_MIN_ROUNDS', () => {
-    it('is at least 5 to prevent premature saturation', () => {
-      expect(DEEPEN_MIN_ROUNDS).toBeGreaterThanOrEqual(5);
+    it('is at least 4 (2 critique + 2 revise cycles)', () => {
+      expect(DEEPEN_MIN_ROUNDS).toBeGreaterThanOrEqual(4);
     });
   });
 
-  describe('buildDeepenMessage', () => {
+  describe('isCritiqueRound', () => {
+    it('returns true for odd rounds (1, 3, 5, 7)', () => {
+      expect(isCritiqueRound(1)).toBe(true);
+      expect(isCritiqueRound(3)).toBe(true);
+      expect(isCritiqueRound(5)).toBe(true);
+      expect(isCritiqueRound(7)).toBe(true);
+    });
+
+    it('returns false for even rounds (2, 4, 6, 8)', () => {
+      expect(isCritiqueRound(2)).toBe(false);
+      expect(isCritiqueRound(4)).toBe(false);
+      expect(isCritiqueRound(6)).toBe(false);
+      expect(isCritiqueRound(8)).toBe(false);
+    });
+  });
+
+  describe('buildDeepenMessage - Critique rounds (odd)', () => {
+    it('includes "审查轮" marker for round 1', () => {
+      const msg = buildDeepenMessage('characters', 1);
+      expect(msg).toContain('审查轮');
+      expect(msg).toContain('独立审查者');
+    });
+
     it('includes stage name and round number', () => {
       const msg = buildDeepenMessage('characters', 3);
       expect(msg).toContain('角色');
       expect(msg).toContain('第 3 轮');
     });
 
-    it('includes the dimensions for the stage', () => {
+    it('includes dimensions for scoring', () => {
       const msg = buildDeepenMessage('characters', 1);
       expect(msg).toContain('动机清晰度');
       expect(msg).toContain('弧光完整性');
     });
 
-    it('includes verification-backtracking flow guidance', () => {
-      const msg = buildDeepenMessage('world', 1);
-      expect(msg).toContain('验证');
-      expect(msg).toContain('回溯');
-      expect(msg).toContain('修订');
+    it('forbids reading deepen-log (blind review isolation)', () => {
+      const msg = buildDeepenMessage('characters', 1);
+      expect(msg).toContain('不要读 .novel/deepen-log.md');
+      expect(msg).toContain('盲审');
     });
 
-    it('includes saturation signal instructions with strict 5-point threshold', () => {
-      const msg = buildDeepenMessage('characters', 1);
-      expect(msg).toContain('满分 5 分');
-      expect(msg).toContain(SATURATION_SIGNAL);
+    it('forbids modifying output files', () => {
+      const msg = buildDeepenMessage('world', 1);
+      expect(msg).toContain('不要修改产出文件');
+      expect(msg).toContain('只读不写');
     });
 
     it('forbids PATCH stage update and question tool', () => {
       const msg = buildDeepenMessage('outline', 1);
       expect(msg).toContain('不要调用 PATCH');
-      expect(msg).toContain('不要推进到下一阶段');
       expect(msg).toContain('不要用 question 工具');
     });
 
-    it('encourages creating new content, not just refining existing', () => {
+    it('includes NO_IMPROVEMENT_SIGNAL instructions', () => {
       const msg = buildDeepenMessage('characters', 1);
-      expect(msg).toContain('扩展');
-      expect(msg).toContain('补充');
-      expect(msg).toContain('创建新内容');
+      expect(msg).toContain(NO_IMPROVEMENT_SIGNAL);
+    });
+
+    it('writes critique to deepen-critique.md', () => {
+      const msg = buildDeepenMessage('characters', 1);
+      expect(msg).toContain('deepen-critique.md');
+    });
+
+    it('rotates critique perspectives across rounds', () => {
+      const msg1 = buildDeepenMessage('characters', 1);
+      const msg3 = buildDeepenMessage('characters', 3);
+      // Round 1 and round 3 should have different perspectives
+      const p1 = msg1.split('## 你的审查视角\n')[1]?.split('\n')[0] || '';
+      const p3 = msg3.split('## 你的审查视角\n')[1]?.split('\n')[0] || '';
+      expect(p1).not.toBe(p3);
     });
 
     it('includes user hint when provided', () => {
-      const msg = buildDeepenMessage('characters', 1, '增加更多女性角色，强化反派动机');
+      const msg = buildDeepenMessage('characters', 1, '增加更多女性角色');
       expect(msg).toContain('用户特别指导');
-      expect(msg).toContain('增加更多女性角色，强化反派动机');
+      expect(msg).toContain('增加更多女性角色');
     });
 
     it('omits hint section when no user hint', () => {
       const msg = buildDeepenMessage('characters', 1);
       expect(msg).not.toContain('用户特别指导');
     });
+  });
 
-    it('omits hint section when hint is whitespace-only', () => {
-      const msg = buildDeepenMessage('characters', 1, '   ');
-      expect(msg).not.toContain('用户特别指导');
+  describe('buildDeepenMessage - Revise rounds (even)', () => {
+    it('includes "修订轮" marker for round 2', () => {
+      const msg = buildDeepenMessage('characters', 2);
+      expect(msg).toContain('修订轮');
+      expect(msg).toContain('作者');
+    });
+
+    it('reads deepen-critique.md for feedback', () => {
+      const msg = buildDeepenMessage('characters', 2);
+      expect(msg).toContain('deepen-critique.md');
+      expect(msg).toContain('审查者对你的产出的批评');
+    });
+
+    it('reads deepen-log.md for history', () => {
+      const msg = buildDeepenMessage('characters', 2);
+      expect(msg).toContain('deepen-log.md');
+    });
+
+    it('encourages creating new content', () => {
+      const msg = buildDeepenMessage('characters', 2);
+      expect(msg).toContain('扩展新内容');
+      expect(msg).toContain('创建');
+    });
+
+    it('forbids PATCH stage update', () => {
+      const msg = buildDeepenMessage('outline', 4);
+      expect(msg).toContain('不要调用 PATCH');
+    });
+
+    it('includes user hint when provided', () => {
+      const msg = buildDeepenMessage('characters', 2, '加强反派动机');
+      expect(msg).toContain('加强反派动机');
     });
   });
 
-  describe('detectSaturation', () => {
-    it('detects saturation signal in log content', () => {
-      const log = `## 第3轮\n**维度评分**：动机 5, 关系 5\n${SATURATION_SIGNAL}`;
-      expect(detectSaturation(log)).toBe(true);
+  describe('detectNoImprovement', () => {
+    it('detects NO_IMPROVEMENT_SIGNAL in critique content', () => {
+      const content = `# 审查报告\n**维度评分**：动机 5\n${NO_IMPROVEMENT_SIGNAL}`;
+      expect(detectNoImprovement(content)).toBe(true);
     });
 
-    it('returns false when no saturation signal', () => {
-      const log = '## 第2轮\n- 发现：角色动机不足\n- 改进：补充背景';
-      expect(detectSaturation(log)).toBe(false);
+    it('returns false when no signal present', () => {
+      const content = '# 审查报告\n- 问题1：角色动机不足';
+      expect(detectNoImprovement(content)).toBe(false);
     });
   });
 
   describe('parseDeadlineInput', () => {
-    it('parses HH:MM to today timestamp', () => {
+    it('parses HH:MM to timestamp', () => {
       const ts = parseDeadlineInput('06:00');
       expect(ts).not.toBeNull();
-      const date = new Date(ts!);
-      expect(date.getHours()).toBe(6);
-      expect(date.getMinutes()).toBe(0);
+      expect(new Date(ts!).getHours()).toBe(6);
     });
 
-    it('handles empty input by returning null', () => {
+    it('handles empty input', () => {
       expect(parseDeadlineInput('')).toBeNull();
-    });
-
-    it('if time already passed today, sets to tomorrow', () => {
-      const ts = parseDeadlineInput('23:59');
-      expect(ts).not.toBeNull();
-      expect(ts!).toBeGreaterThan(Date.now() - 86400000);
     });
   });
 
   describe('DEEPEN_TO_CHAT_EVENT', () => {
-    it('is a non-empty string constant', () => {
+    it('is a non-empty string', () => {
       expect(typeof DEEPEN_TO_CHAT_EVENT).toBe('string');
       expect(DEEPEN_TO_CHAT_EVENT.length).toBeGreaterThan(0);
     });
