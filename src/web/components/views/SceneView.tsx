@@ -1,10 +1,11 @@
 import { useMemo } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import type { ViewMode } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection, MdSubsection } from './parseSections';
+import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
   projectId: string;
@@ -130,6 +131,11 @@ export default function SceneView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>场景</h3>
+        <button
+          className={reviseBtn}
+          onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'scenes' } }))}
+          title="自主循环深化场景阶段"
+        >🔁 深化</button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
       <div className={chapterGroupList}>{sections.map(renderChapter)}</div>

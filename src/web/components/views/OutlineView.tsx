@@ -2,13 +2,14 @@ import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { ViewMode } from './viewShared';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
 import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildArcDiagram, buildPovTimeline } from '../../../shared/diagram-builders';
 import { parseOutlineMeta } from '../../../shared/outline-meta';
+import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
   projectId: string;
@@ -164,6 +165,11 @@ export default function OutlineView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>大纲</h3>
+        <button
+          className={reviseBtn}
+          onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'outline' } }))}
+          title="自主循环深化大纲阶段"
+        >🔁 深化</button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
       <CollapsibleDiagram chart={arcDiagram} title="三幕节奏" />
