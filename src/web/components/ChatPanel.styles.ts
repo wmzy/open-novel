@@ -371,3 +371,81 @@ export const askCancelBtn = css`
   cursor: pointer;
   &:hover { background: var(--haze-color-border); }
 `;
+
+/** 深化模式遮罩：点击 🔁 深化后弹出截止时间输入框 */
+export const deepenOverlay = css`
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+`;
+
+/** 深化弹框主体 */
+export const deepenDialog = css`
+  background: var(--haze-color-bg);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 320px;
+`;
+
+/** 深化截止时间输入框 */
+export const deepenInput = css`
+  margin-left: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  width: 80px;
+  font-size: 0.8125rem;
+`;
+
+/** 深化弹框按钮区 */
+export const deepenActions = css`
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+`;
+
+/** 深化确认按钮 */
+export const deepenConfirmBtn = css`
+  padding: 0.4rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--haze-color-primary);
+  color: white;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  &:hover { opacity: 0.9; }
+`;
+
+/** 深化取消按钮 */
+export const deepenCancelBtn = css`
+  padding: 0.4rem 1rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--haze-color-text);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  &:hover { background: var(--haze-color-bg-secondary); }
+`;
+
+/** 深化状态指示条：循环进行中显示当前轮数和截止时间 */
+export const deepenBanner = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: color-mix(in srgb, var(--haze-color-primary) 12%, transparent);
+  border-radius: 4px 4px 0 0;
+  font-size: 0.75rem;
+  color: var(--haze-color-text);
+`;

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useRun } from '@/web/hooks/useRun';
 import { useModels, useModelSelection } from '@/web/hooks/useModels';
@@ -8,6 +8,13 @@ import { useAgentCommands } from '@/web/hooks/useAgentCommands';
 import { useFileAutocomplete } from '@/web/hooks/useFileAutocomplete';
 import { REVISE_TO_CHAT_EVENT } from '@/web/hooks/useFileRevision';
 import { INSPIRE_TO_CHAT_EVENT } from './InspirationPicker';
+import {
+  DEEPEN_TO_CHAT_EVENT,
+  buildDeepenMessage,
+  detectSaturation,
+  parseDeadlineInput,
+  type DeepenToChatDetail,
+} from '../../shared/deepen';
 import AgentMessage from './AgentMessage';
 import RevisionDiffPanel from './RevisionDiffPanel';
 import { css, cx } from '@linaria/core';
@@ -19,6 +26,8 @@ import {
   askBox, askMessage, askOptions, askOptionBtn, askCheckbox, askInput,
   askActions, askSubmitBtn, askCancelBtn,
   reviseBanner, reviseBannerClose,
+  deepenOverlay, deepenDialog, deepenInput, deepenActions,
+  deepenConfirmBtn, deepenCancelBtn, deepenBanner,
 } from './ChatPanel.styles';
 
 interface Command {
@@ -105,6 +114,29 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     return () => window.removeEventListener(REVISE_TO_CHAT_EVENT, handler);
   }, []);
 
+  // 深化模式状态机：来自视图 🔁 按钮 dispatch 的事件，弹出截止时间输入，进入循环
+  const [deepenMode, setDeepenMode] = useState<{
+    active: boolean;
+    stage: string;
+    deadline: number;
+    round: number;
+    consecutiveFailures: number;
+  } | null>(null);
+  const [showDeepenDialog, setShowDeepenDialog] = useState(false);
+  const [deepenDialogStage, setDeepenDialogStage] = useState('');
+  const [deadlineInput, setDeadlineInput] = useState('06:00');
+  const prevIsRunningRef = useRef(false);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as DeepenToChatDetail;
+      setDeepenDialogStage(detail.stage);
+      setShowDeepenDialog(true);
+    };
+    window.addEventListener(DEEPEN_TO_CHAT_EVENT, handler);
+    return () => window.removeEventListener(DEEPEN_TO_CHAT_EVENT, handler);
+  }, []);
+
   // File autocomplete for @ mentions
   const fileAutocomplete = useFileAutocomplete(projectId);
 
@@ -157,6 +189,93 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   // 模型选择持久化到 localStorage（跨刷新/重进记住），切 agent 后旧模型不在新列表则自动回退 default
   const [selectedModel, setSelectedModel] = useModelSelection(availableModels.map((m) => m.id));
 
+  /** 启动深化循环：从第 1 轮开始 */
+  const startDeepen = useCallback(() => {
+    const deadline = parseDeadlineInput(deadlineInput);
+    if (!deadline) {
+      toast.error('截止时间格式无效，请用 HH:MM 格式');
+      return;
+    }
+    const ds = deepenDialogStage;
+    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0 });
+    setShowDeepenDialog(false);
+    sendMessage({
+      projectId,
+      agentId,
+      skillId,
+      stage: ds,
+      message: buildDeepenMessage(ds, 1),
+      autonomous: true,
+      model: selectedModel !== 'default' ? selectedModel : undefined,
+    });
+  }, [deadlineInput, deepenDialogStage, sendMessage, projectId, agentId, skillId, selectedModel]);
+
+  /** 退出深化模式 */
+  const exitDeepen = useCallback((reason: string) => {
+    setDeepenMode((prev) => {
+      if (prev?.active) toast.info(`深化循环结束：${reason}`);
+      return null;
+    });
+  }, []);
+
+  // 深化循环续轮：run 完成后（isRunning true→false）触发下一轮
+  useEffect(() => {
+    if (!deepenMode?.active) {
+      prevIsRunningRef.current = isRunning;
+      return;
+    }
+    // 检测 isRunning 从 true→false（run 刚完成）
+    if (prevIsRunningRef.current && !isRunning) {
+      const lastMsg = chatMessages[chatMessages.length - 1];
+      const succeeded = !lastMsg?.error;
+      const consecutiveFailures = succeeded ? 0 : deepenMode.consecutiveFailures + 1;
+
+      // 停止条件 1：连续 2 轮失败
+      if (consecutiveFailures >= 2) {
+        exitDeepen('连续 2 轮失败，疑似额度耗尽');
+        prevIsRunningRef.current = isRunning;
+        return;
+      }
+
+      // 饱和检测 + 时间检查是异步的（需 fetch deepen-log）
+      (async () => {
+        // 停止条件 2：饱和检测——检查 deepen-log 是否有饱和信号
+        try {
+          const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-log.md')}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (detectSaturation(data.content || '')) {
+              exitDeepen('饱和检测：各维度已达 4+ 分');
+              prevIsRunningRef.current = isRunning;
+              return;
+            }
+          }
+        } catch { /* 读文件失败不阻断 */ }
+
+        // 停止条件 3：截止时间到
+        if (Date.now() >= deepenMode.deadline) {
+          exitDeepen('截止时间到');
+          prevIsRunningRef.current = isRunning;
+          return;
+        }
+
+        // 继续下一轮
+        const nextRound = deepenMode.round + 1;
+        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures });
+        sendMessage({
+          projectId,
+          agentId,
+          skillId,
+          stage: deepenMode.stage,
+          message: buildDeepenMessage(deepenMode.stage, nextRound),
+          autonomous: true,
+          model: selectedModel !== 'default' ? selectedModel : undefined,
+        });
+      })();
+    }
+    prevIsRunningRef.current = isRunning;
+  }, [isRunning, deepenMode, chatMessages, exitDeepen, projectId, agentId, skillId, selectedModel, sendMessage]);
+
   // Fetch conversations for this project
   const { data: conversations } = useConversations(projectId);
 
@@ -192,6 +311,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
   const handleSend = async () => {
     if (!input.trim() || !agentAvailable || isRunning) return;
+
+    // 用户手动发消息 → 退出深化模式
+    if (deepenMode?.active) exitDeepen('用户手动中断');
 
     // /import <path> 拦截：切章写入当前项目后发起 decompose run
     const importMatch = input.trim().match(/^\/import\s+(.+)$/);
@@ -491,6 +613,28 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         </div>
       )}
 
+      {showDeepenDialog && (
+        <div className={deepenOverlay}>
+          <div className={deepenDialog}>
+            <span>🔁 深化「{deepenDialogStage}」阶段</span>
+            <label>
+              截止时间：
+              <input
+                type="text"
+                value={deadlineInput}
+                onChange={(e) => setDeadlineInput(e.target.value)}
+                placeholder="HH:MM"
+                className={deepenInput}
+              />
+            </label>
+            <div className={deepenActions}>
+              <button onClick={startDeepen} className={deepenConfirmBtn}>开始</button>
+              <button onClick={() => setShowDeepenDialog(false)} className={deepenCancelBtn}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingAsk && (
         <div className={askBox} data-testid="ask-prompt">
           <div className={askMessage}>{pendingAsk.message}</div>
@@ -581,6 +725,14 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           <div className={reviseBanner}>
             <span>📌 正在修订 {pendingRevise.targetFile}{pendingRevise.sectionTitle ? ` · ${pendingRevise.sectionTitle}` : ''}</span>
             <button className={reviseBannerClose} onClick={() => setPendingRevise(null)} title="退出修订模式">✕</button>
+          </div>
+        )}
+        {deepenMode?.active && (
+          <div className={deepenBanner}>
+            <span>
+              🔁 深化中 · 第 {deepenMode.round} 轮 · 截止 {new Date(deepenMode.deadline).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+            <button className={reviseBannerClose} onClick={() => exitDeepen('手动停止')} title="停止深化循环">✕</button>
           </div>
         )}
         {showCommands && filteredCommands.length > 0 && (
