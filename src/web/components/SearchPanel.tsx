@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { css } from '@linaria/core';
-import { useSearch, type SearchResult } from '@/web/hooks/useSearch';
+import { useSearch } from '@/web/hooks/useSearch';
 
 const container = css`
   display: flex;
@@ -98,7 +98,7 @@ interface Props {
 
 export default function SearchPanel({ projectId, onFileClick }: Props) {
   const [inputValue, setInputValue] = useState('');
-  const { results: searchResults, loading, query, search, clear } = useSearch(projectId);
+  const { results: searchResults, loading, query, search } = useSearch(projectId);
 
   const handleSearch = () => {
     if (inputValue.trim()) search(inputValue);

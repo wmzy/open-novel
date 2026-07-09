@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { css } from '@linaria/core';
-import { pageContainer, pageTitle, card, primaryBtn, input } from '@/styles/shared';
+import { pageContainer, pageTitle, card, input } from '@/styles/shared';
 import NavHeader from '@/web/components/NavHeader';
 
 const formGroup = css`

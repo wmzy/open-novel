@@ -170,7 +170,7 @@ projectsRouter.post('/:id/import-source', async (c) => {
   let config: Record<string, unknown> = {};
   try {
     config = JSON.parse(readFileSync(configPath, 'utf-8'));
-  } catch {}
+  } catch { /* noop */ }
   config.chapterCount = chapters.length;
   config.targetWords = chapters.length * 5000;
   writeFileSync(configPath, JSON.stringify(config, null, 2));

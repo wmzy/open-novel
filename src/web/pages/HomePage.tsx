@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { css, cx } from '@linaria/core';
 import { toast } from 'sonner';
-import { useProjects, useCreateProject, useDeleteProject, type ProjectWithMeta } from '@/hooks/useProject';
+import { useProjects, useCreateProject, useDeleteProject } from '@/hooks/useProject';
 import { pageContainer, pageTitle, card, primaryBtn, input, emptyState } from '@/styles/shared';
 import NavHeader from '@/web/components/NavHeader';
 
@@ -17,15 +17,6 @@ const projectCard = css`
   position: relative;
   &:hover { border-color: var(--haze-color-primary); }
   &:hover .delete-btn { opacity: 1; }
-`;
-
-const projectPath = css`
-  margin-top: 0.375rem;
-  color: var(--haze-color-text-secondary);
-  font-size: 0.72rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 `;
 
 const header = css`

@@ -36,7 +36,9 @@ export const conversations = pgTable('conversations', {
   agentId: varchar('agent_id', { length: 50 }).notNull(),
   stage: varchar('stage', { length: 50 }),
   createdAt: timestamp('created_at', { withTimezone: true }).default(sql`now()`).notNull(),
-});
+}, (table) => [
+  index('conversations_project_created_idx').on(table.projectId, table.createdAt),
+]);
 
 export const messages = pgTable('messages', {
   id: varchar('id', { length: 25 }).primaryKey(),
@@ -46,7 +48,9 @@ export const messages = pgTable('messages', {
   events: jsonb('events'),
   artifacts: jsonb('artifacts'),
   createdAt: timestamp('created_at', { withTimezone: true }).default(sql`now()`).notNull(),
-});
+}, (table) => [
+  index('messages_conversation_created_idx').on(table.conversationId, table.createdAt),
+]);
 
 export const runs = pgTable('runs', {
   id: varchar('id', { length: 50 }).primaryKey(),
@@ -60,7 +64,9 @@ export const runs = pgTable('runs', {
   /** 模式特定数据：revise 的 targetFile/baseSnapshot/diff；rename 的 oldName/newName/scope */
   payload: jsonb('payload'),
   createdAt: timestamp('created_at', { withTimezone: true }).default(sql`now()`).notNull(),
-});
+}, (table) => [
+  index('runs_conversation_created_idx').on(table.conversationId, table.createdAt),
+]);
 
 export const runEvents = pgTable('run_events', {
   id: varchar('id', { length: 25 }).primaryKey(),

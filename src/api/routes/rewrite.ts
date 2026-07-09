@@ -92,7 +92,7 @@ rewriteRouter.post('/', async (c) => {
   const onStreamComplete = () => {
     if (child.stdin && !child.stdin.destroyed) child.stdin.end();
   };
-  const emit = (event: any) => emitEvent(run, 'agent', event);
+  const emit = (event: unknown) => emitEvent(run, 'agent', event);
   const isAcp = def.streamFormat === 'acp-json-rpc';
   const handler = isAcp
     ? { feed: () => {}, flush: () => {} }

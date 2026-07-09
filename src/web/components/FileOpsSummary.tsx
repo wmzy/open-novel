@@ -51,16 +51,6 @@ const iconDone = css`
   color: var(--haze-color-success, #22c55e);
 `;
 
-const iconRunning = css`
-  color: var(--haze-color-primary);
-  animation: pulse 1s infinite;
-  @keyframes pulse { 50% { opacity: 0.5; } }
-`;
-
-const iconError = css`
-  color: var(--haze-color-error, #ef4444);
-`;
-
 interface FileDiff {
   path: string;
   hunks: DiffHunk[];

@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 /**
  * Structured HTTP error. Carries a semantic status + code so the global
@@ -78,7 +79,7 @@ export interface ApiError {
 export function apiError(c: Context, status: number, code: string, message: string, details?: unknown) {
   const body: ApiError = { error: message, code };
   if (details !== undefined) body.details = details;
-  return c.json(body, status as any);
+  return c.json(body, status as ContentfulStatusCode);
 }
 
 /**

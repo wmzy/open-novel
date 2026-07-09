@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { css, cx } from '@linaria/core';
 import { EntityMarkdown } from '../EntityMarkdown';
 import { useEntityDict } from '@/web/hooks/useEntityDict';
-import { isPlaceholder, parseSections } from './parseSections';
+import { isPlaceholder } from './parseSections';
 import type { MdField, MdSection } from './parseSections';
 
 // 重新导出类型，方便视图统一引用

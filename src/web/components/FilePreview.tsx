@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { css } from '@linaria/core';
 import { EntityMarkdown } from './EntityMarkdown';
 import { useEntityDict } from '@/web/hooks/useEntityDict';
@@ -22,14 +22,6 @@ const header = css`
   font-size: 0.8rem;
   font-family: var(--haze-font-mono);
   color: var(--haze-color-text-secondary);
-`;
-
-const content = css`
-  flex: 1;
-  overflow-y: auto;
-  padding: 1rem;
-  font-size: 0.875rem;
-  line-height: 1.6;
 `;
 
 const rawContent = css`

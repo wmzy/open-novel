@@ -142,7 +142,7 @@ export async function readCharacterNames(projectDir: string): Promise<string[]> 
   }
 
   // 2. 表格索引式：| 角色 | 文件 |  ——  取第一列，去掉 emoji 前缀
-  const tableRe = /^\|\s*([^\[|]+?)\s*\|\s*\[.+?\]\([^)]+\)\s*\|/gm;
+  const tableRe = /^\|\s*([^[|]+?)\s*\|\s*\[.+?\]\([^)]+\)\s*\|/gm;
   while ((m = tableRe.exec(raw)) !== null) {
     const name = m[1].replace(/^[\p{Emoji}\uFE0F\s]+/u, '').trim();
     if (name && name !== '角色' && !seen.has(name)) { seen.add(name); names.push(name); }
@@ -598,7 +598,7 @@ async function repairOrInitState(projectDir: string): Promise<void> {
     await fs.rename(statePath, bakPath);
   } catch {
     // 重命名也失败（权限/磁盘），尝试直接删除
-    try { await fs.unlink(statePath); } catch {}
+    try { await fs.unlink(statePath); } catch { /* noop */ }
   }
   await initStateTable(projectDir);
 }

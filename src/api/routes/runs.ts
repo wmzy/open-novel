@@ -76,7 +76,7 @@ async function qualityGateCheck(
     // 流式 watchdog 需积满 2000 字符才检测，短章节（<2000字）从未触发
     const degradation = detectDegradation(content, { excludeGrams });
     if (degradation.detected) {
-      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch {}
+      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
       emitEvent(run, 'agent', {
         type: 'quality-rejected',
         chapter: chapterNum,
@@ -92,7 +92,7 @@ async function qualityGateCheck(
     const report = detectAiPatterns(content);
     if (report.score >= QUALITY_REJECT_SCORE) {
       // 退化严重：归档为 .degraded.md，通知前端
-      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch {}
+      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
       emitEvent(run, 'agent', {
         type: 'quality-rejected',
         chapter: chapterNum,
@@ -153,7 +153,7 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
   [/[sS][kK]-[A-Za-z0-9_-]{20,}/g, 'sk-[REDACTED]'], // OpenAI/Anthropic API key
   [/[Bb]earer\s+[A-Za-z0-9._-]{8,}/g, 'Bearer [REDACTED]'], // Bearer token
   [
-    /((?:api[_-]?key|token|secret|password|authorization)["'\s]*[:=]\s*["']?)[A-Za-z0-9._\/+=-]{8,}/gi,
+    /((?:api[_-]?key|token|secret|password|authorization)["'\s]*[:=]\s*["']?)[A-Za-z0-9._/+=-]{8,}/gi,
     '$1[REDACTED]',
   ], // key=value / key: value 形式
 ];
@@ -270,7 +270,7 @@ runsRouter.post('/', async (c) => {
       : [path.join(projectDir, '.novel', targetFile), path.join(projectDir, targetFile)];
     let resolved: string | null = null;
     for (const cand of candidates) {
-      try { await readFile(cand, 'utf-8'); resolved = cand; break; } catch {}
+      try { await readFile(cand, 'utf-8'); resolved = cand; break; } catch { /* noop */ }
     }
     if (!resolved) {
       return c.json({ error: `Target file not found: ${targetFile}` }, 404);
@@ -343,7 +343,7 @@ runsRouter.post('/', async (c) => {
     if (proj?.targetWords && proj?.chapterCount) {
       perChapterTarget = Math.round(proj.targetWords / proj.chapterCount);
     }
-  } catch {}
+  } catch { /* noop */ }
 
   // Parse stream
   const onStreamComplete = () => {
@@ -481,7 +481,7 @@ runsRouter.post('/', async (c) => {
           : [path.join(projectDir, '.novel', targetFile), path.join(projectDir, targetFile)];
         let newContent: string | null = null;
         for (const cand of candidates) {
-          try { newContent = await readFile(cand, 'utf-8'); break; } catch {}
+          try { newContent = await readFile(cand, 'utf-8'); break; } catch { /* noop */ }
         }
         if (newContent !== null) {
           const { createUnifiedDiff, summarizeDiff } = await import('../../shared/diff-utils');
@@ -712,7 +712,7 @@ runsRouter.get('/conversations/:id/stream', async (c) => {
     let unsub: (() => void) | null = null;
     unsub = run.stream.subscribe(0, async (event, data, id) => {
       try { await streamWriter.write(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
-      catch {}
+      catch { /* noop */ }
     });
 
     streamWriter.onAbort(() => { if (unsub) unsub(); });

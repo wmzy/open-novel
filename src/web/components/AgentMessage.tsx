@@ -264,7 +264,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   return blocks;
 }
 
-export default function AgentMessage({ role, content, events, startedAt, endedAt, usage, error, artifacts, onResend, onReply, onBranch }: Props) {
+export default function AgentMessage({ role, content, events, startedAt, endedAt, usage, error, artifacts, onResend, onReply }: Props) {
   if (role === 'user') {
     return (
       <div className={messageBlock}>

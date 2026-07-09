@@ -308,7 +308,7 @@ export async function runAcpTurn(
     // prompt() 异步等响应；通知通过 nextUpdate() 并行读
     const promptPromise = session.prompt(prompt).catch(() => null);
 
-    // eslint-disable-next-line no-constant-condition
+     
     while (true) {
       const msg = await session.nextUpdate();
       if (msg.kind === 'stop') {
@@ -362,7 +362,7 @@ export async function probeAcpCommands(
       const session = await builder.start();
 
       // omp 在 session/new 后延迟推送 available_commands_update；循环读直到拿到或超时
-      // eslint-disable-next-line no-constant-condition
+       
       while (true) {
         const msg = await session.nextUpdate();
         if (msg.kind === 'stop') break;

@@ -12,7 +12,6 @@ import {
   useMemo,
   useContext,
   createContext,
-  Children,
   isValidElement,
   cloneElement,
   createElement,
@@ -78,7 +77,7 @@ interface Props {
   className?: string;
 }
 
-export function EntityMarkdown({ content, dict, projectId: _projectId, className }: Props) {
+export function EntityMarkdown({ content, dict, className }: Props) {
   const [dialogEntity, setDialogEntity] = useState<EntityRef | null>(null);
 
   const ctxValue = useMemo<CtxValue>(

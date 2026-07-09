@@ -159,7 +159,7 @@ export async function syncFilesToDb(projectId: string, paths: Set<string>, proje
       const content = await fs.readFile(fullPath, 'utf-8');
       // 中文小说按字符计数（剔除空白与 markdown 标记），
       // 英文 fallback 仍按空格分词。
-      const stripped = content.replace(/^[#*>\-\[\]()!|]+\s*/gm, '').trim();
+      const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
       const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
       const wordCount = cjk > 0
         ? cjk

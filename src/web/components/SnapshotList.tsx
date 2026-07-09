@@ -22,16 +22,6 @@ const list = css`
   padding: 0.5rem;
 `;
 
-const item = css`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem 0.75rem;
-  border-radius: 6px;
-  &:hover { background: var(--haze-color-bg-secondary); }
-  margin-bottom: 0.25rem;
-`;
-
 const itemInfo = css`
   display: flex;
   flex-direction: column;
@@ -94,17 +84,6 @@ const autoItem = css`
   opacity: 0.7;
   &:hover { background: var(--haze-color-bg-secondary); opacity: 1; }
   margin-bottom: 0.125rem;
-`;
-
-const tagBadge = css`
-  display: inline-block;
-  font-size: 0.7rem;
-  font-weight: 600;
-  color: var(--haze-color-primary);
-  background: var(--haze-color-bg);
-  padding: 0.1rem 0.4rem;
-  border-radius: 3px;
-  margin-left: 0.4rem;
 `;
 
 const autoToggle = css`

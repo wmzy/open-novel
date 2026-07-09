@@ -69,7 +69,7 @@ async function resyncChaptersFromDisk(projectId: string): Promise<void> {
 
     try {
       const content = await fs.readFile(path.join(chaptersDir, file), 'utf-8');
-      const stripped = content.replace(/^[#*>\-\[\]()!|]+\s*/gm, '').trim();
+      const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
       const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
       const wordCount = cjk > 0 ? cjk : stripped.split(/\s+/).filter(Boolean).length;
       const titleMatch = content.match(/^#\s+(.+)$/m);

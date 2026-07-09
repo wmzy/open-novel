@@ -51,7 +51,7 @@ export const ompAgentDef: RuntimeAgentDef = {
   fallbackBins: ['oh-my-pi'],
   versionArgs: ['--version'],
   fallbackModels: [{ id: 'default', label: '默认（由 omp 配置）' }],
-  buildArgs: (_prompt, _extraAllowedDirs = [], _options = {}) => {
+  buildArgs: () => {
     // omp 作为 ACP server 启动；prompt 通过 ACP 协议传递，不经 CLI/buildArgs。
     return ['acp'];
   },

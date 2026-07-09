@@ -173,7 +173,7 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
 
 每写完一章后，你必须完成以下三件事以保持后续章节的一致性：
 (1) 为该章生成约 200 字的**语义摘要**，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。摘要必须包含：本章情节推进、角色状态变化（位置/情绪/获知新信息）、伏笔兑现或新增。**严禁复制正文原文段落**——摘要必须是你的概括重述，不是截取。
-(2) 更新 .novel/state.json——刷新每个在场角色的位置（location）、情绪（emotion）、新获知的信息（knows）；**角色间关系变化必须写入 relationships 字段**（键=对方角色名，值=关系描述，如 \"孙二娘\": \"脆弱的盟友\"），不能留空——这是人物关系图的唯一数据源；推进时间线和 lastUpdatedChapter；设置 updatedAt。
+(2) 更新 .novel/state.json——刷新每个在场角色的位置（location）、情绪（emotion）、新获知的信息（knows）；**角色间关系变化必须写入 relationships 字段**（键=对方角色名，值=关系描述，如 "孙二娘": "脆弱的盟友"），不能留空——这是人物关系图的唯一数据源；推进时间线和 lastUpdatedChapter；设置 updatedAt。
 (3) 更新 .novel/foreshadow.json 的伏笔状态：
 - 若本章**新埋设**了一条伏笔（首次在正文中植入线索）且大纲阶段未预登：**新增一条**，id 取现有最大 id + 1，content 写具体描述，status 设为 "planted"，plantedIn 填当前章号，resolvedIn 为 null。
 - 若大纲阶段已预登该伏笔为 pending：将其 status 从 "pending" 改为 "planted"。

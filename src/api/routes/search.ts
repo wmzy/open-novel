@@ -28,7 +28,7 @@ searchRouter.get('/', async (c) => {
 
   try {
     await searchDirectory(projectDir, '', query.toLowerCase(), results);
-  } catch (err) { /* ignore search errors */ }
+  } catch { /* ignore search errors */ }
 
   return c.json({ query, results: results.slice(0, 50) }); // Limit to 50 results
 });

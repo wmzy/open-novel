@@ -59,7 +59,7 @@ async function loadAllCharacterNames(projectDir: string): Promise<string[]> {
 renameRouter.post('/', async (c) => {
   const projectId = c.req.param('projectId')!;
 
-  let body: { oldName?: string; newName?: string; scope?: string[] } = {};
+  let body: { oldName?: string; newName?: string; scope?: string[] };
   try {
     body = await c.req.json();
   } catch {

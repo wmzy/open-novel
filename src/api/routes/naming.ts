@@ -80,7 +80,7 @@ namingRouter.post('/generate', async (c) => {
     gender?: string;
     surnameConstraint?: string;
     count?: number;
-  } = { description: '' };
+  };
   try {
     body = await c.req.json();
   } catch {
@@ -125,7 +125,7 @@ namingRouter.post('/generate', async (c) => {
  * body: { name: string, existingNames?: string[] }
  */
 namingRouter.post('/check', async (c) => {
-  let body: { name?: string; existingNames?: string[] } = {};
+  let body: { name?: string; existingNames?: string[] };
   try {
     body = await c.req.json();
   } catch {

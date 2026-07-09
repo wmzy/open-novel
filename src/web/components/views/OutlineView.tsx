@@ -1,6 +1,4 @@
 import { useMemo, useState } from 'react';
-import type { CSSProperties } from 'react';
-import type { ViewMode } from './viewShared';
 import { css } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
@@ -87,14 +85,6 @@ const chapterBody = css`
 function chapterNumber(title: string): string | null {
   const m = title.match(/第\s*(\d+)\s*章/);
   return m ? m[1] : null;
-}
-
-/** 章节字段强调色：冲突=警告，结果=成功，目标=主色。 */
-function fieldEmphasis(key: string): CSSProperties | undefined {
-  if (key === '冲突') return { color: 'var(--haze-color-error, #ef4444)', fontWeight: 500 };
-  if (key === '结果') return { color: 'var(--haze-color-success, #22c55e)', fontWeight: 500 };
-  if (key === '目标') return { color: 'var(--haze-color-primary)', fontWeight: 500 };
-  return undefined;
 }
 
 export default function OutlineView({ projectId }: Props) {

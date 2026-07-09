@@ -151,17 +151,6 @@ const ghostBtn = css`
   &:disabled { opacity: 0.5; cursor: not-allowed; }
 `;
 
-const dangerBtn = css`
-  background: none;
-  border: 1px solid var(--haze-color-error, #ef4444);
-  color: var(--haze-color-error, #ef4444);
-  border-radius: 4px;
-  padding: 0.375rem 0.875rem;
-  font-size: 0.8rem;
-  cursor: pointer;
-  &:hover { background: var(--haze-color-error, #ef4444); color: white; }
-`;
-
 const resultBox = css`
   border: 1px solid var(--haze-color-border);
   border-radius: 6px;
