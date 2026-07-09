@@ -10,6 +10,7 @@ import InspirationPicker from '../InspirationPicker';
 import InlineInspiration from '../InlineInspiration';
 import type { CSSProperties } from 'react';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
+import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
   projectId: string;
@@ -155,6 +156,11 @@ export default function CharacterView({ projectId }: Props) {
         <h3 className={pageHeading}>角色</h3>
         <button className={reviseBtn} onClick={() => revision.openRevise()}>✎ 修订</button>
         <button className={renameBtn} onClick={() => revision.openRename()}>⇄ 重命名</button>
+        <button
+          className={reviseBtn}
+          onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'characters' } }))}
+          title="自主循环深化角色阶段"
+        >🔁 深化</button>
         <button
           className={namingToggleBtn}
           onClick={() => setShowNaming((v) => !v)}

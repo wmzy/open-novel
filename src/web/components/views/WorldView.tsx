@@ -5,6 +5,7 @@ import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, ca
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
+import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
   projectId: string;
@@ -89,6 +90,11 @@ export default function WorldView({ projectId }: Props) {
         <h3 className={pageHeading}>世界观</h3>
         <button className={reviseBtn} onClick={() => revision.openRevise()}>✎ 修订</button>
         <button className={renameBtn} onClick={() => revision.openRename()}>⇄ 重命名</button>
+        <button
+          className={reviseBtn}
+          onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'world' } }))}
+          title="自主循环深化世界观阶段"
+        >🔁 深化</button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
       <div className={worldGrid}>{sections.map(renderCategory)}</div>
