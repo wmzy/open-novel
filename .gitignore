@@ -10,3 +10,4 @@ data/pglite/
 test-results/
 *.png
 /data/
+_explore/
