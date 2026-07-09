@@ -11,3 +11,4 @@ test-results/
 *.png
 /data/
 _explore/
+/coverage/

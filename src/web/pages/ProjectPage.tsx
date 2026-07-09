@@ -287,6 +287,24 @@ export default function ProjectPage() {
     },
   });
 
+  // Preload mermaid core (~500KB) in idle time so the first diagram renders
+  // without a visible delay. Multiple project views use mermaid diagrams
+  // (story-arc, character-graph, foreshadow, timeline, etc.).
+  useEffect(() => {
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (handle: number) => void;
+    };
+    const ric = w.requestIdleCallback;
+    const handle = ric
+      ? ric(() => { void import('mermaid'); }, { timeout: 4000 })
+      : window.setTimeout(() => { void import('mermaid'); }, 2000);
+    return () => {
+      if (w.cancelIdleCallback) w.cancelIdleCallback(handle);
+      else window.clearTimeout(handle);
+    };
+  }, []);
+
   // Subscribe to project updates and file changes via SSE
   useEffect(() => {
     if (!id) return;
