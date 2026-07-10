@@ -8,6 +8,7 @@ import { buildRollingSummaryContext, getStateTable, readCharacterNames } from '.
 import { extractChapterOutline, identifyCast, buildCastLayer } from './chapter-context';
 import { buildReverseDecomposePrompt } from './reverse-decomposer';
 import { buildEnrichPrompt } from './enricher';
+import { STAGE_OUTPUT_FILES, isCritiqueRound } from '../shared/deepen';
 
 export interface ComposePromptOptions {
   message: string;
@@ -27,6 +28,9 @@ export interface ComposePromptOptions {
 
   /** 自治模式：跳过采访式协议，前期阶段改为自主决策。默认 false。 */
   autonomous?: boolean;
+
+  /** Deepen 深化循环上下文：注入当前 stage 产出文件 + critique（Revise 轮），省去 agent Read 往返。 */
+  deepenContext?: { round: number };
 }
 
 // 规划阶段共用的「采访式」协作流程。拼接进 concept/world/characters/outline/scenes 的指令。
@@ -499,7 +503,7 @@ const OUTPUT_FORMAT = `## Output Format
 export async function composePrompt(options: ComposePromptOptions): Promise<string> {
   const { message, projectId, skillId, stage, projectDir, history,
           mode = 'generate', reviseTarget, reviseNote, reviseContent,
-          autonomous = false } = options;
+          autonomous = false, deepenContext } = options;
 
   const isRevise = mode === 'revise' && !!reviseNote && !!reviseContent;
   // revise 模式下，判断目标是否为章节正文（路径匹配 chapters/第N章.md）
@@ -605,6 +609,30 @@ ${questionRule}
 
   if (fileList.length > 0) {
     parts.push(`\n## Project Files\n${fileList.map((f) => `- ${f}`).join('\n')}`);
+  }
+
+  // Deepen 深化循环：注入当前 stage 产出文件 + critique（Revise 轮），
+  // 省去 agent 每轮 Read 往返（每轮省 2-4 次 LLM 调用）
+  if (deepenContext) {
+    const stageFiles = STAGE_OUTPUT_FILES[currentStage] || [];
+    const fileBlocks: string[] = [];
+    for (const rel of stageFiles) {
+      const content = await readNovelFile(projectDir, rel);
+      if (content) {
+        fileBlocks.push(`### ${rel}\n${content}`);
+      }
+    }
+    if (fileBlocks.length > 0) {
+      parts.push(`\n## 当前阶段产出文件（已注入——无需再 Read）\n${fileBlocks.join('\n\n')}`);
+    }
+
+    // Revise 轮（偶数轮）：注入最新审查报告
+    if (!isCritiqueRound(deepenContext.round)) {
+      const critique = await readNovelFile(projectDir, 'deepen-critique.md');
+      if (critique) {
+        parts.push(`\n## 最新审查报告（deepen-critique.md 已注入——无需再 Read）\n${critique}`);
+      }
+    }
   }
 
   // 写作阶段（generate）或章节修订（revise）：注入字数目标 + 分层上下文

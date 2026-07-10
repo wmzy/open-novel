@@ -10,7 +10,10 @@ import {
   detectNoImprovement,
   parseDeadlineInput,
   parseLatestScores,
+  extractScoreTrajectory,
   trimHistory,
+  STAGE_OUTPUT_FILES,
+  estimateTokens,
 } from '../../../src/shared/deepen';
 
 describe('deepen', () => {
@@ -131,7 +134,7 @@ describe('deepen', () => {
     it('reads deepen-critique.md for feedback', () => {
       const msg = buildDeepenMessage('characters', 2);
       expect(msg).toContain('deepen-critique.md');
-      expect(msg).toContain('审查者对你的产出的批评');
+      expect(msg).toContain('审查报告');
     });
 
     it('reads deepen-log.md for history', () => {
@@ -370,6 +373,103 @@ describe('deepen', () => {
       const result = trimHistory(history);
       expect(result[2].content).toContain('deepen-log.md');
       expect(result[2].content).toContain('deepen-critique.md');
+    });
+
+    it('appends contextNote to placeholder when provided', () => {
+      const history = Array.from({ length: 10 }, (_, i) => ({
+        role: 'user',
+        content: `msg-${i}`,
+      }));
+      const note = '评分轨迹：动机清晰度 3→4 → 4→5';
+      const result = trimHistory(history, 2, 6, note);
+      expect(result[2].content).toContain('deepen-log.md');
+      expect(result[2].content).toContain(note);
+    });
+
+    it('omits contextNote gracefully when undefined', () => {
+      const history = Array.from({ length: 10 }, (_, i) => ({
+        role: 'user',
+        content: `msg-${i}`,
+      }));
+      const result = trimHistory(history, 2, 6, undefined);
+      expect(result[2].content).not.toContain('评分轨迹');
+    });
+  });
+
+  describe('STAGE_OUTPUT_FILES', () => {
+    it('maps all 5 planning stages to at least one file', () => {
+      const stages = ['concept', 'world', 'characters', 'outline', 'scenes'];
+      for (const stage of stages) {
+        expect(STAGE_OUTPUT_FILES[stage]).toBeDefined();
+        expect(STAGE_OUTPUT_FILES[stage].length).toBeGreaterThanOrEqual(1);
+      }
+    });
+
+    it('concept maps to concept.md', () => {
+      expect(STAGE_OUTPUT_FILES.concept).toContain('concept.md');
+    });
+
+    it('characters maps to characters/profiles.md', () => {
+      expect(STAGE_OUTPUT_FILES.characters).toContain('characters/profiles.md');
+    });
+
+    it('outline includes fallback files', () => {
+      expect(STAGE_OUTPUT_FILES.outline).toContain('outline-detailed.md');
+      expect(STAGE_OUTPUT_FILES.outline).toContain('outline-brief.md');
+    });
+  });
+
+  describe('extractScoreTrajectory', () => {
+    it('extracts multiple score lines joined by arrow', () => {
+      const log = [
+        '## 第2轮（修订）',
+        '**维度评分变化**：动机清晰度 3→4, 关系丰富度 2→3',
+        '## 第4轮（修订）',
+        '**维度评分变化**：动机清晰度 4→5, 关系丰富度 3→4',
+      ].join('\n');
+      const result = extractScoreTrajectory(log);
+      expect(result).toBe('动机清晰度 3→4, 关系丰富度 2→3 → 动机清晰度 4→5, 关系丰富度 3→4');
+    });
+
+    it('returns null when no score lines exist', () => {
+      expect(extractScoreTrajectory('no scores here')).toBeNull();
+    });
+
+    it('returns null for empty content', () => {
+      expect(extractScoreTrajectory('')).toBeNull();
+    });
+
+    it('handles single score line', () => {
+      const log = '**维度评分**：动机清晰度 3';
+      expect(extractScoreTrajectory(log)).toBe('动机清晰度 3');
+    });
+  });
+
+  describe('estimateTokens', () => {
+    it('estimates CJK-heavy text at ~1.5 token/char', () => {
+      const text = '这是中文测试'.repeat(10); // 60 CJK chars
+      const tokens = estimateTokens(text);
+      expect(tokens).toBe(90); // 60 * 1.5
+    });
+
+    it('estimates ASCII text at ~4 chars/token', () => {
+      const text = 'a'.repeat(40);
+      expect(estimateTokens(text)).toBe(10);
+    });
+
+    it('handles mixed CJK + ASCII', () => {
+      const text = '你好世界 hello world'; // 4 CJK + 12 ASCII (' hello world')
+      const tokens = estimateTokens(text);
+      expect(tokens).toBe(Math.round(4 * 1.5 + 12 / 4)); // 6 + 3 = 9
+    });
+
+    it('returns 0 for empty string', () => {
+      expect(estimateTokens('')).toBe(0);
+    });
+
+    it('counts fullwidth punctuation as CJK', () => {
+      const text = '：，。！';
+      expect(estimateTokens(text)).toBe(Math.round(4 * 1.5)); // 6
     });
   });
 });

@@ -38,6 +38,7 @@ export type StreamEvent =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { type: 'usage'; usage?: unknown; costUsd?: number | null }
+  | { type: 'context_size'; chars: number; tokens: number }
   | { type: 'error'; message: string }
   | { type: 'commands'; commands: AgentCommand[] }
   | { type: 'ask'; ask: AskPrompt }

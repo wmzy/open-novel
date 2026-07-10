@@ -9,6 +9,7 @@ export interface ChatMessage {
   startedAt?: number;
   endedAt?: number;
   usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  contextSize?: { chars: number; tokens: number };
   error?: string;
   artifacts?: { count: number; paths: string[] };
   /** revise run 成功后携带的修订 diff（由 revision-applied 事件填充）。 */
@@ -21,6 +22,7 @@ export function useRun(conversationId?: string) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState<string>('');
+  const [contextSize, setContextSize] = useState<{ chars: number; tokens: number } | null>(null);
   const [availableCommands, setAvailableCommands] = useState<AgentCommand[]>([]);
   const [pendingAsk, setPendingAsk] = useState<AskPrompt | null>(null);
   const activeRunsRef = useRef(new Set<string>());
@@ -106,6 +108,7 @@ export function useRun(conversationId?: string) {
             case 'end': {
               setIsRunning(false);
               setStatus('');
+              setContextSize(null);
               break;
             }
             case 'stderr': {
@@ -147,11 +150,16 @@ export function useRun(conversationId?: string) {
     targetFile?: string;
     /** revise 模式：用户修订意见（后端注入 prompt）。 */
     revisionNote?: string;
+    /** Deepen 循环：启用对话历史滑动窗口截断（仅 Deepen 续轮用）。 */
+    trimHistory?: boolean;
+    /** Deepen 循环：当前轮次号（用于后端注入 stage 产出文件 + critique）。 */
+    deepenRound?: number;
   }) => {
     // Add user message
     setMessages((prev) => [...prev, { role: 'user', content: params.message }]);
     setIsRunning(true);
     setStatus('starting');
+    setContextSize(null);
 
     try {
       const res = await fetch('/api/runs', {
@@ -179,6 +187,7 @@ export function useRun(conversationId?: string) {
         });
         setIsRunning(false);
         setStatus('');
+        setContextSize(null);
         return;
       }
 
@@ -345,6 +354,7 @@ export function useRun(conversationId?: string) {
       }]);
       setIsRunning(false);
       setStatus('');
+      setContextSize(null);
     }
   }, []);
 
@@ -437,6 +447,13 @@ export function useRun(conversationId?: string) {
           last.events = [...events, { kind: 'status', label, detail: event.detail as string | undefined }];
           break;
         }
+        case 'context_size': {
+          const chars = Number(event.chars || 0);
+          const tokens = Number(event.tokens || 0);
+          setContextSize({ chars, tokens });
+          last.contextSize = { chars, tokens };
+          break;
+        }
         case 'thinking_delta': {
           // Already handled above
           break;
@@ -515,6 +532,7 @@ export function useRun(conversationId?: string) {
     if (activeRunsRef.current.size === 0) {
       setIsRunning(false);
       setStatus('');
+      setContextSize(null);
     }
   }
 
@@ -543,6 +561,7 @@ export function useRun(conversationId?: string) {
     activeRunsRef.current.clear();
     setIsRunning(false);
     setStatus('');
+    setContextSize(null);
   }, []);
 
   const resetConversation = useCallback(() => {
@@ -569,6 +588,7 @@ export function useRun(conversationId?: string) {
     messages,
     isRunning,
     status,
+    contextSize,
     availableCommands,
     pendingAsk,
     resolveAsk,

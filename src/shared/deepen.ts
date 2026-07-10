@@ -78,6 +78,19 @@ export const DEEPEN_DIMENSIONS: Record<string, string[]> = {
 };
 
 /**
+ * 各阶段的核心产出文件（相对 `.novel/` 路径）。
+ * Deepen 循环每轮注入这些文件内容到 prompt，省去 agent 的 Read 往返。
+ * 列表中的文件按优先级尝试，存在哪个注入哪个。
+ */
+export const STAGE_OUTPUT_FILES: Record<string, string[]> = {
+  concept: ['concept.md'],
+  world: ['world-building.md'],
+  characters: ['characters/profiles.md'],
+  outline: ['outline-detailed.md', 'outline-brief.md', 'outline.md'],
+  scenes: ['scenes.md'],
+};
+
+/**
  * 获取某阶段的质量维度：优先 plugin 自定义，fallback 到通用 DEEPEN_DIMENSIONS。
  */
 function getDimensions(stage: string, pluginDimensions?: Record<string, string[]>): string[] {
@@ -181,7 +194,7 @@ ${hintBlock}
 ${perspective}
 
 ## 审查流程
-1. 读取当前阶段的产出文件（如 .novel/characters/profiles.md）
+1. 审查下方「当前阶段产出文件」中已注入的文件内容（如需确认细节可再读取文件）
 2. 以上述专家视角独立审查，逐维度评估：
 ${dimensions.map((d, i) => `   ${i + 1}. ${d}`).join('\n')}
 3. 对每个维度打 1-5 分（5=优秀，1=严重不足）
@@ -228,8 +241,8 @@ ${hintBlock}
 - **不要用 question 工具提问**
 
 ## 修订流程
-1. 读取当前阶段的产出文件（如 .novel/characters/profiles.md）
-2. 读取 .novel/deepen-critique.md——这是独立审查者对你的产出的批评
+1. 审查下方「当前阶段产出文件」中已注入的文件内容（如需修改具体段落再读取）
+2. 参考下方「最新审查报告」中已注入的 deepen-critique.md 内容（无需再读取）
 3. 读取 .novel/deepen-log.md 了解前几轮的改进历史（避免重复修改）
 4. **逐条回应批评**：
    - 对审查者指出的每个问题，分析根因是否成立
@@ -312,6 +325,7 @@ export function trimHistory(
   history: { role: string; content: string }[],
   keepHead = 2,
   keepTail = 6,
+  contextNote?: string,
 ): { role: string; content: string }[] {
   if (history.length <= keepHead + keepTail) {
     return history;
@@ -321,11 +335,14 @@ export function trimHistory(
   const tail = history.slice(history.length - keepTail);
   const omittedCount = history.length - keepHead - keepTail;
 
+  const base = `[对话历史已折叠：省略了 ${omittedCount} 条早期消息。完整改进记录见 .novel/deepen-log.md，最新审查见 .novel/deepen-critique.md]`;
+  const placeholder = contextNote ? `${base}\n${contextNote}` : base;
+
   return [
     ...head,
     {
       role: 'system',
-      content: `[对话历史已折叠：省略了 ${omittedCount} 条早期消息。完整改进记录见 .novel/deepen-log.md，最新审查见 .novel/deepen-critique.md]`,
+      content: placeholder,
     },
     ...tail,
   ];
@@ -347,4 +364,44 @@ export function parseLatestScores(logContent: string): string | null {
     }
   }
   return latest;
+}
+
+/**
+ * 从 deepen-log.md 内容中提取所有维度评分行，按顺序拼接为轨迹字符串。
+ * 用于 trimHistory 占位行，让 agent 一眼看到评分趋势（如 "动机清晰度 3→4 → 4→5"）。
+ * 返回 null 表示无评分记录。
+ */
+export function extractScoreTrajectory(logContent: string): string | null {
+  const lines = logContent.split('\n');
+  const scores: string[] = [];
+  for (const line of lines) {
+    const match = line.match(/\*\*维度评分(?:变化)?\*\*[：:]\s*(.+)/);
+    if (match) {
+      scores.push(match[1].trim());
+    }
+  }
+  if (scores.length === 0) return null;
+  return scores.join(' → ');
+}
+
+/**
+ * 估算文本的 token 数（近似）。
+ * CJK 字符按 ~1.5 token/字估算，非 CJK 按 ~4 字符/token 估算。
+ * 用于 context_size 展示，非精确值。
+ */
+export function estimateTokens(text: string): number {
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0)!;
+    if ((code >= 0x4e00 && code <= 0x9fff) ||  // CJK Unified Ideographs
+        (code >= 0x3400 && code <= 0x4dbf) ||  // CJK Extension A
+        (code >= 0x3000 && code <= 0x303f) ||  // CJK Symbols and Punctuation
+        (code >= 0xff00 && code <= 0xffef)) {  // Fullwidth Forms
+      cjk++;
+    } else {
+      other++;
+    }
+  }
+  return Math.round(cjk * 1.5 + other / 4);
 }

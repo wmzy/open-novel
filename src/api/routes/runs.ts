@@ -16,7 +16,7 @@ import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
-import { trimHistory } from '../../shared/deepen';
+import { trimHistory, extractScoreTrajectory, estimateTokens } from '../../shared/deepen';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, projects, runs as runsTable } from '../../db/schema';
@@ -225,7 +225,8 @@ const runsRouter = new Hono();
 runsRouter.post('/', async (c) => {
   const body = await c.req.json();
   const { projectId, agentId, skillId, stage, message, conversationId, model,
-          mode = 'generate', targetFile, revisionNote, autonomous = false } = body;
+          mode = 'generate', targetFile, revisionNote, autonomous = false,
+          trimHistory: shouldTrim = false, deepenRound } = body;
 
   const def = getAgentDef(agentId);
   if (!def) return c.json({ error: 'Agent not found' }, 404);
@@ -233,6 +234,9 @@ runsRouter.post('/', async (c) => {
   const agents = await detectAgents();
   const detected = agents.find((a) => a.id === agentId);
   if (!detected?.available) return c.json({ error: 'Agent not available' }, 400);
+
+  // 提前解析 projectDir：trimHistory 需要读取 deepen-log.md
+  const projectDir = await resolveProjectDir(projectId);
 
   let convId: string;
   let history: { role: string; content: string }[] = [];
@@ -250,7 +254,17 @@ runsRouter.post('/', async (c) => {
     history = priorMessages.map((m) => ({ role: m.role, content: m.content }));
     // Deepen 循环的对话历史滑动窗口：保留首轮 + 最近 6 条，中间折叠。
     // 文件（.novel/*.md）是跨轮持久状态层，history 只需保留决策脉络。
-    history = trimHistory(history);
+    // 仅在 Deepen 续轮请求中启用，避免影响普通聊天/修订的上下文完整性。
+    if (shouldTrim) {
+      // 读取 deepen-log.md 的评分轨迹，注入截断占位行，让 agent 即使看不到早期轮次也能了解评分趋势
+      let contextNote: string | undefined;
+      try {
+        const logContent = await readFile(path.join(projectDir, '.novel', 'deepen-log.md'), 'utf-8');
+        const trajectory = extractScoreTrajectory(logContent);
+        if (trajectory) contextNote = `评分轨迹：${trajectory}`;
+      } catch { /* deepen-log.md may not exist yet */ }
+      history = trimHistory(history, 2, 6, contextNote);
+    }
   } else {
     // Create new conversation
     convId = generateId('conv_');
@@ -262,7 +276,6 @@ runsRouter.post('/', async (c) => {
   await db.insert(messages).values({ id: msgId, conversationId: convId, role: 'user', content: message });
 
   // Compose prompt with project context, skill, and conversation history
-  const projectDir = await resolveProjectDir(projectId);
 
   // revise 模式：读取目标文件全文作为上下文 + baseSnapshot（run-local 快照，用于 close handler 生成 diff）
   let reviseContent: string | undefined;
@@ -295,6 +308,7 @@ runsRouter.post('/', async (c) => {
     reviseNote: revisionNote,
     reviseContent,
     autonomous,
+    deepenContext: deepenRound != null ? { round: deepenRound } : undefined,
   });
 
   /**
@@ -310,6 +324,9 @@ runsRouter.post('/', async (c) => {
   // retry 复用同一 run/stream，前端 SSE 不断流、事件累积在同一流中
   const run = existingRun ?? createRun({ projectId, agentId, skillId, stage, conversationId: convId });
   run.status = 'running';
+
+  // 通知前端上下文大小（字符数 + 估算 token）
+  emitEvent(run, 'agent', { type: 'context_size', chars: composedPrompt.length, tokens: estimateTokens(composedPrompt) });
 
   // Store run in DB（仅首次创建时插入；retry 复用同一记录）
   if (!existingRun) {

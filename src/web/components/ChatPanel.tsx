@@ -159,7 +159,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   // File autocomplete for @ mentions
   const fileAutocomplete = useFileAutocomplete(projectId);
 
-  const { messages: chatMessages, isRunning, status, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+  const { messages: chatMessages, isRunning, status, contextSize, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
 
   // 灵感注入：来自视图 💡 按钮 dispatch 的事件，直接 sendMessage（消息已组装好）
   useEffect(() => {
@@ -242,6 +242,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       stage: ds,
       message: buildDeepenMessage(ds, 1, hint, pluginDimensions),
       autonomous: true,
+      trimHistory: true,
+      deepenRound: 1,
       model: selectedModel !== 'default' ? selectedModel : undefined,
     });
   }, [deadlineInput, deepenDialogStage, deepenHint, sendMessage, projectId, agentId, skillId, selectedModel, pluginDimensions]);
@@ -314,8 +316,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           return;
         }
 
-        // 继续下一轮
-        const nextRound = deepenMode.round + 1;
+        // 继续下一轮（失败时重试当前轮，不跳过）
+        const nextRound = succeeded ? deepenMode.round + 1 : deepenMode.round;
         // 停止条件 4：达到最大轮数（兜底防止无限循环）
         if (nextRound > DEEPEN_MAX_ROUNDS) {
           exitDeepen(`达到最大轮数（${DEEPEN_MAX_ROUNDS}）`);
@@ -330,6 +332,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           stage: deepenMode.stage,
           message: buildDeepenMessage(deepenMode.stage, nextRound, deepenMode.userHint, deepenMode.customDimensions),
           autonomous: true,
+          trimHistory: true,
+          deepenRound: nextRound,
           model: selectedModel !== 'default' ? selectedModel : undefined,
         });
       })();
@@ -608,6 +612,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
               startedAt={msg.startedAt}
               endedAt={msg.endedAt}
               usage={msg.usage}
+              contextSize={msg.contextSize}
               error={msg.error}
               artifacts={msg.artifacts}
               onResend={msg.role === 'user' ? (content) => {
@@ -646,6 +651,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         <div className={statusStrip}>
           <span className={statusDot} />
           <span>{status || '运行中...'}</span>
+          {contextSize && (
+            <span className={activeCount}>Ctx {contextSize.tokens >= 1000 ? `${(contextSize.tokens / 1000).toFixed(1)}k` : contextSize.tokens} tok · {(contextSize.chars / 1000).toFixed(1)}k chars</span>
+          )}
           {activeRunCount > 1 && <span className={activeCount}>({activeRunCount} active)</span>}
         </div>
       )}

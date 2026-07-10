@@ -178,6 +178,7 @@ interface Props {
   startedAt?: number;
   endedAt?: number;
   usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  contextSize?: { chars: number; tokens: number };
   error?: string;
   artifacts?: { count: number; paths: string[] };
   onResend?: (content: string) => void;
@@ -264,7 +265,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   return blocks;
 }
 
-export default function AgentMessage({ role, content, events, startedAt, endedAt, usage, error, artifacts, onResend, onReply }: Props) {
+export default function AgentMessage({ role, content, events, startedAt, endedAt, usage, contextSize, error, artifacts, onResend, onReply }: Props) {
   if (role === 'user') {
     return (
       <div className={messageBlock}>
@@ -316,8 +317,8 @@ export default function AgentMessage({ role, content, events, startedAt, endedAt
               Reply
             </button>
           )}
-          {(usage || startedAt) && (
-            <AssistantFooter startedAt={startedAt} endedAt={endedAt} usage={usage} />
+          {(usage || contextSize || startedAt) && (
+            <AssistantFooter startedAt={startedAt} endedAt={endedAt} usage={usage} contextSize={contextSize} />
           )}
         </div>
       </div>
@@ -394,16 +395,18 @@ function WaitingPill({ startedAt }: { startedAt: number }) {
   );
 }
 
-function AssistantFooter({ startedAt, endedAt, usage }: {
+function AssistantFooter({ startedAt, endedAt, usage, contextSize }: {
   startedAt?: number;
   endedAt?: number;
   usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  contextSize?: { chars: number; tokens: number };
 }) {
   const elapsed = startedAt ? (endedAt || Date.now()) - startedAt : 0;
 
   return (
     <div className={footer}>
       {elapsed > 0 && <span>{formatElapsed(elapsed)}</span>}
+      {contextSize && <span>Ctx: {formatSize(contextSize.tokens)} tok</span>}
       {usage?.inputTokens != null && <span>In: {usage.inputTokens.toLocaleString()}</span>}
       {usage?.outputTokens != null && <span>Out: {usage.outputTokens.toLocaleString()}</span>}
       {usage?.costUsd != null && <span>${usage.costUsd.toFixed(4)}</span>}
@@ -417,6 +420,11 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${minutes}m ${secs}s`;
+}
+
+function formatSize(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
 }
 
 function capitalize(s: string): string {
