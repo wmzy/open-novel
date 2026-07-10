@@ -10,6 +10,7 @@ import {
   detectNoImprovement,
   parseDeadlineInput,
   parseLatestScores,
+  trimHistory,
 } from '../../../src/shared/deepen';
 
 describe('deepen', () => {
@@ -296,6 +297,79 @@ describe('deepen', () => {
       // 跨阶段视角应该指示读取其他阶段的文件
       const msg = buildDeepenMessage('characters', 9);
       expect(msg).toContain('先读取');
+    });
+  });
+
+  describe('trimHistory', () => {
+    it('returns history as-is when within keepHead + keepTail', () => {
+      const history = [
+        { role: 'user', content: 'critique-1' },
+        { role: 'assistant', content: 'response-1' },
+        { role: 'user', content: 'revise-2' },
+      ];
+      const result = trimHistory(history);
+      expect(result).toBe(history); // 同一引用
+      expect(result.length).toBe(3);
+    });
+
+    it('returns history as-is when exactly at keepHead + keepTail boundary', () => {
+      // keepHead=2 + keepTail=6 = 8 条，恰好不触发截断
+      const history = Array.from({ length: 8 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `msg-${i}`,
+      }));
+      const result = trimHistory(history);
+      expect(result).toBe(history);
+    });
+
+    it('folds middle messages when exceeding window', () => {
+      const history = Array.from({ length: 12 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `msg-${i}`,
+      }));
+      // keepHead=2 + keepTail=6 = 8 条保留 + 1 条占位 = 9
+      const result = trimHistory(history);
+      expect(result.length).toBe(9);
+
+      // 首轮保留
+      expect(result[0].content).toBe('msg-0');
+      expect(result[1].content).toBe('msg-1');
+
+      // 中间折叠为占位
+      expect(result[2].role).toBe('system');
+      expect(result[2].content).toContain('对话历史已折叠');
+      expect(result[2].content).toContain('4'); // 12 - 8 = 4 条被省略
+
+      // 尾部保留最近 6 条
+      expect(result[3].content).toBe('msg-6');
+      expect(result[8].content).toBe('msg-11');
+    });
+
+    it('custom keepHead and keepTail', () => {
+      const history = Array.from({ length: 10 }, (_, i) => ({
+        role: 'user',
+        content: `msg-${i}`,
+      }));
+      const result = trimHistory(history, 1, 2);
+      expect(result.length).toBe(4); // 1 head + 1 placeholder + 2 tail
+      expect(result[0].content).toBe('msg-0');
+      expect(result[1].role).toBe('system');
+      expect(result[2].content).toBe('msg-8');
+      expect(result[3].content).toBe('msg-9');
+    });
+
+    it('empty history returns empty', () => {
+      expect(trimHistory([])).toEqual([]);
+    });
+
+    it('placeholder references deepen-log and deepen-critique', () => {
+      const history = Array.from({ length: 10 }, (_, i) => ({
+        role: 'user',
+        content: `msg-${i}`,
+      }));
+      const result = trimHistory(history);
+      expect(result[2].content).toContain('deepen-log.md');
+      expect(result[2].content).toContain('deepen-critique.md');
     });
   });
 });

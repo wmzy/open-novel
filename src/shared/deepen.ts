@@ -292,6 +292,46 @@ export function parseDeadlineInput(input: string): number | null {
 }
 
 /**
+ * 对话历史滑动窗口：保留首轮 + 最近 N 条，中间折叠为摘要占位。
+ *
+ * 设计依据：Deepen 循环中，文件（.novel/*.md、deepen-critique.md、deepen-log.md）
+ * 是跨轮持久状态层——agent 每轮重新读取最新文件内容。Conversation History
+ * 只承担"决策脉络"，不需要保留早期轮次的完整文本。
+ *
+ * 保留策略：
+ * - 首批消息（首轮 Critique 的完整上下文）——定义本轮深化的核心问题域
+ * - 最近 keepTail 条消息——当前工作记忆（上几轮的反馈与修改）
+ * - 中间消息折叠为单行摘要占位，提示 agent 历史被截断
+ *
+ * @param history 完整对话历史（role + content）
+ * @param keepHead 保留头部消息数（默认 2 = 首轮 user + assistant）
+ * @param keepTail 保留尾部消息数（默认 6 = 最近 3 个 Critique-Revise 对）
+ * @returns 截断后的历史，中间用占位行替换
+ */
+export function trimHistory(
+  history: { role: string; content: string }[],
+  keepHead = 2,
+  keepTail = 6,
+): { role: string; content: string }[] {
+  if (history.length <= keepHead + keepTail) {
+    return history;
+  }
+
+  const head = history.slice(0, keepHead);
+  const tail = history.slice(history.length - keepTail);
+  const omittedCount = history.length - keepHead - keepTail;
+
+  return [
+    ...head,
+    {
+      role: 'system',
+      content: `[对话历史已折叠：省略了 ${omittedCount} 条早期消息。完整改进记录见 .novel/deepen-log.md，最新审查见 .novel/deepen-critique.md]`,
+    },
+    ...tail,
+  ];
+}
+
+/**
  * 从 deepen-log.md 内容中提取最新一轮的维度评分行。
  * 匹配最后一个 "**维度评分变化**：" 或 "**维度评分**：" 开头的行。
  * 返回原始文本（如 "动机清晰度 3→4, 关系丰富度 2→3"），无匹配返回 null。

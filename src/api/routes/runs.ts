@@ -16,6 +16,7 @@ import { readFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
+import { trimHistory } from '../../shared/deepen';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, projects, runs as runsTable } from '../../db/schema';
@@ -247,6 +248,9 @@ runsRouter.post('/', async (c) => {
       .where(eq(messages.conversationId, convId))
       .orderBy(messages.createdAt);
     history = priorMessages.map((m) => ({ role: m.role, content: m.content }));
+    // Deepen 循环的对话历史滑动窗口：保留首轮 + 最近 6 条，中间折叠。
+    // 文件（.novel/*.md）是跨轮持久状态层，history 只需保留决策脉络。
+    history = trimHistory(history);
   } else {
     // Create new conversation
     convId = generateId('conv_');

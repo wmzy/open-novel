@@ -644,7 +644,7 @@ ${questionRule}
   // Pass raw conversation history (agent manages its own context)
   if (history && history.length > 0) {
     const historyLines = history.map((msg) => {
-      const label = msg.role === 'user' ? 'User' : 'Assistant';
+      const label = msg.role === 'user' ? 'User' : msg.role === 'system' ? 'System' : 'Assistant';
       return `### ${label}\n${msg.content}`;
     });
     parts.push(`\n## Conversation History\n${historyLines.join('\n\n')}`);
