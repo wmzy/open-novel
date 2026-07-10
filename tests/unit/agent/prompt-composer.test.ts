@@ -113,6 +113,53 @@ describe('composePrompt', () => {
         });
         expect(prompt).not.toContain('本阶段的协作方式：采访式');
       });
+
+      it('writing 阶段指令采用职责分离（正文与状态更新分离）', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+        });
+        // 职责分离：写正文委托 state-patcher，不再内联五步指令
+        expect(prompt).toContain('写章流程（职责分离）');
+        expect(prompt).toContain('委托 state-patcher SubAgent 完成状态更新');
+        // 五个状态文件均作为 state-patcher 的委托项列出
+        expect(prompt).toContain('.novel/chapters/第N章.summary.md');
+        expect(prompt).toContain('.novel/character-states.md');
+        expect(prompt).toContain('.novel/progress.md');
+        expect(prompt).toContain('.novel/state.json');
+        expect(prompt).toContain('.novel/foreshadow.json');
+        // 正文写作与状态更新不得混在一起
+        expect(prompt).toContain('正文写作和状态更新不要混在一起');
+        // 旧的内联五步指令已移除
+        expect(prompt).not.toContain('完成以下五件事');
+      });
+    });
+
+    // 写作/草稿/润色/修订阶段注入「章节正文输出协议」（借鉴 denova 输出协议约束）。
+    describe('章节正文输出协议', () => {
+      for (const stage of ['writing', 'drafting', 'polish']) {
+        it(`${stage} 阶段提示词中包含「章节正文输出协议」`, async () => {
+          const prompt = await composePrompt({
+            message: 'hi',
+            projectId: 'p',
+            stage,
+            projectDir: tempDir,
+          });
+          expect(prompt).toContain('章节正文输出协议');
+        });
+      }
+
+      it('revision 阶段不注入章节正文输出协议（该阶段为审阅检查，不直接产出正文）', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'revision',
+          projectDir: tempDir,
+        });
+        expect(prompt).not.toContain('章节正文输出协议');
+      });
     });
 
     describe('autonomous mode', () => {
@@ -172,6 +219,44 @@ describe('composePrompt', () => {
       });
     });
 
+    describe('plan mode', () => {
+      it('injects Plan Mode instruction when planMode=true', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'concept',
+          projectDir: tempDir,
+          planMode: true,
+        });
+        expect(prompt).toContain('## Plan Mode（规划模式）');
+        expect(prompt).toContain('不要直接执行修改操作');
+      });
+
+      it('does not inject Plan Mode instruction by default', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'concept',
+          projectDir: tempDir,
+        });
+        expect(prompt).not.toContain('## Plan Mode（规划模式）');
+      });
+
+      it('Plan Mode 是叠加层：不破坏原有阶段指令', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+          planMode: true,
+        });
+        // 原有阶段指令仍在
+        expect(prompt).toContain('## Current Stage: writing');
+        // Plan Mode 叠加层存在
+        expect(prompt).toContain('## Plan Mode（规划模式）');
+      });
+    });
+
     it('falls back for an unknown stage', async () => {
       const prompt = await composePrompt({
         message: 'hi',
@@ -191,6 +276,52 @@ describe('composePrompt', () => {
       });
       expect(prompt).toContain('## Current Stage: concept');
       expect(prompt).toContain(STAGE_FEATURES.concept);
+    });
+
+    describe('subagent guidance injection (职责分离)', () => {
+      it('agentId=omp 注入 SubAgent 使用指导，含五个状态文件', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+          agentId: 'omp',
+        });
+        expect(prompt).toContain('## SubAgent 使用指导');
+        expect(prompt).toContain('task 工具');
+        expect(prompt).toContain('### state-patcher（状态更新）');
+        expect(prompt).toContain('.novel/chapters/第N章.summary.md');
+        expect(prompt).toContain('.novel/character-states.md');
+        expect(prompt).toContain('.novel/progress.md');
+        expect(prompt).toContain('.novel/state.json');
+        expect(prompt).toContain('.novel/foreshadow.json');
+      });
+
+      it('agentId=opencode 注入内联状态更新指导（不支持 SubAgent）', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+          agentId: 'opencode',
+        });
+        expect(prompt).toContain('不支持 SubAgent 委托');
+        // OpenCode 自行完成五个状态文件更新
+        expect(prompt).toContain('.novel/character-states.md');
+        expect(prompt).toContain('.novel/progress.md');
+        expect(prompt).toContain('.novel/foreshadow.json');
+      });
+
+      it('未指定 agentId 时不注入 subagent 指导', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+        });
+        expect(prompt).not.toContain('## SubAgent 使用指导');
+        expect(prompt).not.toContain('不支持 SubAgent 委托');
+      });
     });
   });
 
@@ -447,6 +578,54 @@ describe('composePrompt', () => {
       expect(idx('## Novel Context Layers')).toBeLessThan(idx('## Available Tools'));
     });
 
+    it('注入进度层和角色状态层（progress.md / character-states.md 存在时）', async () => {
+      await seedWritingProject(tempDir);
+      const novel = path.join(tempDir, '.novel');
+      await fs.writeFile(path.join(novel, 'progress.md'), '# 写作进度\n已写到第1章');
+      await fs.writeFile(path.join(novel, 'character-states.md'), '# 角色当前状态\n林青在客栈，情绪警觉');
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('### 写作进度层（progress.md）');
+      expect(prompt).toContain('已写到第1章');
+      expect(prompt).toContain('### 角色当前状态层（character-states.md）');
+      expect(prompt).toContain('林青在客栈');
+    });
+
+    it('progress.md / character-states.md 不存在时不注入对应层', async () => {
+      await seedWritingProject(tempDir);
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('### 写作进度层（progress.md）');
+      expect(prompt).not.toContain('### 角色当前状态层（character-states.md）');
+      // 其他层仍正常注入
+      expect(prompt).toContain('### 状态层');
+    });
+
+    it('进度层和角色状态层位于状态层之后、滚动摘要层之前', async () => {
+      await seedWritingProject(tempDir);
+      const novel = path.join(tempDir, '.novel');
+      await fs.writeFile(path.join(novel, 'progress.md'), '已写到第1章');
+      await fs.writeFile(path.join(novel, 'character-states.md'), '角色状态');
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      const idx = (s: string) => prompt.indexOf(s);
+      expect(idx('### 状态层')).toBeLessThan(idx('### 写作进度层（progress.md）'));
+      expect(idx('### 写作进度层（progress.md）')).toBeLessThan(idx('### 角色当前状态层（character-states.md）'));
+      expect(idx('### 角色当前状态层（character-states.md）')).toBeLessThan(idx('### 滚动摘要层'));
+    });
+
     it('buildForeshadowLayer: planted 进待回收区，pending 本章须埋置顶，逾期未埋单独警示', async () => {
       const novel = path.join(tempDir, '.novel');
       await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
@@ -595,6 +774,132 @@ describe('composePrompt', () => {
       expect(prompt).not.toContain('### 活跃伏笔层');
       expect(prompt).not.toContain('蝴蝶玉佩');
     });
+
+    it('world-building.md 超过阈值时核心设定层只注入摘要+按需读取提示', async () => {
+      await seedWritingProject(tempDir);
+      const novel = path.join(tempDir, '.novel');
+      // 构造 >4000 字符的长世界观文档：开头有摘要标记，末尾有详细标记（在 800 字符之后）
+      const head = '# 世界观\n力量体系：灵气修炼。';
+      const padding = 'x'.repeat(4500);
+      const tail = '\n社会结构：九大宗门联盟。';
+      await fs.writeFile(path.join(novel, 'world-building.md'), head + padding + tail);
+
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      // 标题改为索引形式
+      expect(prompt).toContain('#### 世界观索引 (world-building.md)');
+      // 摘要（前 800 字符）被注入
+      expect(prompt).toContain('力量体系：灵气修炼');
+      // 按需读取提示存在
+      expect(prompt).toContain('请用 Read 工具读取 .novel/world-building.md 全文');
+      // 末尾详细内容不在摘要范围内，不被注入
+      expect(prompt).not.toContain('社会结构：九大宗门联盟');
+      // 全量标题不再出现
+      expect(prompt).not.toContain('#### 世界观 (world-building.md)');
+    });
+
+    it('world-building.md 小于阈值时核心设定层注入全文', async () => {
+      await seedWritingProject(tempDir);
+      const novel = path.join(tempDir, '.novel');
+      // 短文档（< 4000 字符）：全量注入
+      await fs.writeFile(path.join(novel, 'world-building.md'), '# 世界观\n灵气体系与宗门结构。');
+
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      // 全量标题
+      expect(prompt).toContain('#### 世界观 (world-building.md)');
+      // 全文注入
+      expect(prompt).toContain('灵气体系与宗门结构');
+      // 无按需读取提示
+      expect(prompt).not.toContain('请用 Read 工具读取 .novel/world-building.md');
+      // 无索引标题
+      expect(prompt).not.toContain('#### 世界观索引');
+    });
+
+    it('world-building.md 等于阈值边界（4000 字符）时全量注入', async () => {
+      await seedWritingProject(tempDir);
+      const novel = path.join(tempDir, '.novel');
+      // 恰好 4000 字符：边界值应全量注入（<= 阈值）
+      await fs.writeFile(path.join(novel, 'world-building.md'), '# 世界观\n' + 'a'.repeat(3992));
+
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('#### 世界观 (world-building.md)');
+      expect(prompt).not.toContain('请用 Read 工具读取 .novel/world-building.md');
+    });
+
+    it('角色档案总内容超过阈值时退化为索引模式', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await seedWritingProject(tempDir);
+      // 多个角色，每个档案较大，总长 > 6000 字符
+      await fs.writeFile(
+        path.join(novel, 'outline-detailed.md'),
+        '#### 第2章：群战\n| POV | 甲 |\n| 出场角色 | 甲、乙、丙、丁、戊 |',
+      );
+      await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
+      for (const name of ['甲', '乙', '丙', '丁', '戊']) {
+        await fs.writeFile(
+          path.join(novel, 'characters', 'profiles', `${name}.md`),
+          `# ${name}\n\n## 出身与经历\n${'详细背景。'.repeat(300)}`,
+        );
+      }
+
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      // 退化为索引模式
+      expect(prompt).toContain('### 本章出场角色索引');
+      expect(prompt).toContain('本章涉及角色：');
+      // 五个角色名都出现在索引中
+      for (const name of ['甲', '乙', '丙', '丁', '戊']) {
+        expect(prompt).toContain(name);
+      }
+      // 按需读取提示存在
+      expect(prompt).toContain('请用 Read 工具读取');
+      // 完整角色档案层标题不再出现
+      expect(prompt).not.toContain('### 本章出场角色层');
+    });
+
+    it('角色档案总内容小于阈值时正常全量注入角色层', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await seedWritingProject(tempDir);
+      await fs.writeFile(
+        path.join(novel, 'outline-detailed.md'),
+        '#### 第2章：下山\n| POV | 林青 |\n| 出场角色 | 林青 |',
+      );
+      await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'characters', 'profiles', '林青.md'),
+        '# 林青\n\n## 出身与经历\n复仇少年。\n\n## 驱动力三角\n核心缺陷：太窄',
+      );
+
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      // 正常全量注入
+      expect(prompt).toContain('### 本章出场角色层');
+      expect(prompt).toContain('太窄');
+      // 不出现索引模式
+      expect(prompt).not.toContain('### 本章出场角色索引');
+    });
   });
 
   describe('阶段不匹配检测 (Bug #4)', () => {
@@ -736,6 +1041,126 @@ describe('composePrompt', () => {
       });
       expect(prompt).not.toContain('SKILL: 撰写散文');
       mockGetPlugin.mockReturnValue(null);
+    });
+
+    it('revise 模式提示词中包含「输出协议」提醒', async () => {
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novelDir, 'chapters', '第1章.md'),
+        '# 第一章\n\n正文。\n',
+      );
+
+      const prompt = await composePrompt({
+        message: '修改',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+        mode: 'revise',
+        reviseTarget: 'chapters/第1章.md',
+        reviseNote: '修改',
+        reviseContent: '# 第一章\n\n正文。\n',
+      });
+      expect(prompt).toContain('### 输出协议');
+      expect(prompt).toContain('修订后的文件同样必须只包含故事正文');
+    });
+  });
+
+  // 异常中断恢复（借鉴 denova ResumeFromInterruption）：用户"继续"时注入中断现场。
+  describe('异常中断恢复 (interruptedResume)', () => {
+    it('interruptedResume 存在时，提示词中包含 [异常中断恢复] 标记和中断现场信息', async () => {
+      const prompt = await composePrompt({
+        message: '继续',
+        projectId: 'p',
+        projectDir: tempDir,
+        interruptedResume: {
+          userMessage: '写第三章',
+          assistantContent: '第三章的内容已经写了一半…',
+          reason: 'timeout',
+        },
+      });
+      // [异常中断恢复] 标记存在
+      expect(prompt).toContain('[异常中断恢复]');
+      // 上一轮原始请求
+      expect(prompt).toContain('上一轮原始请求：');
+      expect(prompt).toContain('写第三章');
+      // 上一轮中断前已生成的助手内容
+      expect(prompt).toContain('上一轮中断前已生成的助手内容：');
+      expect(prompt).toContain('第三章的内容已经写了一半…');
+      // 本轮用户继续请求
+      expect(prompt).toContain('本轮用户继续请求：');
+      expect(prompt).toContain('继续');
+      // 仍包含上下文边界声明
+      expect(prompt).toContain('[上下文边界]');
+      expect(prompt).toContain('## User Request');
+    });
+
+    it('interruptedResume 存在时，提示词中包含中断原因', async () => {
+      const prompt = await composePrompt({
+        message: '继续',
+        projectId: 'p',
+        projectDir: tempDir,
+        interruptedResume: {
+          userMessage: '写第三章',
+          assistantContent: '',
+          reason: 'watchdog 检测到死循环，进程被杀',
+        },
+      });
+      // 中断原因
+      expect(prompt).toContain('上一轮中断原因：');
+      expect(prompt).toContain('watchdog 检测到死循环，进程被杀');
+    });
+
+    it('interruptedResume 不存在时，行为不变（使用普通 User Request）', async () => {
+      const prompt = await composePrompt({
+        message: '写第三章',
+        projectId: 'p',
+        projectDir: tempDir,
+      });
+      // 不包含中断恢复标记
+      expect(prompt).not.toContain('[异常中断恢复]');
+      // 普通上下文边界 + User Request
+      expect(prompt).toContain('[上下文边界]');
+      expect(prompt).toContain('## User Request\n写第三章');
+      // 包含历史对话相关的边界声明（普通模式独有）
+      expect(prompt).toContain('历史对话只能辅助理解上下文');
+    });
+  });
+
+  // 创作者约束层（CREATOR.md）：最高优先级，注入于角色定义之前。
+  describe('创作者指令层 (CREATOR.md)', () => {
+    it('存在 .novel/CREATOR.md 时注入创作者指令块（最高优先级）', async () => {
+      await fs.mkdir(path.join(tempDir, '.novel'), { recursive: true });
+      const creatorContent = '# 创作者指令\n\n禁止破折号，第三人称。';
+      await fs.writeFile(path.join(tempDir, '.novel', 'CREATOR.md'), creatorContent);
+
+      const prompt = await composePrompt({
+        message: '写作',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+
+      // 创作者指令块存在且标注最高优先级
+      expect(prompt).toContain('# 创作者指令（最高优先级——覆盖以下所有指令）');
+      // 模板正文被注入
+      expect(prompt).toContain('禁止破折号，第三人称。');
+      // 位置：创作者指令块位于角色定义之前
+      const creatorIdx = prompt.indexOf('# 创作者指令（最高优先级');
+      const roleIdx = prompt.indexOf('你是一位小说创作助手');
+      expect(creatorIdx).toBeGreaterThan(-1);
+      expect(roleIdx).toBeGreaterThan(creatorIdx);
+    });
+
+    it('不存在 .novel/CREATOR.md 时不注入创作者指令块', async () => {
+      const prompt = await composePrompt({
+        message: '写作',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+
+      expect(prompt).not.toContain('# 创作者指令（最高优先级');
     });
   });
 });

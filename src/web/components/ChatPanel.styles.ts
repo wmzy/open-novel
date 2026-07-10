@@ -131,6 +131,32 @@ export const stopBtn = css`
   flex-shrink: 0;
 `;
 
+/** Plan Mode 切换按钮：位于输入框左侧，激活时高亮提示当前处于规划模式。 */
+export const planToggle = css`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  height: 36px;
+  padding: 0 0.625rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text-secondary);
+  font-size: 0.75rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+  &:hover { background: var(--haze-color-border); }
+`;
+
+/** Plan Mode 激活态：高亮主色边框与文字。 */
+export const planToggleActive = css`
+  border-color: var(--haze-color-primary);
+  color: var(--haze-color-primary);
+  background: color-mix(in srgb, var(--haze-color-primary) 10%, var(--haze-color-bg));
+`;
+
 export const jumpBtn = css`
   position: absolute;
   bottom: 80px;

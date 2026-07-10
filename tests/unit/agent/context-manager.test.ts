@@ -12,6 +12,10 @@ import {
   initStateTable,
   ensureContextArtifacts,
   readCharacterNames,
+  getProgressMarkdown,
+  getCharacterStatesMarkdown,
+  getStyleRefs,
+  parseStyleIndex,
 } from '../../../src/agent/context-manager';
 
 async function seedProfiles(dir: string, names: string[]) {
@@ -387,6 +391,119 @@ describe('context-manager', () => {
       const names = await readCharacterNames(dir);
       expect(names).toContain('林冲');
       expect(names).toContain('孙二娘');
+    });
+  });
+
+  describe('progress.md / character-states.md 读取', () => {
+    it('getProgressMarkdown 返回文件内容', async () => {
+      await fs.mkdir(path.join(dir, '.novel'), { recursive: true });
+      await fs.writeFile(path.join(dir, '.novel', 'progress.md'), '# 写作进度\n已写到第3章');
+      const md = await getProgressMarkdown(dir);
+      expect(md).toContain('写作进度');
+      expect(md).toContain('已写到第3章');
+    });
+
+    it('getProgressMarkdown 文件不存在时返回空串', async () => {
+      expect(await getProgressMarkdown(dir)).toBe('');
+    });
+
+    it('getCharacterStatesMarkdown 返回文件内容', async () => {
+      await fs.mkdir(path.join(dir, '.novel'), { recursive: true });
+      await fs.writeFile(path.join(dir, '.novel', 'character-states.md'), '# 角色状态\n林冲在客栈');
+      const md = await getCharacterStatesMarkdown(dir);
+      expect(md).toContain('角色状态');
+      expect(md).toContain('林冲在客栈');
+    });
+
+    it('getCharacterStatesMarkdown 文件不存在时返回空串', async () => {
+      expect(await getCharacterStatesMarkdown(dir)).toBe('');
+    });
+  });
+
+  describe('文风参考索引', () => {
+    it('parseStyleIndex 解析标准格式', () => {
+      const content = [
+        '## 全局文风参考',
+        '- name: 紧凑散文 | description: 短句、高信息密度 | path: tight-prose.md',
+        '- name: 场景：战斗 | description: 快节奏动作 | path: action.md',
+      ].join('\n');
+      const refs = parseStyleIndex(content);
+      expect(refs).toHaveLength(2);
+      expect(refs[0]).toEqual({
+        name: '紧凑散文',
+        description: '短句、高信息密度',
+        path: 'tight-prose.md',
+      });
+      expect(refs[1]).toEqual({
+        name: '场景：战斗',
+        description: '快节奏动作',
+        path: 'action.md',
+      });
+    });
+
+    it('parseStyleIndex 丢弃缺失 path 或 name 的条目', () => {
+      const content = [
+        '## 文风参考',
+        '- name: 无路径 | description: 只有名字',
+        '- description: 没有 name | path: orphan.md',
+        '- name: 有效 | description: ok | path: ok.md',
+      ].join('\n');
+      const refs = parseStyleIndex(content);
+      expect(refs).toHaveLength(1);
+      expect(refs[0].name).toBe('有效');
+      expect(refs[0].path).toBe('ok.md');
+    });
+
+    it('parseStyleIndex 去重相同 path', () => {
+      const content = [
+        '- name: 第一 | path: same.md',
+        '- name: 第二 | path: same.md',
+      ].join('\n');
+      const refs = parseStyleIndex(content);
+      expect(refs).toHaveLength(1);
+      expect(refs[0].name).toBe('第一');
+    });
+
+    it('getStyleRefs 从 index.md 正确解析', async () => {
+      await fs.mkdir(path.join(dir, '.novel', 'styles'), { recursive: true });
+      const index = [
+        '## 全局文风参考',
+        '- name: 抒情 | description: 长句、意象丰富 | path: lyrical.md',
+        '- name: 硬汉 | description: 简短、干脆 | path: hardboiled.md',
+      ].join('\n');
+      await fs.writeFile(path.join(dir, '.novel', 'styles', 'index.md'), index);
+      const refs = await getStyleRefs(dir);
+      expect(refs).toHaveLength(2);
+      expect(refs[0].name).toBe('抒情');
+      expect(refs[1].path).toBe('hardboiled.md');
+    });
+
+    it('getStyleRefs index.md 不存在时扫描目录', async () => {
+      const stylesDir = path.join(dir, '.novel', 'styles');
+      await fs.mkdir(stylesDir, { recursive: true });
+      // 创建若干文风文件（index.md 和 README.md 应被排除）
+      await fs.writeFile(
+        path.join(stylesDir, 'tight-prose.md'),
+        '# 紧凑散文\n短句为主，高信息密度，拒绝冗余修饰。',
+      );
+      await fs.writeFile(
+        path.join(stylesDir, 'action.md'),
+        '# 动作场景\n快节奏，动词密集，句子短促有力。',
+      );
+      await fs.writeFile(path.join(stylesDir, 'README.md'), '# 说明\n本目录存放文风参考。');
+      const refs = await getStyleRefs(dir);
+      expect(refs).toHaveLength(2);
+      const names = refs.map((r) => r.name);
+      expect(names).toContain('tight-prose');
+      expect(names).toContain('action');
+      // description 应从首段正文提取
+      const tight = refs.find((r) => r.name === 'tight-prose');
+      expect(tight?.description).toContain('短句为主');
+    });
+
+    it('getStyleRefs 目录不存在时返回空数组', async () => {
+      const refs = await getStyleRefs(dir);
+      expect(refs).toEqual([]);
     });
   });
 });

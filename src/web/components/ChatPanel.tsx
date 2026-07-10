@@ -33,6 +33,7 @@ import {
   deepenOverlay, deepenDialog, deepenInput, deepenActions,
   deepenConfirmBtn, deepenCancelBtn, deepenBanner,
   deepenScores, deepenHintLabel, deepenHintInput,
+  planToggle, planToggleActive,
 } from './ChatPanel.styles';
 
 interface Command {
@@ -109,6 +110,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const [pendingRevise, setPendingRevise] = useState<
     { targetFile: string; sectionTitle?: string } | null
   >(null);
+  // Plan Mode（规划模式）：开启后发送的 run 携带 planMode=true，先分析规划不直接改文件
+  const [planMode, setPlanMode] = useState(false);
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { targetFile: string; sectionTitle?: string };
@@ -419,6 +422,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       stage,
       message: input.trim(),
       model: selectedModel !== 'default' ? selectedModel : undefined,
+      planMode,
       ...(pendingRevise
         ? {
             mode: 'revise' as const,
@@ -867,6 +871,14 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
             ))}
           </div>
         )}
+        <button
+          className={cx(planToggle, planMode && planToggleActive)}
+          onClick={() => setPlanMode((v) => !v)}
+          title="Plan Mode：先分析规划再执行，不直接修改文件"
+          aria-pressed={planMode}
+        >
+          📋 规划
+        </button>
         <textarea
           ref={textareaRef}
           className={textarea}

@@ -298,6 +298,37 @@ function initWorkspace(projectDir: string, opts: WorkspaceOpts): void {
   mkdirSync(path.join(novelDir, 'characters'), { recursive: true });
   mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
 
+  // 初始化文风参考目录：创建 .novel/styles/ 并拷贝 README.md 说明文件。
+  const stylesDir = path.join(novelDir, 'styles');
+  mkdirSync(stylesDir, { recursive: true });
+  const stylesReadme = path.join(stylesDir, 'README.md');
+  if (!existsSync(stylesReadme)) {
+    const stylesReadmeTemplate = path.resolve(process.cwd(), 'templates', 'styles', 'README.md');
+    if (existsSync(stylesReadmeTemplate)) {
+      copyFileSync(stylesReadmeTemplate, stylesReadme);
+    }
+  }
+
+  // 初始化创作者约束层：若 .novel/CREATOR.md 不存在，从项目根 templates/ 拷贝默认内容。
+  const creatorPath = path.join(novelDir, 'CREATOR.md');
+  if (!existsSync(creatorPath)) {
+    const creatorTemplate = path.resolve(process.cwd(), 'templates', 'CREATOR.md');
+    if (existsSync(creatorTemplate)) {
+      copyFileSync(creatorTemplate, creatorPath);
+    }
+  }
+
+  // 初始化状态分离文件：progress.md 与 character-states.md（若不存在则从 templates/ 拷贝）。
+  for (const tmplName of ['progress.md', 'character-states.md']) {
+    const dest = path.join(novelDir, tmplName);
+    if (!existsSync(dest)) {
+      const tmpl = path.resolve(process.cwd(), 'templates', tmplName);
+      if (existsSync(tmpl)) {
+        copyFileSync(tmpl, dest);
+      }
+    }
+  }
+
   const templatesDir = path.join(plugin.path, 'templates');
   if (existsSync(templatesDir)) {
     copyTemplates(templatesDir, novelDir, {

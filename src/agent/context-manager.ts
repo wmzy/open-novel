@@ -18,6 +18,8 @@ const NOVEL_DIR = '.novel';
 const CHAPTERS_DIR = 'chapters';
 const STATE_FILE = 'state.json';
 const PROFILES_FILE = path.join('characters', 'profiles.md');
+const PROGRESS_FILE = 'progress.md';
+const CHARACTER_STATES_FILE = 'character-states.md';
 
 /** 滚动摘要：最近若干章使用详摘，其余压缩为简摘。 */
 const RECENT_CHAPTER_COUNT = 3;
@@ -125,6 +127,16 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
   }
 }
 
+/** 读取 progress.md（写作进度）。文件不存在返回空串。 */
+export async function getProgressMarkdown(projectDir: string): Promise<string> {
+  return readNovelFile(projectDir, PROGRESS_FILE);
+}
+
+/** 读取 character-states.md（角色当前状态）。文件不存在返回空串。 */
+export async function getCharacterStatesMarkdown(projectDir: string): Promise<string> {
+  return readNovelFile(projectDir, CHARACTER_STATES_FILE);
+}
+
 /** 从角色档案（characters/profiles.md）解析角色名列表。
  *  支持两种格式：字段式（`- 姓名：xxx`）与表格索引式（`| 角色 | 文件 |`）。 */
 export async function readCharacterNames(projectDir: string): Promise<string[]> {
@@ -149,6 +161,124 @@ export async function readCharacterNames(projectDir: string): Promise<string[]> 
   }
 
   return names;
+}
+
+// ===== 文风参考索引 =====
+
+const STYLES_DIR = 'styles';
+const STYLES_INDEX_FILE = 'styles/index.md';
+
+export interface StyleRef {
+  name: string;
+  description: string;
+  path: string;
+}
+
+/**
+ * 解析 index.md 文本为文风参考索引。
+ * 支持的行格式：`- name: 名称 | description: 描述 | path: 文件名`（分隔符 `|`，字段顺序可变）。
+ * 缺失 path 的条目被丢弃。每条至少需要 name 才会被保留。
+ */
+export function parseStyleIndex(content: string): StyleRef[] {
+  const refs: StyleRef[] = [];
+  const seenPaths = new Set<string>();
+  // 逐行匹配 `- ` 开头的列表项
+  const lineRe = /^[-*]\s+.+$/gm;
+  let lineMatch: RegExpExecArray | null;
+  while ((lineMatch = lineRe.exec(content)) !== null) {
+    const line = lineMatch[0];
+    // 按 `|` 拆分字段
+    const fields = line.split('|').map((s) => s.trim());
+    const ref: Partial<StyleRef> = {};
+    for (const field of fields) {
+      // 去掉行首的 `- ` / `* `
+      const cleaned = field.replace(/^[-*]\s+/, '');
+      const kvMatch = /^(name|description|path)\s*[:：]\s*(.+)$/i.exec(cleaned);
+      if (kvMatch) {
+        const key = kvMatch[1].toLowerCase();
+        const value = kvMatch[2].trim();
+        if (key === 'name') ref.name = value;
+        else if (key === 'description') ref.description = value;
+        else if (key === 'path') ref.path = value;
+      }
+    }
+    if (ref.name && ref.path && !seenPaths.has(ref.path)) {
+      seenPaths.add(ref.path);
+      refs.push({
+        name: ref.name,
+        description: ref.description || '',
+        path: ref.path,
+      });
+    }
+  }
+  return refs;
+}
+
+/**
+ * 扫描 styles/ 目录下的 .md 文件，自动生成索引。
+ * 排除 index.md 与 README.md（无实质文风内容的元文件）。
+ * 文件名（去掉扩展名）作为 name，首段非标题文本作为 description（截断到 60 字）。
+ */
+async function scanStyleDir(projectDir: string): Promise<StyleRef[]> {
+  const stylesDir = path.join(projectDir, NOVEL_DIR, STYLES_DIR);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(stylesDir);
+  } catch {
+    return [];
+  }
+  const refs: StyleRef[] = [];
+  for (const name of entries.sort()) {
+    if (!name.endsWith('.md')) continue;
+    if (name === 'index.md' || name === 'README.md') continue;
+    const full = path.join(stylesDir, name);
+    let stat;
+    try {
+      stat = await fs.stat(full);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) continue;
+    const raw = await readNovelFile(projectDir, `${STYLES_DIR}/${name}`);
+    const description = extractStyleDescription(raw);
+    refs.push({
+      name: name.replace(/\.md$/, ''),
+      description,
+      path: name,
+    });
+  }
+  return refs;
+}
+
+/** 从文风参考文件内容中提取首段非标题文本作为 description（截断到 60 字）。 */
+function extractStyleDescription(content: string): string {
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    // 跳过代码围栏与列表标记
+    if (trimmed.startsWith('```') || trimmed.startsWith('-') || trimmed.startsWith('*')) continue;
+    return trimmed.length > 60 ? trimmed.slice(0, 60) + '…' : trimmed;
+  }
+  return '';
+}
+
+/**
+ * 读取 .novel/styles/index.md，解析文风参考索引。
+ * index.md 格式：
+ * ## 全局文风参考
+ * - name: 紧凑散文 | description: 短句、高信息密度 | path: tight-prose.md
+ * - name: 场景：战斗 | description: 快节奏动作 | path: action.md
+ *
+ * 如果 index.md 不存在，扫描 styles/ 目录下的 .md 文件自动生成索引。
+ */
+export async function getStyleRefs(projectDir: string): Promise<StyleRef[]> {
+  const indexContent = await readNovelFile(projectDir, STYLES_INDEX_FILE);
+  if (indexContent) {
+    return parseStyleIndex(indexContent);
+  }
+  // index.md 不存在时，扫描 styles/ 目录
+  return scanStyleDir(projectDir);
 }
 
 // ===== 章节摘要 =====

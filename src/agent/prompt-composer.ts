@@ -4,7 +4,7 @@ import { db } from '../db/drizzle';
 import { projects } from '../db/schema';
 import { getPlugin } from '../plugins/registry';
 import { eq } from 'drizzle-orm';
-import { buildRollingSummaryContext, getStateTable, readCharacterNames } from './context-manager';
+import { buildRollingSummaryContext, getStateTable, readCharacterNames, getProgressMarkdown, getCharacterStatesMarkdown, getStyleRefs } from './context-manager';
 import { extractChapterOutline, identifyCast, buildCastLayer } from './chapter-context';
 import { buildReverseDecomposePrompt } from './reverse-decomposer';
 import { buildEnrichPrompt } from './enricher';
@@ -30,11 +30,21 @@ export interface ComposePromptOptions {
   /** 自治模式：跳过采访式协议，前期阶段改为自主决策。默认 false。 */
   autonomous?: boolean;
 
+  /** Plan Mode：先分析规划再执行，不直接修改文件。默认 false。 */
+  planMode?: boolean;
+
   /** Deepen 深化循环上下文：注入当前 stage 产出文件 + critique（Revise 轮），省去 agent Read 往返。 */
   deepenContext?: { round: number };
 
   /** 当前 agent CLI ID（'claude' | 'omp' | 'opencode'）。用于注入 subagent 使用指导。 */
   agentId?: string;
+
+  /** 异常中断恢复：上一轮被中断，本轮用户输入"继续"。注入中断现场。 */
+  interruptedResume?: {
+    userMessage: string;      // 上一轮原始用户请求
+    assistantContent: string;  // 上一轮中断前已生成的助手内容（可能截断）
+    reason: string;            // 中断原因（如 timeout、watchdog、process crash）
+  };
 }
 
 // 规划阶段共用的「采访式」协作流程。拼接进 concept/world/characters/outline/scenes 的指令。
@@ -169,6 +179,37 @@ function buildStageInstructions(stage: string, autonomous: boolean): string {
   return head + INTERVIEW_PROTOCOL + '\n' + (DECISION_PROMPTS[stage] ?? '') + tail;
 }
 
+/** Plan Mode 叠加指令：先分析规划，不直接执行修改操作。 */
+const PLAN_MODE_INSTRUCTION = [
+  '',
+  '## Plan Mode（规划模式）',
+  '当前处于规划模式。请先协作制定计划，不要直接执行修改操作。',
+  '',
+  '要求：',
+  '1. 先分析用户需求、当前上下文和风险；需要了解现状时可用 Read 等只读方式收集信息。',
+  '2. 在 Plan Mode 中不要主动执行会改变作品或工作区状态的操作；等用户确认计划后再进入执行。',
+  '3. 如果需求、范围或实现取舍存在不确定性，先用 question 工具提问，不要把不确定点偷偷写成假设。',
+  '4. 方案明确后，输出最终方案卡：用清晰 Markdown 列出目标、关键步骤和取舍，邀请用户确认后再执行。',
+  '5. 不要在用户确认前写入任何文件或修改现有内容。',
+  '',
+].join('\n');
+
+
+/** 写作阶段的输出协议约束（借鉴 denova 的输出协议设计）。 */
+const WRITING_OUTPUT_PROTOCOL = [
+  '',
+  '## 章节正文输出协议（严格遵守）',
+  '',
+  '章节正文文件（.novel/chapters/ 下的 .md 文件）必须只包含故事正文。',
+  '- 正文只写场景描写、人物动作、对话和后果。',
+  '- 不要在正文中输出写作计划、解释说明、工具使用说明或 AI 自述。',
+  '- 不要使用 Markdown 标记语法（如 ## 小标题、**加粗**、- 列表、> 引用、代码块）。',
+  '- 段落间用空行分隔，不使用 Markdown 标题分割场景。',
+  '- 不要在正文中包含状态信息、伏笔清单、角色状态 JSON 或任何结构化数据。',
+  '- 不要输出"以上是第N章的内容"之类的元叙述收尾。',
+  '- 唯一允许的文件首行格式：# 第N章 标题（仅文件首行标题，正文内不再重复）。',
+].join('\n');
+
 // 仅保留写作阶段；规划阶段（concept/world/characters/outline/scenes）指令
 // 由 buildStageInstructions(stage, autonomous) 动态组装，见上方。
 const STAGE_INSTRUCTIONS: Record<string, string> = {
@@ -179,20 +220,23 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
 
 **元叙事禁令**：正文内严禁出现章节编号引用（如「第15章」「第十二章」等）。章节编号只能出现在文件首行标题（如「# 第3章 令牌」），绝不能在散文叙事中出现。角色不会知道自己身处「第几章」。
 
-每写完一章后，你必须完成以下三件事以保持后续章节的一致性：
-(1) 为该章生成约 200 字的**语义摘要**，写入 .novel/chapters/第N章.summary.md（将 N 替换为章节号，例如 第3章.summary.md）。摘要必须包含：本章情节推进、角色状态变化（位置/情绪/获知新信息）、伏笔兑现或新增。**严禁复制正文原文段落**——摘要必须是你的概括重述，不是截取。
-(2) 更新 .novel/state.json——刷新每个在场角色的位置（location）、情绪（emotion）、新获知的信息（knows）；**角色间关系变化必须写入 relationships 字段**（键=对方角色名，值=关系描述，如 "孙二娘": "脆弱的盟友"），不能留空——这是人物关系图的唯一数据源；推进时间线和 lastUpdatedChapter；设置 updatedAt。
-(3) 更新 .novel/foreshadow.json 的伏笔状态：
-- 若本章**新埋设**了一条伏笔（首次在正文中植入线索）且大纲阶段未预登：**新增一条**，id 取现有最大 id + 1，content 写具体描述，status 设为 "planted"，plantedIn 填当前章号，resolvedIn 为 null。
-- 若大纲阶段已预登该伏笔为 pending：将其 status 从 "pending" 改为 "planted"。
-- 若本章**回收**了某条伏笔（线索得到兑现/揭晓）：将 status 改为 "resolved" 并填写 resolvedIn 为当前章号。
-- 标准 schema：{ "foreshadows": [{ "id": 1, "content": "具体描述", "status": "planted", "plantedIn": 3, "resolvedIn": null }] }。顶层键为 foreshadows（不是 items），内容字段为 content（不是 description），status 取值 pending/planted/resolved。
-- 同时同步 state.json 的 activeForeshadows 字段——收集所有 status 为 "planted" 的伏笔 ID 列表。
+**写章流程（职责分离）**：
 
-写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。`,
-  drafting: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。`,
+1. **你的核心职责是写正文**——专注产出高质量的章节散文，写完后保存到 .novel/chapters/ 目录。
+2. **正文写完后，委托 state-patcher SubAgent 完成状态更新**——告知它章节文件路径和章号，让它自行：
+   - 在 .novel/chapters/第N章.summary.md 生成本章语义摘要
+   - 更新 .novel/character-states.md（角色位置/情绪/目标/关系变化）
+   - 更新 .novel/progress.md（当前进度、最近章节摘要、下一步提示）
+   - 更新 .novel/state.json（lastUpdatedChapter、timeline、activeForeshadows）
+   - 更新 .novel/foreshadow.json（伏笔状态）
+3. **如果当前 Agent 不支持 SubAgent**（如 OpenCode），则你需要自行完成上述状态更新。参见下方 SubAgent 使用指导。
+4. **正文写作和状态更新不要混在一起**——先把正文写完保存，再做状态更新。避免写到一半停下来更新状态文件。
+
+写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。
+${WRITING_OUTPUT_PROTOCOL}`,
+  drafting: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。${WRITING_OUTPUT_PROTOCOL}`,
   revision: `审阅和改进已有内容。重点检查：(1) 剧情连贯性和逻辑漏洞；(2) 伏笔是否被遗忘（POST /api/projects/{projectId}/check/foreshadows）；(3) 人物行为是否偏离设定（POST /api/projects/{projectId}/check/ooc，body: {chapterNum: N}）；(4) 文笔AI味（POST /api/projects/{projectId}/check/ai-patterns，body: {chapterNum: N}）。根据检查报告逐章修订。`,
-  polish: `最终润色。聚焦行文质量——用词精准度、句式节奏、对话自然度、描写具体化。删除抽象情绪标签和万能形容词，用具体细节替代。`,
+  polish: `最终润色。聚焦行文质量——用词精准度、句式节奏、对话自然度、描写具体化。删除抽象情绪标签和万能形容词，用具体细节替代。${WRITING_OUTPUT_PROTOCOL}`,
 };
 
 /**
@@ -219,7 +263,40 @@ ${reviseNote}
 2. **禁止重写整篇**——如果你的改动会超过文件 30% 的内容，停下来在回复里说明原因，建议用户将修订拆分为多次。
 3. **保留原文风格**——修订是定向调整，不是风格重写。不要“顺手”优化你没被要求改的句子。
 4. **保存修改**——用 Edit 工具直接修改原文件（Edit 会直接写盘，不需要额外的 Write）。对整个文件的重建式改动才用 Write。
-5. **简短说明**——在回复中用 2-3 句话说明你改了什么、为什么，便于用户判断是否符合预期。`;
+5. **简短说明**——在回复中用 2-3 句话说明你改了什么、为什么，便于用户判断是否符合预期。
+
+### 输出协议
+修订后的文件同样必须只包含故事正文，不要包含解释说明、Markdown 标记或元叙述。`;
+}
+
+/**
+ * 构建异常中断恢复提示词。
+ * 借鉴 denova 的 ResumeFromInterruption，在用户"继续"时拼入中断现场。
+ */
+function buildInterruptedResumeInstruction(
+  currentMessage: string,
+  resume: { userMessage: string; assistantContent: string; reason: string },
+): string {
+  const sections: string[] = ['[异常中断恢复]'];
+  sections.push('用户当前要求继续。请从上一轮异常中断的位置继续，不要重做已经完成且已经写入文件的工作。');
+  sections.push('如果上一轮已有部分助手输出，请把它作为已完成内容的上下文，继续完成原始请求。');
+  sections.push('');
+  sections.push('上一轮原始请求：');
+  sections.push(resume.userMessage);
+  if (resume.assistantContent) {
+    sections.push('');
+    sections.push('上一轮中断前已生成的助手内容：');
+    sections.push(resume.assistantContent);
+  }
+  if (resume.reason) {
+    sections.push('');
+    sections.push('上一轮中断原因：');
+    sections.push(resume.reason);
+  }
+  sections.push('');
+  sections.push('本轮用户继续请求：');
+  sections.push(currentMessage);
+  return sections.join('\n');
 }
 
 /**
@@ -293,29 +370,48 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
   }
 }
 
-/** 核心设定层（恒定）：concept.md + world-building.md。
- * 全量注入会消耗大量 token（concept+world 可达 60KB+），导致 agent 上下文超载。
- * 这里在保持完整性的前提下控制大小：超过 CORE_LAYER_MAX_CHARS 时截断 world-building 的末尾细节。 */
-const CORE_LAYER_MAX_CHARS = 16000; // 约 8K token，留足空间给其他层
+/** 核心设定层（恒定）：concept.md 全量注入 + world-building.md 渐进式加载。
+ * 写到第 50 章时 concept+world+角色档案可能超过 50KB，全量注入会撑爆上下文。
+ * 借鉴 denova 的渐进式资料库加载：world-building 短文档全量注入，长文档只注入摘要+按需读取提示。 */
+const WORLD_FULL_THRESHOLD = 4000; // 世界观短文档阈值：<=此值全量注入
+const WORLD_SUMMARY_CHARS = 800; // 长世界观文档只注入开头的字符数
+/** 角色档案层超过此长度时退化为索引模式（只注入角色名+按需读取提示）。 */
+const CAST_INDEX_THRESHOLD = 6000;
 
 async function buildCoreSettingsLayer(projectDir: string): Promise<string> {
   const blocks: string[] = [];
+
+  // concept.md 始终全量注入（核心前提，通常较短）
   const concept = await readNovelFile(projectDir, 'concept.md');
   if (concept) blocks.push(`#### 故事概念 (concept.md)\n${concept}`);
+
+  // world-building.md 渐进式加载：短文档全量，长文档只注入摘要+按需读取提示
   const world = await readNovelFile(projectDir, 'world-building.md');
   if (world) {
-    let worldContent = world;
-    const totalSize = blocks.join('\n\n').length + world.length;
-    if (totalSize > CORE_LAYER_MAX_CHARS) {
-      // 截断 world-building，保留开头（力量体系 / 社会结构等核心部分通常在前半）
-      const budget = CORE_LAYER_MAX_CHARS - blocks.join('\n\n').length;
-      worldContent = world.slice(0, Math.max(budget, 6000))
-        + `\n\n[…世界观文档已截断，完整内容见 world-building.md…]`;
+    if (world.length <= WORLD_FULL_THRESHOLD) {
+      // 短文档全量注入
+      blocks.push(`#### 世界观 (world-building.md)\n${world}`);
+    } else {
+      // 长文档只注入摘要 + 按需读取提示
+      const summary = world.slice(0, WORLD_SUMMARY_CHARS);
+      blocks.push(`#### 世界观索引 (world-building.md)\n${summary}\n\n[…世界观文档较长（${world.length} 字符），以上为摘要。如需详细设定（力量体系、社会结构、历史等），请用 Read 工具读取 .novel/world-building.md 全文…]`);
     }
-    blocks.push(`#### 世界观 (world-building.md)\n${worldContent}`);
   }
+
   if (blocks.length === 0) return '';
   return `### 核心设定层（恒定）\n${blocks.join('\n\n')}`;
+}
+
+/** 文风参考索引层：列出可用文风参考文件，不注入全文。 */
+async function buildStyleRefLayer(projectDir: string): Promise<string> {
+  const refs = await getStyleRefs(projectDir);
+  if (refs.length === 0) return '';
+  const lines: string[] = ['### 文风参考索引'];
+  lines.push('以下文风参考文件可用。如本轮涉及章节正文创作/续写/重写，请在写作前用 Read 工具读取最相关的参考文件：');
+  for (const ref of refs) {
+    lines.push(`- **${ref.name}**：${ref.description}（路径：.novel/styles/${ref.path}）`);
+  }
+  return lines.join('\n');
 }
 
 /** 状态层：角色位置/情绪/已知信息/关系 + 时间线（来自 state.json）。 */
@@ -345,6 +441,20 @@ async function buildStateLayer(projectDir: string): Promise<string> {
     lines.push(`- ${segs.join('；')}`);
   }
   return lines.join('\n');
+}
+
+/** 进度层：从 progress.md 读取写作进度。 */
+async function buildProgressLayer(projectDir: string): Promise<string> {
+  const progress = await getProgressMarkdown(projectDir);
+  if (!progress) return '';
+  return `### 写作进度层（progress.md）\n${progress}`;
+}
+
+/** 角色状态层：从 character-states.md 读取角色当前状态。 */
+async function buildCharacterStatesLayer(projectDir: string): Promise<string> {
+  const states = await getCharacterStatesMarkdown(projectDir);
+  if (!states) return '';
+  return `### 角色当前状态层（character-states.md）\n${states}`;
 }
 
 /**
@@ -450,8 +560,17 @@ async function buildWritingContextLayers(
   const core = await buildCoreSettingsLayer(projectDir);
   if (core) sections.push(core);
 
+  const styleRef = await buildStyleRefLayer(projectDir);
+  if (styleRef) sections.push(styleRef);
+
   const stateLayer = await buildStateLayer(projectDir);
   if (stateLayer) sections.push(stateLayer);
+
+  const progressLayer = await buildProgressLayer(projectDir);
+  if (progressLayer) sections.push(progressLayer);
+
+  const charStatesLayer = await buildCharacterStatesLayer(projectDir);
+  if (charStatesLayer) sections.push(charStatesLayer);
 
   // 本章大纲块
   const outlineBlock = await extractChapterOutline(projectDir, currentChapter);
@@ -459,11 +578,27 @@ async function buildWritingContextLayers(
     sections.push(`### 本章大纲（第${currentChapter}章）\n${outlineBlock}\n\n> 严格按大纲推进。若需偏离（增删事件、调整节奏），在回复里说明原因。`);
   }
 
-  // 本章出场角色层
+  // 本章出场角色层（渐进式：内容过长时退化为索引模式）
   const knownNames = await readCharacterNames(projectDir);
   const cast = await identifyCast(projectDir, currentChapter, outlineBlock, knownNames);
   const castLayer = await buildCastLayer(projectDir, cast);
-  if (castLayer) sections.push(castLayer);
+  if (castLayer) {
+    // 如果角色档案内容过长，改为索引模式——只注入角色名 + 按需读取提示
+    if (castLayer.length > CAST_INDEX_THRESHOLD) {
+      // 合并 POV + full + brief，去重保序
+      const seen = new Set<string>();
+      const castNames: string[] = [];
+      for (const name of [cast.pov, ...cast.full, ...cast.brief]) {
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          castNames.push(name);
+        }
+      }
+      sections.push(`### 本章出场角色索引\n本章涉及角色：${castNames.join('、')}\n角色详细档案见 .novel/characters/profiles/ 目录下的各角色 .md 文件。如需了解某角色的完整设定（动机、背景、弧光），请用 Read 工具读取。`);
+    } else {
+      sections.push(castLayer);
+    }
+  }
 
   const rolling = await buildRollingSummaryContext(projectDir);
   if (rolling) {
@@ -507,7 +642,8 @@ const OUTPUT_FORMAT = `## Output Format
 export async function composePrompt(options: ComposePromptOptions): Promise<string> {
   const { message, projectId, skillId, stage, projectDir, history,
           mode = 'generate', reviseTarget, reviseNote, reviseContent,
-          autonomous = false, deepenContext, agentId } = options;
+          autonomous = false, planMode = false, deepenContext, agentId,
+          interruptedResume } = options;
 
   const isRevise = mode === 'revise' && !!reviseNote && !!reviseContent;
   // revise 模式下，判断目标是否为章节正文（路径匹配 chapters/第N章.md）
@@ -569,6 +705,11 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
           || STAGE_INSTRUCTIONS[currentStage]
           || `着手推进小说项目的「${currentStage}」阶段。`;
 
+  // Plan Mode 叠加层
+  const effectiveStageInstructions = planMode
+    ? stageInstructions + PLAN_MODE_INSTRUCTION
+    : stageInstructions;
+
   // 全局「指令优先级」块中两条协作规则，按 autonomous 切换
   const collaborationRule = autonomous
     ? `- **按阶段切换协作方式**：
@@ -583,10 +724,19 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
     : '- **何时用 question 工具**：当需要用户在创作方向上拍板时使用（规划阶段的关键决策、写作阶段无法回滚的岔路口）；纯执行与文笔打磨一律自行判断，不要为细节反复打断用户。';
 
   // Compose the full prompt
+  // 创作者指令（CREATOR.md）：用户自定义的最高优先级约束，覆盖以下所有指令。
+  const creatorPrompt = await readNovelFile(projectDir, 'CREATOR.md');
+
   const parts: string[] = [];
 
   if (STAGE_MISMATCH_HINT && !isRevise) {
     parts.push(STAGE_MISMATCH_HINT);
+  }
+
+  // 创作者指令置于提示词最开头（阶段错配提示之后、角色定义之前），
+  // 以最高优先级覆盖后续所有指令。
+  if (creatorPrompt) {
+    parts.push(`# 创作者指令（最高优先级——覆盖以下所有指令）\n\n${creatorPrompt}`);
   }
 
   parts.push(`你是一位小说创作助手。你帮助用户写作、结构和精炼他们的小说。保持创意、周到、有支持性。被要求时撰写高质量散文，规划时提供清晰的结构性指导。
@@ -609,7 +759,7 @@ ${questionRule}
 
   parts.push(`\n## Project Context\n${projectContext}`);
 
-  parts.push(`\n## Current Stage: ${currentStage}\n${stageInstructions}`);
+  parts.push(`\n## Current Stage: ${currentStage}\n${effectiveStageInstructions}`);
 
   if (fileList.length > 0) {
     parts.push(`\n## Project Files\n${fileList.map((f) => `- ${f}`).join('\n')}`);
@@ -688,7 +838,14 @@ ${questionRule}
     parts.push(`\n## Conversation History\n${historyLines.join('\n\n')}`);
   }
 
-  parts.push(`\n## User Request\n${message}`);
+  // 上下文边界声明：防止多轮对话中模型把上一轮意图延续到本轮（借鉴 denova 的 ContextBoundary 设计）。
+  // 异常中断恢复模式下，用中断现场替换普通 User Request，仍保留上下文边界声明。
+  if (interruptedResume) {
+    const resumeText = buildInterruptedResumeInstruction(message, interruptedResume);
+    parts.push(`\n[上下文边界]\n- 当前用户请求是"这次要做什么"，请只按本轮请求行动。\n- 工作区与已确认的小说状态只用于判断"背景是什么"，不能替代本轮明确请求。\n\n## User Request\n${resumeText}`);
+  } else {
+    parts.push(`\n[上下文边界]\n- 当前用户请求是"这次要做什么"，请只按本轮请求行动。\n- 工作区与已确认的小说状态只用于判断"背景是什么"，不能替代本轮明确请求。\n- 历史对话只能辅助理解上下文，不要把上一轮的待办、工具意图或未完成动作当成本轮指令，除非用户在本轮明确延续。\n- 如果当前请求与历史看起来无关或冲突，以当前请求为准。\n\n## User Request\n${message}`);
+  }
 
   return parts.join('\n');
 }

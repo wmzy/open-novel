@@ -71,15 +71,32 @@ export const WRITING_SUBAGENTS: SubAgentDef[] = [
   {
     name: 'state-patcher',
     description:
-      '章节定稿后更新角色状态追踪表和滚动摘要。当正文中发生了角色状态变化、新伏笔埋设或情节进展时使用。',
+      '章节定稿后更新所有状态追踪文件：章节摘要、角色状态、写作进度、结构化状态、伏笔追踪。当章节正文写完并保存后使用。',
     tools: 'Read, Write, Edit',
     model: 'inherit',
-    systemPrompt: `你是状态更新助手。章节定稿后，基于正文内容更新项目的状态追踪文件。
+    systemPrompt: `你是状态更新助手。章节定稿后，基于正文内容更新项目的所有状态追踪文件。
 
-## 职责
-1. 更新 .novel/state.json 中的角色状态：位置、情绪、已知信息、关系变化。
-2. 在 .novel/chapters/ 下生成本章的滚动摘要（第N章.summary.md，约 200 字），供后续章节注入上下文。
-3. 检查 .novel/foreshadow.json：本章是否埋设了新伏笔（plantedIn），是否回收了已有伏笔（resolvedIn）。
+## 职责（按顺序完成）
+
+1. **生成章节摘要**：在 .novel/chapters/第N章.summary.md 生成本章约 200 字的语义摘要。
+   摘要必须包含：情节推进、角色状态变化、伏笔兑现或新增。严禁复制正文原文段落。
+
+2. **更新角色状态**：更新 .novel/character-states.md
+   每个在场角色的：当前位置、情绪状态、当前目标、关系变化。
+   只记录本章定稿后的当前状态，不写未来规划。
+
+3. **更新写作进度**：更新 .novel/progress.md
+   当前进度（已写到第N章）、最近章节的一句话摘要、下一步写作衔接提示。
+
+4. **更新结构化状态**：更新 .novel/state.json
+   只保留结构化字段：lastUpdatedChapter、timeline、activeForeshadows（所有 status 为 planted 的伏笔 ID 列表）、updatedAt 时间戳。角色详细状态不要再写入 state.json 的 characters 字段。
+
+5. **更新伏笔追踪**：更新 .novel/foreshadow.json
+   本章是否埋设了新伏笔（plantedIn），是否回收了已有伏笔（resolvedIn）。
+   - 若本章**新埋设**了一条伏笔（首次在正文中植入线索）且大纲阶段未预登：**新增一条**，id 取现有最大 id + 1，content 写具体描述，status 设为 "planted"，plantedIn 填当前章号，resolvedIn 为 null。
+   - 若大纲阶段已预登该伏笔为 pending：将其 status 从 "pending" 改为 "planted"。
+   - 若本章**回收**了某条伏笔（线索得到兑现/揭晓）：将 status 改为 "resolved" 并填写 resolvedIn 为当前章号。
+   - 标准 schema：{ "foreshadows": [{ "id": 1, "content": "具体描述", "status": "planted", "plantedIn": 3, "resolvedIn": null }] }。顶层键为 foreshadows（不是 items），内容字段为 content（不是 description），status 取值 pending/planted/resolved。
 
 ## 原则
 - 只基于章节正文的确认内容更新，不推测或虚构。
@@ -166,8 +183,13 @@ export function getSubagentGuidance(agentId?: string): string {
 **章节写完后，你需要自行完成以下工作（不要委托）：**
 
 1. **自审**：通读本章，检查剧情连续性、角色一致性、节奏、AI 痕迹。如果发现 blocker 级问题，直接修订。
-2. **状态更新**：更新 .novel/state.json 中的角色状态（位置、情绪、关系变化），并在 .novel/chapters/ 生成本章摘要（第N章.summary.md，约 200 字）。
-3. **伏笔追踪**：检查本章是否埋设或回收了伏笔，更新 .novel/foreshadow.json。`;
+2. **状态更新**（正文写完并保存后，依次完成）：
+   - .novel/chapters/第N章.summary.md（本章语义摘要，约200字）
+   - .novel/character-states.md（角色当前位置/情绪/目标/关系变化）
+   - .novel/progress.md（写作进度、最近章节摘要、下一步提示）
+   - .novel/state.json（lastUpdatedChapter、timeline、activeForeshadows、updatedAt）
+   - .novel/foreshadow.json（本章是否埋设或回收伏笔）
+3. **正文与状态更新分离**：先把整章正文写完保存，再逐个更新状态文件，不要写到一半停下来更新。`;
   }
 
   // CC 用 Agent 工具，OMP 用 task 工具
@@ -183,8 +205,14 @@ export function getSubagentGuidance(agentId?: string): string {
 - **收到反馈后**：根据 severity=blocker 和 major 的意见修订正文；minor 问题酌情处理。
 
 ### state-patcher（状态更新）
-- **何时委托**：章节定稿后（审查通过、修订完成），委托它更新状态追踪。
+- **何时委托**：章节正文写完并保存后，委托它更新所有状态追踪文件。
 - **委托方式**：告知章节文件路径和章号即可。它能自行读取正文和现有状态文件。
+- **它会完成**：
+  - .novel/chapters/第N章.summary.md（本章语义摘要，约200字）
+  - .novel/character-states.md（角色当前位置/情绪/目标/关系变化）
+  - .novel/progress.md（写作进度、最近章节摘要、下一步提示）
+  - .novel/state.json（lastUpdatedChapter、timeline、activeForeshadows、updatedAt）
+  - .novel/foreshadow.json（伏笔状态更新）
 
 ### 使用原则
 - **先写完再委托**：不要写到一半就委托审查——先完成整章初稿。

@@ -226,7 +226,8 @@ runsRouter.post('/', async (c) => {
   const body = await c.req.json();
   const { projectId, agentId, skillId, stage, message, conversationId, model,
           mode = 'generate', targetFile, revisionNote, autonomous = false,
-          trimHistory: shouldTrim = false, deepenRound } = body;
+          trimHistory: shouldTrim = false, deepenRound, interruptedResume } = body;
+  const planMode = body.planMode === true;
 
   const def = getAgentDef(agentId);
   if (!def) return c.json({ error: 'Agent not found' }, 404);
@@ -308,8 +309,10 @@ runsRouter.post('/', async (c) => {
     reviseNote: revisionNote,
     reviseContent,
     autonomous,
+    planMode,
     deepenContext: deepenRound != null ? { round: deepenRound } : undefined,
     agentId,
+    interruptedResume,
   });
 
   /**
@@ -773,12 +776,26 @@ runsRouter.post('/:id/retry', async (c) => {
   const userMessage = lastUserMsg.filter((m) => m.role === 'user').pop();
   if (!userMessage) return c.json({ error: 'No user message to retry' }, 400);
 
+  // 异常中断恢复：上一轮 run 状态为 failed，视为异常中断。
+  // 从 history 中提取上一轮的 user message 和 assistant content，构造 interruptedResume。
+  // 前端收到后，在用户"继续"时将该对象回传给 POST /，注入中断现场。
+  let interruptedResume: { userMessage: string; assistantContent: string; reason: string } | undefined;
+  if (run.status === 'failed') {
+    const assistantMsg = lastUserMsg.filter((m) => m.role === 'assistant').pop();
+    interruptedResume = {
+      userMessage: userMessage.content,
+      assistantContent: assistantMsg?.content ?? '',
+      reason: 'agent 进程异常退出（exit code != 0，可能因 timeout、watchdog 或 crash 中断）',
+    };
+  }
+
   // Return info needed to retry
   return c.json({
     conversationId: runRecord.conversationId,
     agentId: run.agentId,
     stage: run.stage,
     message: userMessage.content,
+    interruptedResume,
   });
 });
 
