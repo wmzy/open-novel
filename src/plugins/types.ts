@@ -5,6 +5,8 @@ export interface PluginManifest {
   version: string;
   stages: string[];
   templates: string[];
+  /** 题材自定义深化维度：按 stage 名索引。无此字段则用通用 DEEPEN_DIMENSIONS */
+  dimensions?: Record<string, string[]>;
   legacyTools?: string[];
 }
 

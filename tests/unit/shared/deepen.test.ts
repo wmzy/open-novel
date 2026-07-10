@@ -3,11 +3,13 @@ import {
   DEEPEN_TO_CHAT_EVENT,
   DEEPEN_DIMENSIONS,
   DEEPEN_MIN_ROUNDS,
+  DEEPEN_MAX_ROUNDS,
   NO_IMPROVEMENT_SIGNAL,
   buildDeepenMessage,
   isCritiqueRound,
   detectNoImprovement,
   parseDeadlineInput,
+  parseLatestScores,
 } from '../../../src/shared/deepen';
 
 describe('deepen', () => {
@@ -24,6 +26,13 @@ describe('deepen', () => {
   describe('DEEPEN_MIN_ROUNDS', () => {
     it('is at least 4 (2 critique + 2 revise cycles)', () => {
       expect(DEEPEN_MIN_ROUNDS).toBeGreaterThanOrEqual(4);
+    });
+  });
+
+  describe('DEEPEN_MAX_ROUNDS', () => {
+    it('is a reasonable upper bound (even number, >= 10)', () => {
+      expect(DEEPEN_MAX_ROUNDS).toBeGreaterThanOrEqual(10);
+      expect(DEEPEN_MAX_ROUNDS % 2).toBe(0); // 偶数：完整的 Critique-Revise 对
     });
   });
 
@@ -174,6 +183,119 @@ describe('deepen', () => {
     it('is a non-empty string', () => {
       expect(typeof DEEPEN_TO_CHAT_EVENT).toBe('string');
       expect(DEEPEN_TO_CHAT_EVENT.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('parseLatestScores', () => {
+    it('extracts latest score line from revise rounds', () => {
+      const log = [
+        '## 第2轮（修订）',
+        '**回应的批评**：问题1→改进',
+        '**维度评分变化**：动机清晰度 3→4, 关系丰富度 2→3',
+        '**下轮建议**：差异化声音仍可加强',
+        '',
+        '## 第4轮（修订）',
+        '**维度评分变化**：动机清晰度 4→5, 关系丰富度 3→4',
+      ].join('\n');
+      expect(parseLatestScores(log)).toBe('动机清晰度 4→5, 关系丰富度 3→4');
+    });
+
+    it('also matches plain "维度评分" without "变化"', () => {
+      const log = '## 第1轮\n**维度评分**：动机 3, 关系 4';
+      expect(parseLatestScores(log)).toBe('动机 3, 关系 4');
+    });
+
+    it('returns null when no scores found', () => {
+      expect(parseLatestScores('没有评分的日志')).toBeNull();
+    });
+
+    it('returns null for empty input', () => {
+      expect(parseLatestScores('')).toBeNull();
+    });
+  });
+
+  describe('buildDeepenMessage - plugin dimensions', () => {
+    it('uses plugin dimensions when provided for the stage', () => {
+      const customDims = {
+        characters: ['功法-性格一致性：测试维度'],
+      };
+      const msg = buildDeepenMessage('characters', 1, undefined, customDims);
+      expect(msg).toContain('功法-性格一致性');
+      // 当 plugin 提供了自定义维度时，不包含通用维度
+      expect(msg).not.toContain('动机清晰度');
+    });
+
+    it('falls back to default when plugin has no custom for this stage', () => {
+      const customDims = { world: ['武学体系自洽'] };
+      const msg = buildDeepenMessage('characters', 1, undefined, customDims);
+      expect(msg).toContain('动机清晰度');
+    });
+
+    it('falls back to default when no plugin dimensions provided', () => {
+      const msg = buildDeepenMessage('characters', 1);
+      expect(msg).toContain('动机清晰度');
+    });
+
+    it('revise rounds are unaffected by plugin dimensions', () => {
+      const customDims = { characters: ['测试维度'] };
+      const msg = buildDeepenMessage('characters', 2, undefined, customDims);
+      // 修订轮不列维度清单
+      expect(msg).toContain('修订轮');
+    });
+  });
+
+  describe('buildDeepenMessage - cross-stage critique', () => {
+    it('characters includes cross-stage perspective referencing world-building', () => {
+      // characters 有 5 个视角（原 4 + 跨阶段 1），第 9 轮是第 5 个 critique（索引 4）
+      const msg = buildDeepenMessage('characters', 9);
+      expect(msg).toContain('跨阶段一致性审计师');
+      expect(msg).toContain('world-building.md');
+    });
+
+    it('world includes cross-stage perspective referencing characters', () => {
+      const msg = buildDeepenMessage('world', 9);
+      expect(msg).toContain('跨阶段一致性审计师');
+      expect(msg).toContain('profiles.md');
+    });
+
+    it('outline includes cross-stage perspective referencing characters', () => {
+      const msg = buildDeepenMessage('outline', 9);
+      expect(msg).toContain('跨阶段一致性审计师');
+      expect(msg).toContain('profiles.md');
+    });
+
+    it('scenes includes cross-stage perspective referencing outline', () => {
+      const msg = buildDeepenMessage('scenes', 7);
+      // scenes 有 3 个原视角 + 1 跨阶段 = 4 个，第 7 轮是第 4 个 critique（索引 3）
+      expect(msg).toContain('跨阶段一致性审计师');
+      expect(msg).toContain('outline');
+    });
+
+    it('concept includes cross-stage perspective', () => {
+      // concept 有 3 个原视角 + 1 跨阶段 = 4 个，第 7 轮是第 4 个 critique（索引 3）
+      const msg = buildDeepenMessage('concept', 7);
+      expect(msg).toContain('跨阶段一致性审计师');
+    });
+
+    it('each stage has at least one cross-stage perspective in full rotation', () => {
+      for (const stage of ['characters', 'world', 'outline', 'scenes', 'concept']) {
+        let found = false;
+        // 遍历足够多的 critique 轮覆盖所有视角
+        for (let r = 1; r <= 19; r += 2) {
+          const msg = buildDeepenMessage(stage, r);
+          if (msg.includes('跨阶段一致性审计师')) {
+            found = true;
+            break;
+          }
+        }
+        expect(found, `stage ${stage} should have cross-stage perspective`).toBe(true);
+      }
+    });
+
+    it('cross-stage perspective instructs reading other stage files', () => {
+      // 跨阶段视角应该指示读取其他阶段的文件
+      const msg = buildDeepenMessage('characters', 9);
+      expect(msg).toContain('先读取');
     });
   });
 });

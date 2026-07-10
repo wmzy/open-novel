@@ -450,6 +450,13 @@ export const deepenBanner = css`
   color: var(--haze-color-text);
 `;
 
+/** 深化状态指示条：最新一轮维度评分轨迹 */
+export const deepenScores = css`
+  opacity: 0.85;
+  font-size: 0.7rem;
+  color: var(--haze-color-text-secondary);
+`;
+
 /** 深化弹框：用户提示标签 */
 export const deepenHintLabel = css`
   display: flex;

@@ -21,6 +21,9 @@ export const DEEPEN_TO_CHAT_EVENT = 'open-novel:deepen-to-chat';
 /** 强制最低轮数：在此之前忽略饱和信号 */
 export const DEEPEN_MIN_ROUNDS = 6;
 
+/** 最大轮数上限：兜底防止无限循环（10 个 Critique-Revise 对） */
+export const DEEPEN_MAX_ROUNDS = 20;
+
 /**
  * 改进验证饱和信号。
  * Critique 轮在 critique 文件中写入此信号，表示"与上一次审查相比无实质改进"。
@@ -74,6 +77,13 @@ export const DEEPEN_DIMENSIONS: Record<string, string[]> = {
   ],
 };
 
+/**
+ * 获取某阶段的质量维度：优先 plugin 自定义，fallback 到通用 DEEPEN_DIMENSIONS。
+ */
+function getDimensions(stage: string, pluginDimensions?: Record<string, string[]>): string[] {
+  return pluginDimensions?.[stage] || DEEPEN_DIMENSIONS[stage] || [];
+}
+
 /** 阶段中文名 */
 const STAGE_LABELS: Record<string, string> = {
   characters: '角色',
@@ -94,28 +104,33 @@ const CRITIQUE_PERSPECTIVES: Record<string, string[]> = {
     '戏剧冲突专家：你是戏剧结构分析师。审查角色间关系的冲突张力——对立面是否足够强？同盟是否有裂痕可能？是否存在未被利用的暧昧/背叛/转变潜力？找出"关系太平淡、缺乏戏剧燃料"的薄弱处。',
     '读者代入测试：你是三位不同类型的读者（共情型/批判型/休闲型）。测试能否真正代入每个角色——声音是否可区分？读者会在哪里出戏？哪个角色让人想翻页跳过？找出"读者体验断裂"的薄弱处。',
     '叙事功能审计师：你是叙事结构审计师。审查角色群的功能性覆盖——是否缺少导师/镜像/催化剂/障碍者？是否有冗余角色（功能重叠）？主角的对手是否足够匹配？找出"角色生态不完整"的薄弱处。',
+    '跨阶段一致性审计师：你是跨阶段一致性审计师。**先读取 .novel/world-building.md（如存在）**，审查角色设定是否符合世界观体系——角色的力量来源/社会身份/职业是否在世界规则内可解释？角色间关系结构是否与世界的社会阶层设定匹配？找出"角色与世界观脱节"的薄弱处。',
   ],
   world: [
     '体系自洽审计师：你是世界观审计师。逐条检查力量/社会/经济体系的内部矛盾——规则有没有被自己打破？谁在执行规则？违规后果是什么？找出"体系漏洞"。',
     '历史与因果链审查者：你是历史叙事审查者。检查世界的历史纵深——重大事件的因果链是否可信？当前设定是否有历史根源？找出"历史断裂、设定悬空"的薄弱处。',
     '感官沉浸测试者：你是沉浸感测试者。检查世界的感官落地——环境描写是否只有视觉？气味/触感/声音是否缺失？读者能否"闻到"这个世界？找出"感官单薄"的薄弱处。',
     '冲突潜力勘探者：你是冲突勘探者。检查世界设定中未被挖掘的冲突源——阶层矛盾/资源争夺/信仰冲突是否被留白？找出"冲突浪费"的薄弱处。',
+    '跨阶段一致性审计师：你是跨阶段一致性审计师。**先读取 .novel/characters/profiles.md（如存在）**，审查世界观设定是否能支撑已有角色群——力量体系是否给角色成长留了空间？社会结构是否为角色间冲突提供了土壤？找出"世界观与角色群不匹配"的薄弱处。',
   ],
   outline: [
     '结构建筑师：你是三幕结构审计师。检查起承转合的节奏——第一幕是否太长？中点转折是否有力？高潮是否 earned？找出"结构失衡"。',
     '因果链追踪者：你是因果逻辑追踪者。逐事件检查因果驱动——哪些是巧合推动？哪些转折缺乏铺垫？找出"巧合代替因果"的薄弱处。',
     '伏笔审计师：你是伏笔审计师。检查埋设与回收——哪些伏笔只有埋设没有回收？哪些回收缺乏铺垫？分布是否均匀？找出"伏笔断裂"。',
     '情感节奏分析师：你是情感节奏分析师。检查高低潮交替——连续低潮是否太长？高潮是否密集到麻木？找出"节奏失控"。',
+    '跨阶段一致性审计师：你是跨阶段一致性审计师。**先读取 .novel/characters/profiles.md（如存在）**，审查大纲事件是否由角色动机驱动——关键转折是否源于角色主动选择而非巧合？高潮是否让主角面对核心缺陷？找出"情节与角色脱节"的薄弱处。',
   ],
   scenes: [
     '场景目的审计师：你是场景效率审计师。逐场景检查目的——哪些场景不推进情节也不揭示角色？哪些可以删除或合并？找出"空转场景"。',
     '冲突升级追踪者：你是冲突升级追踪者。检查场景内冲突是否有升级和转折——哪些场景冲突平淡？哪些一上来就到顶没有层次？找出"冲突扁平"。',
     '感官落地审查者：你是感官落地审查者。检查场景的感官细节——哪些场景只有对话没有环境？哪些场景适合 info-dump 但未处理？找出"场景悬空"。',
+    '跨阶段一致性审计师：你是跨阶段一致性审计师。**先读取 .novel/outline-detailed.md 或 .novel/outline-brief.md（如存在）**，审查场景是否对齐大纲——每个场景是否推进了大纲中的事件？是否有大纲中重要事件在场景层缺失？找出"场景与大纲断裂"的薄弱处。',
   ],
   concept: [
     '核心冲突锐度审查者：你是概念锐度审查者。检查核心矛盾是否清晰有力——读者能用一句话说出冲突吗？冲突双方是否势均力敌？找出"冲突模糊"。',
     '独特性审计师：你是独创性审计师。检查概念的差异化——与同类作品相比有什么独特之处？哪些元素是 generic 的？找出"概念平庸"。',
     '读者钩子测试者：你是钩子测试者。检查开头能否抓住读者——前 500 字是否制造了好奇/共情/紧张？找出"钩子薄弱"。',
+    '跨阶段一致性审计师：你是跨阶段一致性审计师。**先读取 .novel/world-building.md 和 .novel/characters/profiles.md（如存在）**，审查概念是否在后续阶段有展开空间——核心冲突是否能在世界观中自然发生？概念的独特性是否已体现在角色和世界设定中？找出"概念与后续阶段脱节"的薄弱处。',
   ],
 };
 
@@ -144,9 +159,9 @@ function getCritiquePerspective(stage: string, round: number): string {
  * - 产出结构化批评写入 .novel/deepen-critique.md
  * - 若与上次审查无实质改进，写 NO_IMPROVEMENT_SIGNAL
  */
-function buildCritiqueMessage(stage: string, round: number, userHint?: string): string {
+function buildCritiqueMessage(stage: string, round: number, userHint?: string, pluginDimensions?: Record<string, string[]>): string {
   const label = STAGE_LABELS[stage] || stage;
-  const dimensions = DEEPEN_DIMENSIONS[stage] || [];
+  const dimensions = getDimensions(stage, pluginDimensions);
   const perspective = getCritiquePerspective(stage, round);
 
   const hintBlock = userHint?.trim()
@@ -234,9 +249,9 @@ ${hintBlock}
 /**
  * 构造深化 message。根据轮次奇偶自动选择 Critique 或 Revise。
  */
-export function buildDeepenMessage(stage: string, round: number, userHint?: string): string {
+export function buildDeepenMessage(stage: string, round: number, userHint?: string, pluginDimensions?: Record<string, string[]>): string {
   if (isCritiqueRound(round)) {
-    return buildCritiqueMessage(stage, round, userHint);
+    return buildCritiqueMessage(stage, round, userHint, pluginDimensions);
   }
   return buildReviseMessage(stage, round, userHint);
 }
@@ -274,4 +289,22 @@ export function parseDeadlineInput(input: string): number | null {
   }
 
   return deadline.getTime();
+}
+
+/**
+ * 从 deepen-log.md 内容中提取最新一轮的维度评分行。
+ * 匹配最后一个 "**维度评分变化**：" 或 "**维度评分**：" 开头的行。
+ * 返回原始文本（如 "动机清晰度 3→4, 关系丰富度 2→3"），无匹配返回 null。
+ */
+export function parseLatestScores(logContent: string): string | null {
+  // 匹配所有维度评分行（兼容"维度评分变化"和"维度评分"两种写法）
+  const lines = logContent.split('\n');
+  let latest: string | null = null;
+  for (const line of lines) {
+    const match = line.match(/\*\*维度评分(?:变化)?\*\*[：:]\s*(.+)/);
+    if (match) {
+      latest = match[1].trim();
+    }
+  }
+  return latest;
 }
