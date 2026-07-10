@@ -73,6 +73,7 @@ rewriteRouter.post('/', async (c) => {
     skillId,
     stage: 'revision',
     projectDir,
+    agentId,
   });
 
   // 创建 run（不绑定对话；RunStream 需要 conversationId 但重写不固化消息）

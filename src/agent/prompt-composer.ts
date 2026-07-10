@@ -9,6 +9,7 @@ import { extractChapterOutline, identifyCast, buildCastLayer } from './chapter-c
 import { buildReverseDecomposePrompt } from './reverse-decomposer';
 import { buildEnrichPrompt } from './enricher';
 import { STAGE_OUTPUT_FILES, isCritiqueRound } from '../shared/deepen';
+import { getSubagentGuidance } from './subagents';
 
 export interface ComposePromptOptions {
   message: string;
@@ -31,6 +32,9 @@ export interface ComposePromptOptions {
 
   /** Deepen 深化循环上下文：注入当前 stage 产出文件 + critique（Revise 轮），省去 agent Read 往返。 */
   deepenContext?: { round: number };
+
+  /** 当前 agent CLI ID（'claude' | 'omp' | 'opencode'）。用于注入 subagent 使用指导。 */
+  agentId?: string;
 }
 
 // 规划阶段共用的「采访式」协作流程。拼接进 concept/world/characters/outline/scenes 的指令。
@@ -503,7 +507,7 @@ const OUTPUT_FORMAT = `## Output Format
 export async function composePrompt(options: ComposePromptOptions): Promise<string> {
   const { message, projectId, skillId, stage, projectDir, history,
           mode = 'generate', reviseTarget, reviseNote, reviseContent,
-          autonomous = false, deepenContext } = options;
+          autonomous = false, deepenContext, agentId } = options;
 
   const isRevise = mode === 'revise' && !!reviseNote && !!reviseContent;
   // revise 模式下，判断目标是否为章节正文（路径匹配 chapters/第N章.md）
@@ -664,6 +668,12 @@ ${questionRule}
 
   parts.push(`\n${TOOL_INSTRUCTIONS}`);
   parts.push(`\n${OUTPUT_FORMAT}`);
+
+  // SubAgent 使用指导（按 agent CLI 注入；写作阶段和修订阶段都需要）
+  const subagentGuidance = getSubagentGuidance(agentId);
+  if (subagentGuidance) {
+    parts.push(`\n${subagentGuidance}`);
+  }
 
   if (skillContent && !isRevise) {
     parts.push(`\n## Skill Instructions\n${skillContent}`);

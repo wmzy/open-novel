@@ -1,4 +1,5 @@
 import type { RuntimeAgentDef } from './types';
+import { isCcPluginReady, CC_PLUGIN_DIR } from './subagents';
 
 export const claudeAgentDef: RuntimeAgentDef = {
   id: 'claude',
@@ -19,6 +20,10 @@ export const claudeAgentDef: RuntimeAgentDef = {
     }
     const dirs = extraAllowedDirs.filter((d) => typeof d === 'string' && d.length > 0);
     if (dirs.length > 0) args.push('--add-dir', ...dirs);
+    // 注入 open-novel 管理的 subagent plugin（~/.open-novel/agents/）
+    if (isCcPluginReady()) {
+      args.push('--plugin-dir', CC_PLUGIN_DIR);
+    }
     args.push('--permission-mode', 'bypassPermissions');
     return args;
   },

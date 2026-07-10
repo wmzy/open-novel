@@ -309,6 +309,7 @@ runsRouter.post('/', async (c) => {
     reviseContent,
     autonomous,
     deepenContext: deepenRound != null ? { round: deepenRound } : undefined,
+    agentId,
   });
 
   /**

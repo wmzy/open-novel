@@ -8,6 +8,7 @@ import app from '../api-app';
 import { ensureDbReady, closeDb } from '../db/drizzle';
 import { startPeriodicBackup } from '../db/backup';
 import { initPlugins } from '../plugins/registry';
+import { deploySubagents } from '../agent/subagents';
 import { config } from '../config';
 import { nodeRequestToFetchRequest, writeFetchResponse } from './request-adapter';
 
@@ -45,6 +46,7 @@ const logger = pino({ name: 'open-novel', level: config.logLevel });
 
 await ensureDbReady();
 initPlugins();
+deploySubagents();
 
 // Periodic DB backup — protects against crash-induced WAL corruption.
 // Backups go to ./data/backups/, pruned to the 10 most recent.
