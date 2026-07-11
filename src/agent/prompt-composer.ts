@@ -109,10 +109,10 @@ const DECISION_PROMPTS: Record<string, string> = {
 /** 规划阶段的完成/落盘指令（尾部）。采访式与自治式共用。 */
 const STAGE_TAIL: Record<string, string> = {
   concept: `
-概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
+概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept/ 目录——每个 ## 要素一个独立 .md 文件（如 concept/核心主题.md），同时创建 .novel/concept/index.md 索引文件（含要素标题表）。并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
 
   world: `
-世界观完成后，保存到 .novel/world-building.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
+世界观完成后，保存到 .novel/world/ 目录——每个 ## 节一个独立 .md 文件（如 world/社会结构.md），同时创建 .novel/world/index.md 索引文件。并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
 
   characters: `
 每个主要角色必须落出驱动力三角（外在目标 / 内在需求 / 核心缺陷）。
@@ -120,8 +120,8 @@ const STAGE_TAIL: Record<string, string> = {
 
   outline: `
 
-**脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-detailed 或 templates/outline-brief。以生成的脚手架为起点并加以打磨。
-大纲完成后，保存到 .novel/outline-detailed.md。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
+**脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-brief。以生成的脚手架为起点并加以打磨。
+大纲完成后，保存到 .novel/outline/ 目录——每章一个独立文件 chapters/第N章.md，同时创建 .novel/outline/index.md 索引（含三幕结构 + 章节标题表）。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
 \`\`\`json
 {
   "actBreaks": [5, 15],
@@ -370,32 +370,24 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
   }
 }
 
-/** 核心设定层（恒定）：concept.md 全量注入 + world-building.md 渐进式加载。
- * 写到第 50 章时 concept+world+角色档案可能超过 50KB，全量注入会撑爆上下文。
- * 借鉴 denova 的渐进式资料库加载：world-building 短文档全量注入，长文档只注入摘要+按需读取提示。 */
-const WORLD_FULL_THRESHOLD = 4000; // 世界观短文档阈值：<=此值全量注入
-const WORLD_SUMMARY_CHARS = 800; // 长世界观文档只注入开头的字符数
+/** 核心设定层（恒定）：concept + world 索引注入，按需 Read 卡片。
+ * 拆分后每个节文件是合理大小，不再需要截断 hack。 */
 /** 角色档案层超过此长度时退化为索引模式（只注入角色名+按需读取提示）。 */
 const CAST_INDEX_THRESHOLD = 6000;
 
 async function buildCoreSettingsLayer(projectDir: string): Promise<string> {
   const blocks: string[] = [];
 
-  // concept.md 始终全量注入（核心前提，通常较短）
-  const concept = await readNovelFile(projectDir, 'concept.md');
-  if (concept) blocks.push(`#### 故事概念 (concept.md)\n${concept}`);
+  // concept 索引
+  const conceptIndex = await readNovelFile(projectDir, 'concept/index.md');
+  if (conceptIndex) {
+    blocks.push(`#### 故事概念索引 (concept/index.md)\n${conceptIndex}\n> 如需详细要素，用 Read 工具读取 concept/具体要素.md`);
+  }
 
-  // world-building.md 渐进式加载：短文档全量，长文档只注入摘要+按需读取提示
-  const world = await readNovelFile(projectDir, 'world-building.md');
-  if (world) {
-    if (world.length <= WORLD_FULL_THRESHOLD) {
-      // 短文档全量注入
-      blocks.push(`#### 世界观 (world-building.md)\n${world}`);
-    } else {
-      // 长文档只注入摘要 + 按需读取提示
-      const summary = world.slice(0, WORLD_SUMMARY_CHARS);
-      blocks.push(`#### 世界观索引 (world-building.md)\n${summary}\n\n[…世界观文档较长（${world.length} 字符），以上为摘要。如需详细设定（力量体系、社会结构、历史等），请用 Read 工具读取 .novel/world-building.md 全文…]`);
-    }
+  // world 索引
+  const worldIndex = await readNovelFile(projectDir, 'world/index.md');
+  if (worldIndex) {
+    blocks.push(`#### 世界观索引 (world/index.md)\n${worldIndex}\n> 如需详细设定，用 Read 工具读取 world/具体节.md`);
   }
 
   if (blocks.length === 0) return '';

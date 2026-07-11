@@ -56,7 +56,8 @@ function makeProject(overrides: Record<string, unknown> = {}) {
 
 async function seedProjectFiles(dir: string) {
   await fs.mkdir(path.join(dir, '.novel', 'chapters'), { recursive: true });
-  await fs.writeFile(path.join(dir, '.novel', 'concept.md'), '# Concept');
+  await fs.mkdir(path.join(dir, '.novel', 'concept'), { recursive: true });
+  await fs.writeFile(path.join(dir, '.novel', 'concept', 'index.md'), '# Concept');
   await fs.writeFile(path.join(dir, '.novel', 'chapters', 'ch1.md'), 'chapter 1');
   await fs.writeFile(path.join(dir, '.novel', 'config.json'), '{}');
 }
@@ -104,16 +105,17 @@ describe('composePrompt', () => {
         });
       }
 
-      it('outline stage 指示保存到 outline-detailed.md（与视图读取一致）', async () => {
+      it('outline stage 指示保存到 outline/ 目录（拆分格式）', async () => {
         const prompt = await composePrompt({
           message: 'hi',
           projectId: 'p',
           stage: 'outline',
           projectDir: tempDir,
         });
-        expect(prompt).toContain('保存到 .novel/outline-detailed.md');
-        // 不应再指示存到孤立的 outline.md（视图不读取它）
-        expect(prompt).not.toContain('保存到 .novel/outline.md。');
+        expect(prompt).toContain('保存到 .novel/outline/ 目录');
+        expect(prompt).toContain('chapters/第N章.md');
+        // 不应再指示存到旧的单文件格式
+        expect(prompt).not.toContain('保存到 .novel/outline-detailed.md');
       });
 
       it('keeps writing stage autonomous (no interview protocol)', async () => {
@@ -396,7 +398,7 @@ describe('composePrompt', () => {
         projectDir: tempDir,
       });
       expect(prompt).toContain('## Project Files');
-      expect(prompt).toContain('.novel/concept.md');
+      expect(prompt).toContain('.novel/concept/index.md');
       expect(prompt).toContain('.novel/chapters/ch1.md');
       expect(prompt).toContain('.novel/config.json');
     });
@@ -508,8 +510,10 @@ describe('composePrompt', () => {
     async function seedWritingProject(d: string) {
       const novel = path.join(d, '.novel');
       await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
-      await fs.writeFile(path.join(novel, 'concept.md'), '# 故事概念\n核心冲突');
-      await fs.writeFile(path.join(novel, 'world-building.md'), '# 世界观\n魔法体系');
+      await fs.mkdir(path.join(novel, 'concept'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'concept', 'index.md'), '# 故事概念索引\n核心冲突');
+      await fs.mkdir(path.join(novel, 'world'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'world', 'index.md'), '# 世界观索引\n魔法体系');
       await fs.writeFile(
         path.join(novel, 'state.json'),
         JSON.stringify({
@@ -787,69 +791,22 @@ describe('composePrompt', () => {
       expect(prompt).not.toContain('蝴蝶玉佩');
     });
 
-    it('world-building.md 超过阈值时核心设定层只注入摘要+按需读取提示', async () => {
+    it('核心设定层注入 concept/world 索引而非全文', async () => {
       await seedWritingProject(tempDir);
-      const novel = path.join(tempDir, '.novel');
-      // 构造 >4000 字符的长世界观文档：开头有摘要标记，末尾有详细标记（在 800 字符之后）
-      const head = '# 世界观\n力量体系：灵气修炼。';
-      const padding = 'x'.repeat(4500);
-      const tail = '\n社会结构：九大宗门联盟。';
-      await fs.writeFile(path.join(novel, 'world-building.md'), head + padding + tail);
-
       const prompt = await composePrompt({
         message: '写第二章',
         projectId: 'p',
         stage: 'writing',
         projectDir: tempDir,
       });
-      // 标题改为索引形式
-      expect(prompt).toContain('#### 世界观索引 (world-building.md)');
-      // 摘要（前 800 字符）被注入
-      expect(prompt).toContain('力量体系：灵气修炼');
+      // 索引格式注入
+      expect(prompt).toContain('#### 故事概念索引 (concept/index.md)');
+      expect(prompt).toContain('#### 世界观索引 (world/index.md)');
+      expect(prompt).toContain('核心冲突');
+      expect(prompt).toContain('魔法体系');
       // 按需读取提示存在
-      expect(prompt).toContain('请用 Read 工具读取 .novel/world-building.md 全文');
-      // 末尾详细内容不在摘要范围内，不被注入
-      expect(prompt).not.toContain('社会结构：九大宗门联盟');
-      // 全量标题不再出现
-      expect(prompt).not.toContain('#### 世界观 (world-building.md)');
-    });
-
-    it('world-building.md 小于阈值时核心设定层注入全文', async () => {
-      await seedWritingProject(tempDir);
-      const novel = path.join(tempDir, '.novel');
-      // 短文档（< 4000 字符）：全量注入
-      await fs.writeFile(path.join(novel, 'world-building.md'), '# 世界观\n灵气体系与宗门结构。');
-
-      const prompt = await composePrompt({
-        message: '写第二章',
-        projectId: 'p',
-        stage: 'writing',
-        projectDir: tempDir,
-      });
-      // 全量标题
-      expect(prompt).toContain('#### 世界观 (world-building.md)');
-      // 全文注入
-      expect(prompt).toContain('灵气体系与宗门结构');
-      // 无按需读取提示
-      expect(prompt).not.toContain('请用 Read 工具读取 .novel/world-building.md');
-      // 无索引标题
-      expect(prompt).not.toContain('#### 世界观索引');
-    });
-
-    it('world-building.md 等于阈值边界（4000 字符）时全量注入', async () => {
-      await seedWritingProject(tempDir);
-      const novel = path.join(tempDir, '.novel');
-      // 恰好 4000 字符：边界值应全量注入（<= 阈值）
-      await fs.writeFile(path.join(novel, 'world-building.md'), '# 世界观\n' + 'a'.repeat(3992));
-
-      const prompt = await composePrompt({
-        message: '写第二章',
-        projectId: 'p',
-        stage: 'writing',
-        projectDir: tempDir,
-      });
-      expect(prompt).toContain('#### 世界观 (world-building.md)');
-      expect(prompt).not.toContain('请用 Read 工具读取 .novel/world-building.md');
+      expect(prompt).toContain('Read 工具读取 concept/');
+      expect(prompt).toContain('Read 工具读取 world/');
     });
 
     it('角色档案总内容超过阈值时退化为索引模式', async () => {
@@ -988,7 +945,8 @@ describe('composePrompt', () => {
     it('目标是章节时注入核心设定层（保持连续性）', async () => {
       const novelDir = path.join(tempDir, '.novel');
       await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
-      await fs.writeFile(path.join(novelDir, 'concept.md'), '这是一个武侠故事。');
+      await fs.mkdir(path.join(novelDir, 'concept'), { recursive: true });
+      await fs.writeFile(path.join(novelDir, 'concept', 'index.md'), '这是一个武侠故事。');
       await fs.writeFile(
         path.join(novelDir, 'chapters', '第1章.md'),
         '# 第一章\n\n正文。\n',
@@ -1010,7 +968,8 @@ describe('composePrompt', () => {
     it('目标是设定文件时不注入章节摘要层', async () => {
       const novelDir = path.join(tempDir, '.novel');
       await fs.mkdir(path.join(novelDir, 'characters'), { recursive: true });
-      await fs.writeFile(path.join(novelDir, 'concept.md'), '概念。');
+      await fs.mkdir(path.join(novelDir, 'concept'), { recursive: true });
+      await fs.writeFile(path.join(novelDir, 'concept', 'index.md'), '概念。');
       await fs.writeFile(
         path.join(novelDir, 'characters', 'profiles.md'),
         '## 一、主角\n\n角色描述。\n',
