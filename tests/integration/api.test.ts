@@ -85,20 +85,21 @@ describe('API Integration', () => {
 
     it('GET preview returns generated content without writing file', async () => {
       // initWorkspace 已拷贝静态模板（3 章），读取磁盘原始内容用于对比
+      // outline-detailed 现在是拆分型，预览用 outline-brief 代替
       const diskBefore = fs.readFileSync(
-        path.join(novelDir, 'outline-detailed.md'),
+        path.join(novelDir, 'outline-brief.md'),
         'utf-8',
       );
-      const res = await app.request(`/api/projects/${projectId}/templates/outline-detailed`);
+      const res = await app.request(`/api/projects/${projectId}/templates/outline-brief`);
       expect(res.ok).toBe(true);
       const data = await res.json();
-      expect(data.name).toBe('outline-detailed');
-      expect(data.path).toBe('outline-detailed.md');
-      // 生成的预览内容包含第 8 章（8 章项目）
-      expect(data.content).toContain('第 8 章');
+      expect(data.name).toBe('outline-brief');
+      expect(data.path).toBe('outline-brief.md');
+      // 生成的预览内容包含 8 章（8 章项目）的概要结构
+      expect(data.content).toContain('8');
       // 仅预览：磁盘内容未被覆盖，仍为静态 3 章模板
       const diskAfter = fs.readFileSync(
-        path.join(novelDir, 'outline-detailed.md'),
+        path.join(novelDir, 'outline-brief.md'),
         'utf-8',
       );
       expect(diskAfter).toBe(diskBefore);
@@ -119,7 +120,9 @@ describe('API Integration', () => {
       expect(res.ok).toBe(true);
       const data = await res.json();
       expect(data.written.length).toBe(5);
-      expect(fs.existsSync(path.join(novelDir, 'outline-detailed.md'))).toBe(true);
+      // outline-detailed 是拆分型：写入 outline/ 目录
+      expect(fs.existsSync(path.join(novelDir, 'outline', 'index.md'))).toBe(true);
+      expect(fs.existsSync(path.join(novelDir, 'outline', 'chapters', '第1章.md'))).toBe(true);
       expect(fs.existsSync(path.join(novelDir, 'scenes.md'))).toBe(true);
       expect(fs.existsSync(path.join(novelDir, 'characters', 'profiles.md'))).toBe(true);
       expect(fs.existsSync(path.join(novelDir, 'outline-brief.md'))).toBe(true);
@@ -132,8 +135,10 @@ describe('API Integration', () => {
         body: '{}',
       });
       const data = await res.json();
-      expect(data.written.every((w: { backedUp: boolean }) => w.backedUp)).toBe(true);
-      expect(fs.existsSync(path.join(novelDir, 'outline-detailed.md.bak'))).toBe(true);
+      // outline-detailed 是目录型，不会备份为 .bak；其余 4 个文件会备份
+      const backedUpCount = data.written.filter((w: { backedUp: boolean }) => w.backedUp).length;
+      expect(backedUpCount).toBeGreaterThanOrEqual(4);
+      expect(fs.existsSync(path.join(novelDir, 'outline-brief.md.bak'))).toBe(true);
     });
   });
 });

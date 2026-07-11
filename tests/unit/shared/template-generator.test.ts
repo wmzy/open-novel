@@ -165,7 +165,10 @@ describe('template-generator', () => {
       for (const [name, gen] of Object.entries(TEMPLATE_GENERATORS)) {
         const out = gen(base);
         expect(out.length, `${name} 应非空`).toBeGreaterThan(0);
-        expect(TEMPLATE_FILE_PATHS[name]).toMatch(/\.(md|json)$/);
+        // outline-detailed 是目录型，路径以 / 结尾；其余为 .md/.json
+        const path = TEMPLATE_FILE_PATHS[name];
+        expect(path, `${name} 应有路径`).toBeTruthy();
+        expect(path!.match(/\.(md|json)$/) || path!.endsWith('/'), `${name} 路径格式`).toBeTruthy();
       }
     });
   });

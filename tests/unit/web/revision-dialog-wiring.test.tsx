@@ -25,6 +25,14 @@ vi.mock('@/web/components/views/viewShared', async () => {
   };
 });
 
+// mock useNovelDocument：ConceptView/WorldView/OutlineView 用它拉取合并后的拆分文档
+vi.mock('@/web/hooks/useNovelDocument', () => ({
+  useNovelDocument: () => ({
+    data: '# 标题\n\n## 一句话梗概\n\n一个少年的复仇故事。\n',
+    isLoading: false,
+  }),
+}));
+
 const fetchSpy = vi.fn();
 globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
@@ -90,17 +98,17 @@ describe('视图修订接线冒烟', () => {
 
   // —— 文件级 revise：dispatch 事件 ——
 
-  it('点击 ConceptView「✎ 修订」dispatch revise-to-chat（targetFile=concept.md）', () => {
+  it('点击 ConceptView「✎ 修订」dispatch revise-to-chat（targetFile=concept/index.md）', () => {
     wrap(createElement(ConceptView, { projectId: 'proj_1' }));
     fireEvent.click(screen.getByText('✎ 修订'));
     expect(detailCount).toBe(1);
-    expect((lastDetail as { targetFile: string }).targetFile).toBe('concept.md');
+    expect((lastDetail as { targetFile: string }).targetFile).toBe('concept/index.md');
   });
 
-  it('点击 WorldView「✎ 修订」dispatch revise-to-chat（targetFile=world-building.md）', () => {
+  it('点击 WorldView「✎ 修订」dispatch revise-to-chat（targetFile=world/index.md）', () => {
     wrap(createElement(WorldView, { projectId: 'proj_1' }));
     fireEvent.click(screen.getByText('✎ 修订'));
-    expect((lastDetail as { targetFile: string }).targetFile).toBe('world-building.md');
+    expect((lastDetail as { targetFile: string }).targetFile).toBe('world/index.md');
   });
 
   it('点击 CharacterView「✎ 修订」dispatch revise-to-chat（targetFile=characters/profiles.md）', () => {
@@ -111,19 +119,19 @@ describe('视图修订接线冒烟', () => {
 
   // —— 文件级 rename：打开 RenameDialog ——
 
-  it('点击 ConceptView「⇄ 重命名」打开 RenameDialog（标题含 concept.md）', async () => {
+  it('点击 ConceptView「⇄ 重命名」打开 RenameDialog（标题含 concept/index.md）', async () => {
     wrap(createElement(ConceptView, { projectId: 'proj_1' }));
     fireEvent.click(screen.getByText('⇄ 重命名'));
     await waitFor(() => {
-      expect(screen.getByText(/重命名 · concept\.md/)).toBeInTheDocument();
+      expect(screen.getByText(/重命名 · concept\/index\.md/)).toBeInTheDocument();
     });
   });
 
-  it('点击 WorldView「⇄ 重命名」打开 RenameDialog（标题含 world-building.md）', async () => {
+  it('点击 WorldView「⇄ 重命名」打开 RenameDialog（标题含 world/index.md）', async () => {
     wrap(createElement(WorldView, { projectId: 'proj_1' }));
     fireEvent.click(screen.getByText('⇄ 重命名'));
     await waitFor(() => {
-      expect(screen.getByText(/重命名 · world-building\.md/)).toBeInTheDocument();
+      expect(screen.getByText(/重命名 · world\/index\.md/)).toBeInTheDocument();
     });
   });
 
@@ -145,10 +153,11 @@ describe('视图修订接线冒烟', () => {
     expect(screen.getAllByTitle('修订这一组').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('点击 ConceptView 卡片 ✎ dispatch revise-to-chat 含 sectionTitle', () => {
+  it('点击 ConceptView 卡片 ✎ dispatch revise-to-chat 含卡片路径', () => {
     wrap(createElement(ConceptView, { projectId: 'proj_1' }));
     fireEvent.click(screen.getAllByTitle('修订这一节')[0]);
     expect(detailCount).toBe(1);
-    expect((lastDetail as { sectionTitle?: string }).sectionTitle).toBeTruthy();
+    // 卡片级修订直接传卡片文件路径（如 concept/一句话梗概.md）
+    expect((lastDetail as { targetFile: string }).targetFile).toContain('concept/');
   });
 });
