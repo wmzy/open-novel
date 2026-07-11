@@ -37,9 +37,9 @@ describe('buildReverseDecomposePrompt', () => {
     expect(prompt).toContain('state.json');
   });
 
-  it('指令写入 outline-detailed.md 的表格格式', () => {
+  it('指令写入 outline/chapters/ 的表格格式', () => {
     const prompt = buildReverseDecomposePrompt(baseMeta);
-    expect(prompt).toContain('outline-detailed.md');
+    expect(prompt).toContain('outline/chapters/');
     expect(prompt).toContain('POV');
     expect(prompt).toContain('核心事件');
     expect(prompt).toContain('出场角色');

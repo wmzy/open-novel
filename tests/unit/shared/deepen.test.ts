@@ -249,11 +249,11 @@ describe('deepen', () => {
   });
 
   describe('buildDeepenMessage - cross-stage critique', () => {
-    it('characters includes cross-stage perspective referencing world-building', () => {
+    it('characters includes cross-stage perspective referencing world/', () => {
       // characters 有 5 个视角（原 4 + 跨阶段 1），第 9 轮是第 5 个 critique（索引 4）
       const msg = buildDeepenMessage('characters', 9);
       expect(msg).toContain('跨阶段一致性审计师');
-      expect(msg).toContain('world-building.md');
+      expect(msg).toContain('world/');
     });
 
     it('world includes cross-stage perspective referencing characters', () => {
@@ -405,16 +405,16 @@ describe('deepen', () => {
       }
     });
 
-    it('concept maps to concept.md', () => {
-      expect(STAGE_OUTPUT_FILES.concept).toContain('concept.md');
+    it('concept maps to concept/index.md', () => {
+      expect(STAGE_OUTPUT_FILES.concept).toContain('concept/index.md');
     });
 
     it('characters maps to characters/profiles.md', () => {
       expect(STAGE_OUTPUT_FILES.characters).toContain('characters/profiles.md');
     });
 
-    it('outline includes fallback files', () => {
-      expect(STAGE_OUTPUT_FILES.outline).toContain('outline-detailed.md');
+    it('outline includes index and brief', () => {
+      expect(STAGE_OUTPUT_FILES.outline).toContain('outline/index.md');
       expect(STAGE_OUTPUT_FILES.outline).toContain('outline-brief.md');
     });
   });

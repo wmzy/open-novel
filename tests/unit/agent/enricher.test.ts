@@ -24,7 +24,7 @@ describe('buildEnrichPrompt', () => {
     const prompt = buildEnrichPrompt(meta);
     expect(prompt).toContain('outline-meta.json');
     expect(prompt).toContain('POV');
-    expect(prompt).toContain('outline-detailed.md');
+    expect(prompt).toContain('outline/chapters/');
   });
 
   it('包含 state.json 补全步骤（角色状态 + relationships）', () => {

@@ -26,10 +26,10 @@ export function buildReverseDecomposePrompt(meta: DecomposeMeta): string {
 ## 第一步·全局概览
 读取第1章与最后1章（.novel/chapters/第1章.md、.novel/chapters/第${meta.chapterCount}章.md）。写入：
 - .novel/config.json（补充 title/genre/perspective/chapterCount/targetWords）
-- .novel/concept.md（核心立意、故事内核、主题，约 300 字）
+- .novel/concept/ 目录（核心立意、故事内核、主题，每张卡一个独立 .md 文件 + index.md 索引，约 300 字）
 
 ## 第二步·逐章大纲
-每次读 2-3 章。为每章提取，写入 .novel/outline-detailed.md，每章用此格式：
+每次读 2-3 章。为每章提取，写入 .novel/outline/chapters/第N章.md（每章一个独立文件），同时更新 .novel/outline/index.md 章节索引。每章用此格式：
 #### 第N章：标题
 | POV | 视点角色 |
 | 核心事件 | 本章核心事件 |

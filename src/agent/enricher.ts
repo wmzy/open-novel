@@ -23,7 +23,7 @@ export function buildEnrichPrompt(meta: EnrichMeta): string {
 所有内容读写仅限项目目录下的 .novel/ 子目录。绝不访问项目目录之外的任何文件。
 
 ## 核心原则：只增不覆盖
-已有内容的文件（concept.md、world-building.md、outline-detailed.md、outline-brief.md、characters/profiles/*.md、characters/profiles.md、wuxia/*.md 等）**绝不修改**。
+已有内容的文件（concept/、world/、outline/ 目录、outline-brief.md、characters/profiles/*.md、characters/profiles.md、wuxia/*.md 等）**绝不修改**。
 仅创建缺失的文件，或向已有文件中的空字段填写数据。
 
 ## 第一步·盘点
@@ -34,7 +34,7 @@ export function buildEnrichPrompt(meta: EnrichMeta): string {
 
 ## 第二步·outline-meta.json
 若文件缺失，或 chapters 数组的 pov 字段为空：
-读取 .novel/outline-detailed.md，从每章的 POV 表格行（| POV | 视点角色 |）提取视点角色。
+读取 .novel/outline/chapters/ 目录下的章节卡片，从每章的 POV 字段（| POV | 视点角色 | 或 - **POV**：视点角色）提取视点角色。
 生成 outline-meta.json，格式：
 {
   "actBreaks": [第一幕末章号, 第二幕末章号],
@@ -59,7 +59,7 @@ location/emotion 可从档案中的当前状态推断（若档案无明确信息
 2. 否则从 profiles/*.md 档案中"关系""敌对""师徒"等段落提取
 
 ### 3.4 timeline 与 activeForeshadows
-- timeline：若 outline-detailed.md 有时间线标记，提取关键节点推进到当前进度
+- timeline：若 outline/ 目录有章节卡片，提取关键节点推进到当前进度
 - activeForeshadows：若 .novel/foreshadow.json 存在，收集 status=planted 的条目 ID。
   若需新建 foreshadow.json，**必须用标准 schema**：\`{ "foreshadows": [{ "id": 1, "content": "描述", "status": "planted", "plantedIn": null, "resolvedIn": null }] }\`。
   顶层键为 \`foreshadows\`（不是 items），内容字段为 \`content\`（不是 description）。

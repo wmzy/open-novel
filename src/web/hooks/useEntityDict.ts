@@ -16,15 +16,17 @@ export function useEntityDict(projectId: string): {
 } {
   const { data: fileList } = useNovelFileList(projectId);
 
-  // 候选档案：characters/*.md + world-building.md + wuxia/*.md
+  // 候选档案：characters/*.md + world/*.md + concept/*.md + wuxia/*.md
   const candidates = useMemo(() => {
     const list = fileList ?? [];
     const result: Array<{ key: string; path: string }> = [];
     for (const p of list) {
       if (p.startsWith('characters/') && p.endsWith('.md')) {
         result.push({ key: `char-${p}`, path: p });
-      } else if (p === 'world-building.md') {
-        result.push({ key: 'world', path: p });
+      } else if (p.startsWith('world/') && p.endsWith('.md') && p !== 'world/index.md') {
+        result.push({ key: `world-${p}`, path: p });
+      } else if (p.startsWith('concept/') && p.endsWith('.md') && p !== 'concept/index.md') {
+        result.push({ key: `concept-${p}`, path: p });
       } else if (p.startsWith('wuxia/') && p.endsWith('.md')) {
         result.push({ key: `wuxia-${p}`, path: p });
       }

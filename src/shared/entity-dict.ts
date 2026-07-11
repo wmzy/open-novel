@@ -53,7 +53,8 @@ type FileType = 'profiles' | 'world' | 'weapon' | 'martial' | 'sect' | 'other';
 
 function inferFileType(path: string): FileType {
   if (path.startsWith('characters/')) return 'profiles';
-  if (path === 'world-building.md') return 'world';
+  if (path.startsWith('world/') || path === 'world-building.md') return 'world';
+  if (path.startsWith('concept/')) return 'world'; // concept 要素也按 world 处理实体提取
   if (path.startsWith('wuxia/sects/') || path === 'wuxia/sects.md') return 'sect';
   if (/martial|功法|武功|武学/.test(path)) return 'martial';
   if (/weapon|兵器|神兵|兵刃/.test(path)) return 'weapon';
