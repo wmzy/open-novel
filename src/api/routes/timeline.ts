@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveNovelDir } from '../../shared/project-dir';
 import {
@@ -17,28 +17,56 @@ import { buildFillPrompt, parseAiResponse, type FillChapterInput } from '../../a
 
 const timelineRouter = new Hono();
 
+/** 读取 outline/chapters/ 目录全部章节卡片，按章号排序。 */
+async function readAllChapterCards(
+  novelDir: string,
+): Promise<Array<{ number: number; content: string }>> {
+  const chaptersDir = path.join(novelDir, 'outline', 'chapters');
+  let files: string[];
+  try {
+    files = await readdir(chaptersDir);
+  } catch {
+    return [];
+  }
+  const chapterFiles = files
+    .filter((f) => /^第\d+章\.md$/.test(f))
+    .map((f) => ({ file: f, num: parseInt(f.match(/\d+/)?.[0] ?? '0', 10) }))
+    .sort((a, b) => a.num - b.num);
+
+  const result: Array<{ number: number; content: string }> = [];
+  for (const { file, num } of chapterFiles) {
+    try {
+      const content = await readFile(path.join(chaptersDir, file), 'utf-8');
+      result.push({ number: num, content });
+    } catch { /* skip */ }
+  }
+  return result;
+}
+
 /**
  * 返回 timeline 源码 + 各章交互字段原文。
  * sequenceDiagram 源码由前端按需生成（便于修正后即时重渲染）。
  */
 timelineRouter.get('/:id/timeline', async (c) => {
   const novelDir = await resolveNovelDir(c.req.param('id'));
-  let outline = '';
-  try {
-    outline = await readFile(path.join(novelDir, 'outline-detailed.md'), 'utf-8');
-  } catch {
+  const cards = await readAllChapterCards(novelDir);
+  if (cards.length === 0) {
     return c.json({ timelines: null, chapters: [] });
   }
 
-  const chapters = parseOutlineChapters(outline);
-  const timelines = buildStoryTimeline(chapters);
+  const allChapters: OutlineChapter[] = [];
+  const chapterInteractions: Array<{ number: number; title: string; interaction: string }> = [];
 
-  // 提取每章的「角色交互」字段原文（用于前端生成 sequenceDiagram）
-  const chapterInteractions = chapters.map((ch) => {
-    const interaction = extractChapterField(outline, ch.number, '角色交互');
-    return { number: ch.number, title: ch.title, interaction };
-  });
+  for (const card of cards) {
+    const parsed = parseOutlineChapters(card.content);
+    for (const ch of parsed) {
+      allChapters.push(ch);
+      const interaction = extractChapterField(card.content, '角色交互');
+      chapterInteractions.push({ number: ch.number, title: ch.title, interaction });
+    }
+  }
 
+  const timelines = buildStoryTimeline(allChapters);
   return c.json({ timelines, chapters: chapterInteractions });
 });
 
@@ -61,88 +89,78 @@ timelineRouter.get('/:id/character-graph', async (c) => {
   return c.json({ graph: buildRelationshipGraph(chars) });
 });
 
-/** 从大纲全文提取第 N 章某字段值（如「角色交互」「核心事件」「出场角色」），无则返回空串。 */
-export function extractChapterField(outline: string, chapter: number, field: string): string {
-  const lines = outline.split('\n');
-  const anchorRe = /^####\s+第([\d]+)(?:-[\d]+)?章/;
-  let startIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(anchorRe);
-    if (m && parseInt(m[1], 10) === chapter) {
-      startIdx = i;
-      break;
-    }
-  }
-  if (startIdx === -1) return '';
-  const fieldRe = new RegExp(`^\\|\\s*${field}\\s*\\|\\s*(.+?)\\s*\\|`);
-  for (let j = startIdx + 1; j < lines.length; j++) {
-    if (/^#{3,4}\s/.test(lines[j])) break;
-    const m = lines[j].match(fieldRe);
-    if (m) return m[1].trim();
+/** 从单章卡片内容提取某字段值（如「角色交互」「核心事件」「出场角色」），
+ * 支持表格格式 `| field | value |` 和 bullet 格式 `- **field**：value`。 */
+export function extractChapterField(chapterContent: string, field: string): string {
+  const lines = chapterContent.split('\n');
+  const tableRe = new RegExp(`^\\|\\s*${field}\\s*\\|\\s*(.+?)\\s*\\|`);
+  const bulletRe = new RegExp(`^[-*]\\s*\\*\\*${field}\\*\\*[：:]\\s*(.+)`);
+  for (const line of lines) {
+    const tableM = line.match(tableRe);
+    if (tableM) return tableM[1].trim();
+    const bulletM = line.match(bulletRe);
+    if (bulletM) return bulletM[1].trim();
   }
   return '';
 }
 
 /**
- * 替换或插入第 N 章的「角色交互」行。
- * - 已有「角色交互」行 → 替换
- * - 无 → 在「出场角色」行后插入；若无出场角色行则追加到表格末尾
- * 返回更新后的全文；章号不存在返回 null。
+ * 替换或插入单章卡片的「角色交互」字段。
+ * - 表格格式：已有 → 替换；无 → 在「出场角色」行后插入；若无则追加到末尾
+ * - bullet 格式：同上逻辑
+ * 返回更新后的全文；无法插入返回 null。
  */
 export function replaceChapterInteraction(
-  outline: string,
-  chapter: number,
+  chapterContent: string,
   interaction: string,
 ): string | null {
-  const lines = outline.split('\n');
-  const anchorRe = /^####\s+第([\d]+)(?:-[\d]+)?章/;
-  let startIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(anchorRe);
-    if (m && parseInt(m[1], 10) === chapter) {
-      startIdx = i;
-      break;
-    }
-  }
-  if (startIdx === -1) return null;
-
-  // 找该章表格范围（到下一个 #### 或 ###）
-  let endIdx = lines.length;
-  for (let j = startIdx + 1; j < lines.length; j++) {
-    if (/^#{3,4}\s/.test(lines[j])) {
-      endIdx = j;
-      break;
-    }
-  }
+  const lines = chapterContent.split('\n');
 
   let interactionLineIdx = -1;
   let castLineIdx = -1;
-  let lastTableRowIdx = -1;
-  for (let j = startIdx + 1; j < endIdx; j++) {
+  let lastTableIdx = -1;
+  let lastBulletIdx = -1;
+
+  for (let j = 0; j < lines.length; j++) {
     if (/^\|/.test(lines[j])) {
-      lastTableRowIdx = j;
+      lastTableIdx = j;
       if (/^\|\s*角色交互\s*\|/.test(lines[j])) interactionLineIdx = j;
       if (/^\|\s*出场角色\s*\|/.test(lines[j])) castLineIdx = j;
     }
+    if (/^[-*]\s*\*\*/.test(lines[j])) {
+      lastBulletIdx = j;
+      if (/^[-*]\s*\*\*角色交互\*\*/.test(lines[j])) interactionLineIdx = j;
+      if (/^[-*]\s*\*\*出场角色\*\*/.test(lines[j])) castLineIdx = j;
+    }
   }
 
-  const newLine = `| 角色交互 | ${interaction} |`;
+  // 判断使用表格还是 bullet 格式
+  const useTable = lastTableIdx >= 0 && (interactionLineIdx >= 0 && /^\|/.test(lines[interactionLineIdx])
+    || castLineIdx >= 0 && /^\|/.test(lines[castLineIdx])
+    || lastBulletIdx < 0);
+
+  const newLine = useTable
+    ? `| 角色交互 | ${interaction} |`
+    : `- **角色交互**：${interaction}`;
 
   if (interactionLineIdx >= 0) {
     lines[interactionLineIdx] = newLine;
   } else if (castLineIdx >= 0) {
     lines.splice(castLineIdx + 1, 0, newLine);
-  } else if (lastTableRowIdx >= 0) {
-    lines.splice(lastTableRowIdx + 1, 0, newLine);
+  } else if (useTable && lastTableIdx >= 0) {
+    lines.splice(lastTableIdx + 1, 0, newLine);
+  } else if (!useTable && lastBulletIdx >= 0) {
+    lines.splice(lastBulletIdx + 1, 0, newLine);
   } else {
-    return null;
+    // 追加到末尾
+    lines.push(newLine);
   }
 
   return lines.join('\n');
 }
 
 /**
- * 修正单章「角色交互」字段，写回大纲 md。
+ * 修正单章「角色交互」字段，写回单章卡片文件。
  */
 timelineRouter.put('/:id/interaction', async (c) => {
   const novelDir = await resolveNovelDir(c.req.param('id'));
@@ -152,20 +170,20 @@ timelineRouter.put('/:id/interaction', async (c) => {
     return c.json({ error: 'chapter and interaction are required' }, 400);
   }
 
-  const outlinePath = path.join(novelDir, 'outline-detailed.md');
-  let outline: string;
+  const chapterPath = path.join(novelDir, 'outline', 'chapters', `第${chapter}章.md`);
+  let content: string;
   try {
-    outline = await readFile(outlinePath, 'utf-8');
+    content = await readFile(chapterPath, 'utf-8');
   } catch {
-    return c.json({ error: 'outline-detailed.md not found' }, 404);
+    return c.json({ error: `第${chapter}章大纲文件未找到` }, 404);
   }
 
-  const updated = replaceChapterInteraction(outline, chapter, interaction);
+  const updated = replaceChapterInteraction(content, interaction);
   if (updated === null) {
-    return c.json({ error: `第${chapter}章未在大纲中找到` }, 404);
+    return c.json({ error: `第${chapter}章无法更新` }, 404);
   }
 
-  await writeFile(outlinePath, updated, 'utf-8');
+  await writeFile(chapterPath, updated, 'utf-8');
   return c.json({ ok: true });
 });
 
@@ -182,19 +200,21 @@ timelineRouter.post('/:id/fill', async (c) => {
     return c.json({ error: '批量预填暂不支持 ACP agent，请用 claude 等 CLI agent' }, 400);
   }
 
-  let outline: string;
-  try {
-    outline = await readFile(path.join(novelDir, 'outline-detailed.md'), 'utf-8');
-  } catch {
-    return c.json({ error: 'outline-detailed.md not found' }, 404);
+  const cards = await readAllChapterCards(novelDir);
+  if (cards.length === 0) {
+    return c.json({ error: 'outline/chapters/ 目录为空或不存在' }, 404);
   }
 
-  const chapters = parseOutlineChapters(outline);
-  // 过滤出无「角色交互」字段的章节
-  const toFill: OutlineChapter[] = [];
-  for (const ch of chapters) {
-    const existing = extractChapterField(outline, ch.number, '角色交互');
-    if (!existing) toFill.push(ch);
+  // 解析全部章节，过滤出无「角色交互」字段的
+  const toFill: Array<{ card: { number: number; content: string }; chapter: OutlineChapter }> = [];
+  for (const card of cards) {
+    const parsed = parseOutlineChapters(card.content);
+    for (const ch of parsed) {
+      const existing = extractChapterField(card.content, '角色交互');
+      if (!existing) {
+        toFill.push({ card, chapter: ch });
+      }
+    }
   }
 
   return stream(c, async (streamWriter) => {
@@ -209,15 +229,16 @@ timelineRouter.post('/:id/fill', async (c) => {
     const send = (obj: unknown) =>
       streamWriter.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    send({ type: 'plan', total: toFill.length, skipped: chapters.length - toFill.length });
+    send({ type: 'plan', total: toFill.length, skipped: cards.length - toFill.length });
 
-    for (const ch of toFill) {
+    for (const item of toFill) {
+      const { card, chapter: ch } = item;
       try {
         const input: FillChapterInput = {
           number: ch.number,
           title: ch.title,
           pov: ch.pov,
-          coreEvent: extractChapterField(outline, ch.number, '核心事件'),
+          coreEvent: extractChapterField(card.content, '核心事件'),
           cast: ch.cast,
         };
         const prompt = buildFillPrompt(input);
@@ -225,7 +246,12 @@ timelineRouter.post('/:id/fill', async (c) => {
         const interaction = parseAiResponse(aiResponse);
 
         if (interaction) {
-          outline = replaceChapterInteraction(outline, ch.number, interaction) || outline;
+          const updated = replaceChapterInteraction(card.content, interaction);
+          if (updated) {
+            const chapterPath = path.join(novelDir, 'outline', 'chapters', `第${card.number}章.md`);
+            await writeFile(chapterPath, updated, 'utf-8');
+            card.content = updated; // 后续迭代用更新后的内容
+          }
           filled.push(ch.number);
           send({ type: 'progress', chapter: ch.number, filled: filled.length, total: toFill.length });
         } else {
@@ -233,15 +259,6 @@ timelineRouter.post('/:id/fill', async (c) => {
         }
       } catch (e) {
         failed.push({ chapter: ch.number, message: (e as Error)?.message || 'unknown error' });
-      }
-    }
-
-    // 一次性写回大纲
-    if (filled.length > 0) {
-      try {
-        await writeFile(path.join(novelDir, 'outline-detailed.md'), outline, 'utf-8');
-      } catch (e) {
-        failed.push({ chapter: -1, message: `写回大纲失败: ${(e as Error)?.message}` });
       }
     }
 
