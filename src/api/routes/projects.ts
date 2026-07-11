@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
-import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
@@ -16,14 +16,18 @@ import { gitSync } from '../../agent/snapshot';
 import {
   TEMPLATE_GENERATORS,
   TEMPLATE_FILE_PATHS,
+  generateOutlineDetailedSplit,
   type TemplateGenOptions,
 } from '../../shared/template-generator';
+import { splitMarkdownToCards, buildIndexMarkdown, DOC_DIR, type DocType } from '../../shared/split-document';
 import timelineRouter from './timeline';
+import documentsRouter from './documents';
 
 const projectsRouter = new Hono();
 
 // 故事脉络子路由（/:id/timeline 等）
 projectsRouter.route('/', timelineRouter);
+projectsRouter.route('/', documentsRouter);
 
 projectsRouter.get('/', async (c) => {
   const all = await db.select().from(projects).orderBy(desc(projects.createdAt));
@@ -559,6 +563,23 @@ projectsRouter.post('/:id/generate-templates', async (c) => {
     const relPath = TEMPLATE_FILE_PATHS[name];
     if (!generator || !relPath) continue; // 跳过未知模板名
 
+    // outline-detailed 特殊处理：拆分型模板（目录 + 逐章卡片）
+    if (name === 'outline-detailed') {
+      const split = generateOutlineDetailedSplit(opts);
+      const outlineDir = path.join(novelDir, 'outline');
+      mkdirSync(path.join(outlineDir, 'chapters'), { recursive: true });
+      const backedUp = existsSync(path.join(novelDir, 'outline-detailed.md'));
+      if (backedUp) {
+        copyFileSync(path.join(novelDir, 'outline-detailed.md'), path.join(novelDir, 'outline-detailed.md.bak'));
+      }
+      writeFileSync(path.join(outlineDir, 'index.md'), split.indexContent, 'utf-8');
+      for (const card of split.cards) {
+        writeFileSync(path.join(outlineDir, card.relativePath), card.content, 'utf-8');
+      }
+      written.push({ name, path: 'outline/', backedUp });
+      continue;
+    }
+
     const fullPath = path.join(novelDir, relPath);
     mkdirSync(path.dirname(fullPath), { recursive: true });
     // 已存在则备份（覆盖旧 .bak），再加 .bak 后缀
@@ -589,6 +610,75 @@ projectsRouter.get('/:id/templates/:templateName', async (c) => {
     path: TEMPLATE_FILE_PATHS[templateName],
     content,
   });
+});
+
+/**
+ * 迁移端点：将旧格式单文件（concept.md / world-building.md / outline-detailed.md）
+ * 拆分为目录 + 索引 + 卡片文件。新项目无需调用。
+ */
+projectsRouter.post('/:id/migrate-split', async (c) => {
+  const id = c.req.param('id');
+  const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+  if (!project) return c.json({ error: 'Not found' }, 404);
+
+  const novelDir = path.join(project.path, '.novel');
+
+  // 旧文件 → 文档类型映射
+  const migrations: Array<{ oldFile: string; docType: DocType }> = [
+    { oldFile: 'concept.md', docType: 'concept' },
+    { oldFile: 'world-building.md', docType: 'world' },
+    { oldFile: 'outline-detailed.md', docType: 'outline' },
+  ];
+
+  // outline 的三幕分界从 outline-meta.json 读取
+  let actBreaks: [number, number] | undefined;
+  try {
+    const metaRaw = readFileSync(path.join(novelDir, 'outline-meta.json'), 'utf-8');
+    const meta = JSON.parse(metaRaw);
+    if (Array.isArray(meta.actBreaks) && meta.actBreaks.length >= 2) {
+      actBreaks = [meta.actBreaks[0], meta.actBreaks[1]];
+    }
+  } catch { /* no meta file */ }
+
+  const results: Array<{ docType: string; cards: number; migrated: boolean }> = [];
+
+  for (const migration of migrations) {
+    const oldPath = path.join(novelDir, migration.oldFile);
+    let content: string;
+    try {
+      content = readFileSync(oldPath, 'utf-8');
+    } catch {
+      results.push({ docType: migration.docType, cards: 0, migrated: false });
+      continue;
+    }
+
+    const split = splitMarkdownToCards(content, migration.docType);
+    const finalActBreaks = migration.docType === 'outline' ? actBreaks : undefined;
+    const indexContent = buildIndexMarkdown(
+      migration.docType,
+      `《${project.title}》`,
+      split.cards,
+      finalActBreaks,
+    );
+
+    // 写目录
+    const newDir = path.join(novelDir, DOC_DIR[migration.docType]);
+    mkdirSync(newDir, { recursive: true });
+    writeFileSync(path.join(newDir, 'index.md'), indexContent, 'utf-8');
+
+    for (const card of split.cards) {
+      const cardPath = path.join(newDir, card.fileName);
+      mkdirSync(path.dirname(cardPath), { recursive: true });
+      writeFileSync(cardPath, card.content, 'utf-8');
+    }
+
+    // 删旧文件
+    unlinkSync(oldPath);
+
+    results.push({ docType: migration.docType, cards: split.cards.length, migrated: true });
+  }
+
+  return c.json({ ok: true, results });
 });
 
 export default projectsRouter;
