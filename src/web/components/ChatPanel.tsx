@@ -619,6 +619,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
               contextSize={msg.contextSize}
               error={msg.error}
               artifacts={msg.artifacts}
+              projectId={projectId}
               onResend={msg.role === 'user' ? (content) => {
                 setInput(content);
                 textareaRef.current?.focus();

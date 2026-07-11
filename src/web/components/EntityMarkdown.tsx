@@ -23,6 +23,7 @@ import type { EntityRef } from '@/shared/entity-dict';
 import { splitTextByEntities } from '@/shared/entity-linker';
 import { EntityLink } from './EntityLink';
 import { EntityDetailDialog } from './EntityDetailDialog';
+import { useMdFilePreview } from '../hooks/useMdFilePreview';
 
 interface CtxValue {
   dict: Map<string, EntityRef>;
@@ -77,8 +78,9 @@ interface Props {
   className?: string;
 }
 
-export function EntityMarkdown({ content, dict, className }: Props) {
+export function EntityMarkdown({ content, dict, projectId, className }: Props) {
   const [dialogEntity, setDialogEntity] = useState<EntityRef | null>(null);
+  const { a: mdLinkA, dialog: mdFileDialog } = useMdFilePreview(projectId);
 
   const ctxValue = useMemo<CtxValue>(
     () => ({ dict, onPick: setDialogEntity }),
@@ -95,8 +97,10 @@ export function EntityMarkdown({ content, dict, className }: Props) {
           <EntityChildren>{props.children as ReactNode}</EntityChildren>,
         );
     }
+    // .md 文件引用链接：点击弹窗预览
+    wrapped.a = mdLinkA;
     return wrapped;
-  }, []);
+  }, [mdLinkA]);
 
   return (
     <EntityContext.Provider value={ctxValue}>
@@ -106,6 +110,7 @@ export function EntityMarkdown({ content, dict, className }: Props) {
       {dialogEntity && (
         <EntityDetailDialog entity={dialogEntity} onClose={() => setDialogEntity(null)} />
       )}
+      {mdFileDialog}
     </EntityContext.Provider>
   );
 }

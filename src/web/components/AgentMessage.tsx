@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode, type ComponentProps } from 'react';
 import { css, cx } from '@linaria/core';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ToolCard, { toolFamily } from './ToolCard';
 import FileOpsSummary from './FileOpsSummary';
+import { useMdFilePreview } from '../hooks/useMdFilePreview';
 import type { AgentEvent } from '@/agent/types';
 
 const messageBlock = css`
@@ -184,6 +185,8 @@ interface Props {
   onResend?: (content: string) => void;
   onReply?: (content: string) => void;
   onBranch?: () => void;
+  /** 项目 ID：用于 .md 文件引用弹窗。无则禁用该能力。 */
+  projectId?: string;
 }
 
 type Block =
@@ -265,7 +268,8 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   return blocks;
 }
 
-export default function AgentMessage({ role, content, events, startedAt, endedAt, usage, contextSize, error, artifacts, onResend, onReply }: Props) {
+export default function AgentMessage({ role, content, events, startedAt, endedAt, usage, contextSize, error, artifacts, onResend, onReply, projectId }: Props) {
+  const { a: mdLinkA, dialog: mdFileDialog } = useMdFilePreview(projectId);
   if (role === 'user') {
     return (
       <div className={messageBlock}>
@@ -296,7 +300,7 @@ export default function AgentMessage({ role, content, events, startedAt, endedAt
         )}
 
         {blocks.map((block, i) => {
-          if (block.kind === 'text') return <TextBlock key={i} text={block.text} />;
+          if (block.kind === 'text') return <TextBlock key={i} text={block.text} linkComponent={mdLinkA} />;
           if (block.kind === 'thinking') return <ThinkingBlock key={i} text={block.text} />;
           if (block.kind === 'tool-group') return <ToolGroupBlock key={i} items={block.items} />;
           if (block.kind === 'status') return <div key={i} className={statusPill}>{block.label}{block.detail ? `: ${block.detail}` : ''}</div>;
@@ -322,12 +326,14 @@ export default function AgentMessage({ role, content, events, startedAt, endedAt
           )}
         </div>
       </div>
+      {mdFileDialog}
     </div>
   );
 }
 
-function TextBlock({ text }: { text: string }) {
-  return <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>;
+function TextBlock({ text, linkComponent }: { text: string; linkComponent?: (props: ComponentProps<'a'> & { node?: unknown }) => ReactNode }) {
+  const components = linkComponent ? ({ a: linkComponent } as const) : undefined;
+  return <Markdown remarkPlugins={[remarkGfm]} components={components}>{text}</Markdown>;
 }
 
 function ThinkingBlock({ text }: { text: string }) {
