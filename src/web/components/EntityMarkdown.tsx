@@ -108,7 +108,7 @@ export function EntityMarkdown({ content, dict, projectId, className }: Props) {
         {content || '*No content*'}
       </Markdown>
       {dialogEntity && (
-        <EntityDetailDialog entity={dialogEntity} onClose={() => setDialogEntity(null)} />
+        <EntityDetailDialog entity={dialogEntity} projectId={projectId} onClose={() => setDialogEntity(null)} />
       )}
       {mdFileDialog}
     </EntityContext.Provider>

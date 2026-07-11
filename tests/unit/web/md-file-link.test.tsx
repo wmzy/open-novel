@@ -7,6 +7,8 @@ import {
   extractText,
   MarkdownFileDialog,
 } from '../../../src/web/components/MarkdownFileDialog';
+import { EntityDetailDialog } from '../../../src/web/components/EntityDetailDialog';
+import type { EntityRef } from '../../../src/shared/entity-dict';
 
 describe('isMarkdownRef', () => {
   it('识别项目内 .md 文件引用', () => {
@@ -273,5 +275,39 @@ describe('MarkdownFileDialog 组件', () => {
     expect(await screen.findByText('三幕结构')).toBeTruthy();
     // 确认弹窗没有关闭（仍是单个弹窗）
     expect(document.querySelectorAll('[role=dialog]')).toHaveLength(1);
+  });
+});
+
+describe('EntityDetailDialog 链接拦截', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('点击 .md 链接打开预览弹窗而非当前页跳转', async () => {
+    const entity: EntityRef = {
+      name: '剑平',
+      type: 'character',
+      file: 'characters/profiles.md',
+      sectionTitle: '剑平',
+      sectionRaw: '详见 [世界观](world.md)。',
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ content: '# 世界观\n\n剑与魔法的世界。' })),
+    );
+
+    render(
+      <EntityDetailDialog entity={entity} projectId="proj_1" onClose={vi.fn()} />,
+    );
+
+    const link = await screen.findByText('世界观');
+    fireEvent.click(link);
+
+    // .md 链接被拦截为弹窗预览（加载中态），未发生当前页导航
+    expect(await screen.findByText('加载中…')).toBeTruthy();
+    expect(await screen.findByText('剑与魔法的世界。')).toBeTruthy();
   });
 });

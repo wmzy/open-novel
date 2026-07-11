@@ -7,6 +7,7 @@ import { css } from '@linaria/core';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { EntityRef } from '@/shared/entity-dict';
+import { useMdFilePreview } from '../hooks/useMdFilePreview';
 
 const overlay = css`
   position: fixed;
@@ -101,10 +102,13 @@ const TYPE_LABELS: Record<EntityRef['type'], string> = {
 
 interface Props {
   entity: EntityRef;
+  /** 项目 ID：拦截 .md 链接为弹窗预览，避免点击后当前页整体跳转。 */
+  projectId: string;
   onClose: () => void;
 }
 
-export function EntityDetailDialog({ entity, onClose }: Props) {
+export function EntityDetailDialog({ entity, projectId, onClose }: Props) {
+  const { a, dialog: mdFileDialog } = useMdFilePreview(projectId);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -114,6 +118,7 @@ export function EntityDetailDialog({ entity, onClose }: Props) {
   }, [onClose]);
 
   return (
+    <>
     <div className={overlay} onClick={onClose}>
       <div
         className={dialog}
@@ -130,9 +135,11 @@ export function EntityDetailDialog({ entity, onClose }: Props) {
           </button>
         </div>
         <div className={body}>
-          <Markdown remarkPlugins={[remarkGfm]}>{entity.sectionRaw}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm]} components={{ a }}>{entity.sectionRaw}</Markdown>
         </div>
       </div>
     </div>
-  );
+      {mdFileDialog}
+    </>);
+
 }

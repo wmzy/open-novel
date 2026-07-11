@@ -121,7 +121,7 @@ const STAGE_TAIL: Record<string, string> = {
   outline: `
 
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-detailed 或 templates/outline-brief。以生成的脚手架为起点并加以打磨。
-大纲完成后，保存到 .novel/outline.md。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
+大纲完成后，保存到 .novel/outline-detailed.md。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
 \`\`\`json
 {
   "actBreaks": [5, 15],

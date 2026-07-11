@@ -104,6 +104,18 @@ describe('composePrompt', () => {
         });
       }
 
+      it('outline stage 指示保存到 outline-detailed.md（与视图读取一致）', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'outline',
+          projectDir: tempDir,
+        });
+        expect(prompt).toContain('保存到 .novel/outline-detailed.md');
+        // 不应再指示存到孤立的 outline.md（视图不读取它）
+        expect(prompt).not.toContain('保存到 .novel/outline.md。');
+      });
+
       it('keeps writing stage autonomous (no interview protocol)', async () => {
         const prompt = await composePrompt({
           message: 'hi',

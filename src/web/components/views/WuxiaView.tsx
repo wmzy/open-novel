@@ -10,6 +10,10 @@ import {
   pageHeading,
   card,
   cardTitle,
+  cardTitleText,
+  cardReviseBtn,
+  reviseBtn,
+  renameBtn,
   isSectionEmpty,
   CardContent,
   ViewToolbar,
@@ -19,6 +23,8 @@ import {
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import InlineInspiration from '../InlineInspiration';
+import { useFileRevision } from '@/web/hooks/useFileRevision';
+import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
   projectId: string;
@@ -209,6 +215,8 @@ function roleColor(title: string): string {
 interface WuxiaFileItem {
   title: string;
   rawMd: string;
+  /** 相对 .novel/ 的源文件路径，用于卡片级修订/重命名定位。 */
+  filePath: string;
 }
 
 interface WuxiaGroup {
@@ -259,12 +267,12 @@ function categorizeWuxiaFiles(files: { path: string; content: string }[]): Wuxia
     else cat = 'other';
 
     if (cat === 'sect-detail' || cat === 'other') {
-      buckets[cat].push({ title, rawMd: f.content });
+      buckets[cat].push({ title, rawMd: f.content, filePath: f.path });
     } else if (parsed.sections.length === 0) {
-      buckets[cat].push({ title, rawMd: f.content });
+      buckets[cat].push({ title, rawMd: f.content, filePath: f.path });
     } else {
       for (const s of parsed.sections) {
-        buckets[cat].push({ title: s.title, rawMd: s.fullRawMd });
+        buckets[cat].push({ title: s.title, rawMd: s.fullRawMd, filePath: f.path });
       }
     }
   }
@@ -283,6 +291,7 @@ export default function WuxiaView({ projectId }: Props) {
     'characters/profiles.md'
   );
   const [viewMode, setViewMode] = useViewMode();
+  const revision = useFileRevision({ projectId, targetFile: '', stage: 'wuxia' });
 
   // .novel/wuxia/ 独立文件（旧工具迁移项目）
   const { data: fileList } = useNovelFileList(projectId);
@@ -363,6 +372,13 @@ export default function WuxiaView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>武侠</h3>
+        <button className={reviseBtn} onClick={() => revision.openRevise('world-building.md')} title="修订世界观/武侠设定">✎ 修订</button>
+        <button className={renameBtn} onClick={() => revision.openRename('world-building.md')} title="重命名">⇄ 重命名</button>
+        <button
+          className={reviseBtn}
+          onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'world' } }))}
+          title="自主循环深化武侠设定阶段"
+        >🔁 深化</button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
 
@@ -389,7 +405,9 @@ export default function WuxiaView({ projectId }: Props) {
                   style={{ borderLeft: `3px solid ${group.color}` } as CSSProperties}
                 >
                   <div className={cardTitle}>
-                    {item.title}
+                    <span className={cardTitleText}>{item.title}</span>
+                    <button className={cardReviseBtn} onClick={() => revision.openRevise(item.filePath, item.title)} title="修订这一节">✎</button>
+                    <button className={cardReviseBtn} onClick={() => revision.openRename(item.filePath)} title="重命名">⇄</button>
                     {group.key === 'sect-detail' && (
                       <InlineInspiration mode="generate-in-faction" factionName={item.title} />
                     )}
@@ -421,7 +439,11 @@ export default function WuxiaView({ projectId }: Props) {
                 const empty = isSectionEmpty(s);
                 return (
                   <div key={i} className={card} style={cardStyle}>
-                    <div className={cardTitle}>{s.title}</div>
+                    <div className={cardTitle}>
+                      <span className={cardTitleText}>{s.title}</span>
+                      <button className={cardReviseBtn} onClick={() => revision.openRevise('world-building.md', s.title)} title="修订这一节">✎</button>
+                      <button className={cardReviseBtn} onClick={() => revision.openRename('world-building.md')} title="重命名">⇄</button>
+                    </div>
                     {empty ? (
                       <span className={dimEmpty}>暂无内容</span>
                     ) : (
@@ -455,6 +477,8 @@ export default function WuxiaView({ projectId }: Props) {
                     <span className={martialName} style={{ color } as CSSProperties}>
                       {c.name || c.raw.title}
                     </span>
+                    <button className={cardReviseBtn} onClick={() => revision.openRevise('characters/profiles.md', c.raw.title)} title="修订这一组">✎</button>
+                    <button className={cardReviseBtn} onClick={() => revision.openRename('characters/profiles.md')} title="重命名">⇄</button>
                   </div>
                   {c.subs.map((sub, j) => {
                     const empty = isSectionEmpty(sub as unknown as MdSection);
@@ -475,6 +499,7 @@ export default function WuxiaView({ projectId }: Props) {
           </div>
         </>
       )}
+      {revision.renameDialog}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
@@ -72,6 +72,33 @@ const chapterTitle = css`
   font-weight: 500;
 `;
 
+/** 概览/详细标签栏。 */
+const tabBar = css`
+  display: flex;
+  gap: 0.25rem;
+  margin: 0.5rem 0 0.75rem;
+`;
+
+/** 单个标签按钮。 */
+const tabBtn = css`
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text-secondary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  &:hover { background: var(--haze-color-bg-secondary); }
+`;
+
+/** 激活态标签。 */
+const tabBtnActive = css`
+  background: var(--haze-color-primary);
+  color: white;
+  border-color: var(--haze-color-primary);
+  &:hover { background: var(--haze-color-primary); }
+`;
+
 /** 章节正文。 */
 const chapterBody = css`
   padding: 0.5rem 1rem 1rem;
@@ -89,9 +116,12 @@ function chapterNumber(title: string): string | null {
 
 export default function OutlineView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'outline', 'outline-detailed.md');
+  const { data: briefData } = useNovelFile(projectId, 'outline-brief', 'outline-brief.md');
   const [viewMode, setViewMode] = useViewMode();
+  const [tab, setTab] = useState<'detail' | 'brief'>('detail');
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
+  const briefSections = useMemo(() => (briefData ? parseSections(briefData).sections : []), [briefData]);
 
   // 跟踪“已折叠”的章节：默认空集 = 全部展开。这样在数据加载完成后新出现的章节也默认展开，
   // 不依赖 useState 初始化时机。
@@ -120,17 +150,6 @@ export default function OutlineView({ projectId }: Props) {
     });
   };
 
-  if (isLoading) return <div className={loadingWrap}>加载中...</div>;
-  if (!data) return <EmptyState message="尚未创建大纲。" command="/outline" />;
-  if (sections.length === 0) {
-    return (
-      <div>
-        <h3 className={pageHeading}>大纲</h3>
-        <EmptyState message="大纲暂无结构化内容。" command="/outline" />
-      </div>
-    );
-  }
-
   const renderChapter = (s: MdSection, i: number) => {
     const num = chapterNumber(s.title);
     const titleField = s.fields.find((f) => f.key === '标题')?.value;
@@ -151,6 +170,17 @@ export default function OutlineView({ projectId }: Props) {
     );
   };
 
+  const renderBriefSection = (s: MdSection, i: number) => (
+    <div key={i} className={chapterCard}>
+      <div className={chapterHeader} style={{ cursor: 'default' }}>
+        <span className={chapterTitle}>{s.title}</span>
+      </div>
+      <div className={chapterBody}>
+        <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
+      </div>
+    </div>
+  );
+
   return (
     <div>
       <div className={viewHeaderRow}>
@@ -162,11 +192,33 @@ export default function OutlineView({ projectId }: Props) {
         >🔁 深化</button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
-      <CollapsibleDiagram chart={arcDiagram} title="三幕节奏" />
-      {povChunks?.map((chunk, i) => (
-        <CollapsibleDiagram key={i} chart={chunk.chart} title={chunk.title} defaultShow={i === 0} />
-      ))}
-      <div className={chapterList}>{sections.map(renderChapter)}</div>
+      <div className={tabBar}>
+        <button className={cx(tabBtn, tab === 'detail' && tabBtnActive)} onClick={() => setTab('detail')}>详细</button>
+        <button className={cx(tabBtn, tab === 'brief' && tabBtnActive)} onClick={() => setTab('brief')}>概览</button>
+      </div>
+      {tab === 'detail' ? (
+        <>
+          <CollapsibleDiagram chart={arcDiagram} title="三幕节奏" />
+          {povChunks?.map((chunk, i) => (
+            <CollapsibleDiagram key={i} chart={chunk.chart} title={chunk.title} defaultShow={i === 0} />
+          ))}
+          {isLoading ? (
+            <div className={loadingWrap}>加载中...</div>
+          ) : !data ? (
+            <EmptyState message="尚未创建详细大纲。" command="/outline" />
+          ) : sections.length === 0 ? (
+            <EmptyState message="详细大纲暂无结构化内容。" command="/outline" />
+          ) : (
+            <div className={chapterList}>{sections.map(renderChapter)}</div>
+          )}
+        </>
+      ) : !briefData ? (
+        <EmptyState message="尚未创建概览大纲。" command="/outline" />
+      ) : briefSections.length === 0 ? (
+        <EmptyState message="概览大纲暂无结构化内容。" command="/outline" />
+      ) : (
+        <div className={chapterList}>{briefSections.map(renderBriefSection)}</div>
+      )}
     </div>
   );
 }
