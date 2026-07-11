@@ -24,6 +24,7 @@ import WuxiaView from '@/web/components/views/WuxiaView';
 import WritingView from '@/web/components/views/WritingView';
 import { useAgentSelection } from '@/web/hooks/useAgents';
 import { useChatPanelWidth } from '@/web/hooks/useChatPanelWidth';
+import { useNovelFileList } from '@/web/components/views/viewShared';
 
 const layout = css`
   display: flex;
@@ -321,13 +322,16 @@ export default function ProjectPage() {
         const filePath = data.path as string;
 
         // Invalidate view queries based on changed file
-        if (filePath === 'concept.md') {
+        if (filePath.startsWith('concept/')) {
+          queryClient.invalidateQueries({ queryKey: ['novel-document', id, 'concept'] });
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'concept'] });
-        } else if (filePath === 'world-building.md') {
+        } else if (filePath.startsWith('world/')) {
+          queryClient.invalidateQueries({ queryKey: ['novel-document', id, 'world'] });
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'world'] });
         } else if (filePath?.startsWith('characters/')) {
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'characters'] });
-        } else if (filePath === 'outline.md' || filePath === 'outline-detailed.md') {
+        } else if (filePath.startsWith('outline/')) {
+          queryClient.invalidateQueries({ queryKey: ['novel-document', id, 'outline'] });
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'outline'] });
         } else if (filePath === 'outline-brief.md') {
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'outline-brief'] });
@@ -394,13 +398,13 @@ export default function ProjectPage() {
 
   // Map view to file path for preview
   const viewToFile: Record<string, string> = {
-    concept: 'concept.md',
-    world: 'world-building.md',
+    concept: 'concept/index.md',
+    world: 'world/index.md',
     characters: 'characters/profiles.md',
-    outline: 'outline-detailed.md',
+    outline: 'outline/index.md',
     scenes: 'scenes.md',
     foreshadow: 'foreshadow.json',
-    wuxia: 'world-building.md',
+    wuxia: 'world/index.md',
   };
 
   // 直接通过 URL 进入某个视图时（handleViewChange 未被调用），
@@ -500,6 +504,32 @@ export default function ProjectPage() {
     }
   };
 
+  // 检测旧格式单文件是否需要迁移
+  const { data: fileList } = useNovelFileList(id!);
+  const hasLegacyFiles = (fileList ?? []).some((f) =>
+    f === 'concept.md' || f === 'world-building.md' || f === 'outline-detailed.md',
+  );
+  const [migrating, setMigrating] = useState(false);
+  const handleMigrate = useCallback(async () => {
+    if (!id) return;
+    setMigrating(true);
+    try {
+      const res = await fetch(`/api/projects/${id}/migrate-split`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        const count = data.results?.filter((r: { migrated: boolean }) => r.migrated).length ?? 0;
+        toast.success(`迁移完成：拆分了 ${count} 个文档`);
+        queryClient.invalidateQueries();
+      } else {
+        toast.error('迁移失败');
+      }
+    } catch {
+      toast.error('迁移失败');
+    } finally {
+      setMigrating(false);
+    }
+  }, [id, queryClient]);
+
   if (isLoading) return <div className={stateWrap}>加载中...</div>;
   if (error || !project) {
     // 区分「项目不存在」(404) 与「加载失败」(网络/5xx)，给出不同文案与动作。
@@ -532,6 +562,11 @@ export default function ProjectPage() {
           <h2>{project.title}</h2>
           <WorkflowProgress currentStage={project.currentStage} onStageClick={handleViewChange} />
           <div className={toolbarActions}>
+            {hasLegacyFiles && (
+              <button className={previewToggle} onClick={handleMigrate} disabled={migrating} title="将旧格式单文件拆分为卡片目录" style={{ color: 'var(--haze-color-warning, #f59e0b)' }}>
+                {migrating ? '迁移中...' : '迁移卡片格式'}
+              </button>
+            )}
             <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown">MD</button>
             <button className={previewToggle} onClick={() => handleExport('text')} title="导出 TXT">TXT</button>
             <button className={previewToggle} onClick={handleUndo} title="撤销上次更改">撤销</button>

@@ -47,13 +47,10 @@ describe('useFileRevision', () => {
     });
   });
 
-  it('openRevise(undefined, sectionTitle) payload 含 sectionTitle', () => {
+  it('openRevise(cardPath) 直接指定卡片路径', () => {
     const { result } = renderHook(() => useFileRevision(baseOpts));
-    act(() => result.current.openRevise(undefined, '核心冲突'));
-    expect(lastDetail).toEqual({
-      targetFile: 'concept.md',
-      sectionTitle: '核心冲突',
-    });
+    act(() => result.current.openRevise('concept/核心冲突.md'));
+    expect((lastDetail as { targetFile: string }).targetFile).toBe('concept/核心冲突.md');
   });
 
   it('openRevise(targetFile?) 覆盖默认 targetFile', () => {
