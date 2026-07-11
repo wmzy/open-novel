@@ -35,6 +35,15 @@ const rawContent = css`
   color: var(--haze-color-text);
 `;
 
+const mdContent = css`
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--haze-color-text);
+`;
+
 const toggleBtn = css`
   background: none;
   border: 1px solid var(--haze-color-border);
@@ -105,7 +114,7 @@ export default function FilePreview({ projectId, filePath, content, loading }: P
         )}
       </div>
       {isMarkdown && !raw ? (
-        <div className={content}>
+        <div className={mdContent}>
           <EntityMarkdown content={content} dict={dict} projectId={projectId} />
         </div>
       ) : (
