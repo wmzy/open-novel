@@ -24,6 +24,8 @@ import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import InlineInspiration from '../InlineInspiration';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
+import { useNovelDocument } from '@/web/hooks/useNovelDocument';
+import { sanitizeFileName } from '@/shared/split-document';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
@@ -280,10 +282,9 @@ function categorizeWuxiaFiles(files: { path: string; content: string }[]): Wuxia
 }
 
 export default function WuxiaView({ projectId }: Props) {
-  const { data: worldData, isLoading: worldLoading } = useNovelFile(
+  const { data: worldData, isLoading: worldLoading } = useNovelDocument(
     projectId,
     'world',
-    'world-building.md'
   );
   const { data: charData, isLoading: charLoading } = useNovelFile(
     projectId,
@@ -291,7 +292,7 @@ export default function WuxiaView({ projectId }: Props) {
     'characters/profiles.md'
   );
   const [viewMode, setViewMode] = useViewMode();
-  const revision = useFileRevision({ projectId, targetFile: '', stage: 'wuxia' });
+  const revision = useFileRevision({ projectId, targetFile: 'world/index.md', stage: 'wuxia' });
 
   // .novel/wuxia/ 独立文件（旧工具迁移项目）
   const { data: fileList } = useNovelFileList(projectId);
@@ -372,8 +373,8 @@ export default function WuxiaView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>武侠</h3>
-        <button className={reviseBtn} onClick={() => revision.openRevise('world-building.md')} title="修订世界观/武侠设定">✎ 修订</button>
-        <button className={renameBtn} onClick={() => revision.openRename('world-building.md')} title="重命名">⇄ 重命名</button>
+        <button className={reviseBtn} onClick={() => revision.openRevise('world/index.md')} title="修订世界观/武侠设定">✎ 修订</button>
+        <button className={renameBtn} onClick={() => revision.openRename('world/index.md')} title="重命名">⇄ 重命名</button>
         <button
           className={reviseBtn}
           onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'world' } }))}
@@ -441,8 +442,8 @@ export default function WuxiaView({ projectId }: Props) {
                   <div key={i} className={card} style={cardStyle}>
                     <div className={cardTitle}>
                       <span className={cardTitleText}>{s.title}</span>
-                      <button className={cardReviseBtn} onClick={() => revision.openRevise('world-building.md', s.title)} title="修订这一节">✎</button>
-                      <button className={cardReviseBtn} onClick={() => revision.openRename('world-building.md')} title="重命名">⇄</button>
+                      <button className={cardReviseBtn} onClick={() => revision.openRevise(`world/${sanitizeFileName(s.title)}.md`)} title="修订这一节">✎</button>
+                      <button className={cardReviseBtn} onClick={() => revision.openRename('world/index.md')} title="重命名">⇄</button>
                     </div>
                     {empty ? (
                       <span className={dimEmpty}>暂无内容</span>

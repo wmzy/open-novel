@@ -51,7 +51,24 @@ function renderView() {
 function mockFiles(map: Record<string, string | number>) {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input);
+    // 拆分文档合并接口
+    if (url.includes('/document/')) {
+      const docMatch = url.match(/\/document\/(concept|world|outline)$/);
+      if (docMatch) {
+        const docType = docMatch[1];
+        // outline 合并接口返回 merge 后的内容
+        const mergeKey = `${docType}-merged`;
+        if (map[mergeKey] !== undefined) {
+          if (typeof map[mergeKey] === 'number') {
+            return new Response(JSON.stringify({ error: 'not found' }), { status: map[mergeKey] as number });
+          }
+          return new Response(JSON.stringify({ content: map[mergeKey] }));
+        }
+      }
+    }
+    // 文件读取接口
     for (const [key, val] of Object.entries(map)) {
+      if (key.endsWith('-merged')) continue;
       if (url.includes(`path=${encodeURIComponent(key)}`)) {
         if (typeof val === 'number') {
           return new Response(JSON.stringify({ error: 'not found' }), { status: val });
@@ -73,7 +90,7 @@ describe('OutlineView 标签切换', () => {
 
   it('默认显示详细大纲', async () => {
     mockFiles({
-      'outline-detailed.md': DETAILED,
+      'outline-merged': DETAILED,
       'outline-brief.md': BRIEF,
       'outline-meta.json': 404,
     });
@@ -86,7 +103,7 @@ describe('OutlineView 标签切换', () => {
 
   it('切换到概览显示 outline-brief 内容', async () => {
     mockFiles({
-      'outline-detailed.md': DETAILED,
+      'outline-merged': DETAILED,
       'outline-brief.md': BRIEF,
       'outline-meta.json': 404,
     });
@@ -107,7 +124,7 @@ describe('OutlineView 标签切换', () => {
 
   it('概览缺失时显示空态', async () => {
     mockFiles({
-      'outline-detailed.md': DETAILED,
+      'outline-merged': DETAILED,
       'outline-brief.md': 404,
       'outline-meta.json': 404,
     });

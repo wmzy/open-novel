@@ -8,6 +8,7 @@ import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildArcDiagram, buildPovTimeline } from '../../../shared/diagram-builders';
 import { parseOutlineMeta } from '../../../shared/outline-meta';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
+import { useNovelDocument } from '@/web/hooks/useNovelDocument';
 
 interface Props {
   projectId: string;
@@ -115,7 +116,7 @@ function chapterNumber(title: string): string | null {
 }
 
 export default function OutlineView({ projectId }: Props) {
-  const { data, isLoading } = useNovelFile(projectId, 'outline', 'outline-detailed.md');
+  const { data, isLoading } = useNovelDocument(projectId, 'outline');
   const { data: briefData } = useNovelFile(projectId, 'outline-brief', 'outline-brief.md');
   const [viewMode, setViewMode] = useViewMode();
   const [tab, setTab] = useState<'detail' | 'brief'>('detail');

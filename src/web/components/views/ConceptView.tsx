@@ -4,6 +4,8 @@ import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, ca
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
+import { useNovelDocument } from '@/web/hooks/useNovelDocument';
+import { sanitizeFileName } from '@/shared/split-document';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
@@ -86,9 +88,9 @@ function isHighlight(title: string): boolean {
 }
 
 export default function ConceptView({ projectId }: Props) {
-  const { data, isLoading } = useNovelFile(projectId, 'concept', 'concept.md');
+  const { data, isLoading } = useNovelDocument(projectId, 'concept');
   const [viewMode, setViewMode] = useViewMode();
-  const revision = useFileRevision({ projectId, targetFile: 'concept.md', stage: 'concept' });
+  const revision = useFileRevision({ projectId, targetFile: 'concept/index.md', stage: 'concept' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -112,7 +114,7 @@ export default function ConceptView({ projectId }: Props) {
       <div key={i} className={card + (highlight ? ' ' + conceptHighlight : '')}>
         <div className={cardTitle + (highlight ? ' ' + conceptHighlightTitle : '')}>
           <span className={cardTitleText}>{s.title}</span>
-          <button className={cardReviseBtn} onClick={() => revision.openRevise(undefined, s.title)} title="修订这一节">✎</button>
+          <button className={cardReviseBtn} onClick={() => revision.openRevise(`concept/${sanitizeFileName(s.title)}.md`)} title="修订这一节">✎</button>
           <button className={cardReviseBtn} onClick={() => revision.openRename()} title="重命名">⇄</button>
         </div>
 

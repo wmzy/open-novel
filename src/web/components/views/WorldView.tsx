@@ -4,7 +4,9 @@ import { css } from '@linaria/core';
 import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
+import { useNovelDocument } from '@/web/hooks/useNovelDocument';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
+import { sanitizeFileName } from '@/shared/split-document';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 
 interface Props {
@@ -47,9 +49,9 @@ function colorFor(title: string, fallbackIndex: number): string {
 }
 
 export default function WorldView({ projectId }: Props) {
-  const { data, isLoading } = useNovelFile(projectId, 'world', 'world-building.md');
+  const { data, isLoading } = useNovelDocument(projectId, 'world');
   const [viewMode, setViewMode] = useViewMode();
-  const revision = useFileRevision({ projectId, targetFile: 'world-building.md', stage: 'world' });
+  const revision = useFileRevision({ projectId, targetFile: 'world/index.md', stage: 'world' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -72,7 +74,7 @@ export default function WorldView({ projectId }: Props) {
       <div key={i} className={card} style={cardStyle}>
         <div className={cardTitle}>
           <span className={cardTitleText}>{s.title}</span>
-          <button className={cardReviseBtn} onClick={() => revision.openRevise(undefined, s.title)} title="修订这一节">✎</button>
+          <button className={cardReviseBtn} onClick={() => revision.openRevise(`world/${sanitizeFileName(s.title)}.md`)} title="修订这一节">✎</button>
           <button className={cardReviseBtn} onClick={() => revision.openRename()} title="重命名">⇄</button>
         </div>
         {empty ? (
