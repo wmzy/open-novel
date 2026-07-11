@@ -57,7 +57,7 @@ export const TEMPLATE_GENERATORS: Record<string, (o: TemplateGenOptions) => stri
 
 /** 生成器名称 → 写入 .novel/ 下的相对路径，供 API 路由统一落盘。 */
 export const TEMPLATE_FILE_PATHS: Record<string, string> = {
-  'outline-detailed': 'outline-detailed.md',
+  'outline-detailed': 'outline/',  // 拆分型：目录（index.md + chapters/）
   'outline-brief': 'outline-brief.md',
   scenes: 'scenes.md',
   'character-profiles': 'characters/profiles.md',
@@ -159,6 +159,61 @@ export function generateOutlineDetailed(options: TemplateGenOptions): string {
     lines.push('');
   }
   return `${lines.join('\n').trimEnd()}\n`;
+}
+
+/** 拆分型模板生成结果。 */
+export interface SplitTemplateResult {
+  indexContent: string;
+  cards: Array<{ relativePath: string; content: string }>;
+}
+
+/**
+ * 生成详细大纲（拆分格式）：返回索引 + 逐章卡片文件。
+ * 每章一张独立卡片文件（chapters/第N章.md），index.md 提供全局结构索引。
+ */
+export function generateOutlineDetailedSplit(options: TemplateGenOptions): SplitTemplateResult {
+  const n = Math.max(1, options.chapterCount);
+  const per = wordsPerChapter(options);
+  const plan = planActs(n);
+
+  const cards: SplitTemplateResult['cards'] = [];
+  for (let i = 1; i <= n; i++) {
+    const lines: string[] = [
+      `## 第 ${i} 章：{章节标题} ｜ ${actName(i, plan)} ｜ 目标约 ${per} 字`,
+      `- **结构定位**：${chapterHint(i, n, plan)}`,
+      '- **主要场景**：{一句话概括本章核心场景与发生地点}',
+      '- **目标**：{主角在本章想要达成什么}',
+      '- **冲突**：{什么力量或角色阻碍了目标的实现}',
+      '- **结果**：{本章结局——灾难升级还是取得进展？}',
+      '- **伏笔/回调**：{埋下的伏笔，或回收的前文线索}',
+    ];
+    cards.push({ relativePath: `chapters/第${i}章.md`, content: lines.join('\n') });
+  }
+
+  // 构建索引
+  const themePart = options.theme ? `｜主题：${options.theme}` : '';
+  const indexLines: string[] = [
+    `# 详细大纲索引：《${options.title}》`,
+    '',
+    `> 类型：${options.genre}${themePart}｜视角：${perspectiveLabel(options.perspective)}｜目标字数：约 ${options.targetWords} 字｜共 ${n} 章（每章约 ${per} 字）`,
+    '> 每章独立文件位于 chapters/第N章.md，用 Read 工具按需读取单章大纲。',
+    '',
+    '## 三幕结构',
+    '',
+    '| 幕 | 章节范围 |',
+    '|---|---|',
+    `| 第一幕·设置 | ${rangeStr(1, plan.act1Count)} |`,
+  ];
+  if (plan.act3Start > plan.act1Count + 1) {
+    indexLines.push(`| 第二幕·对抗 | ${rangeStr(plan.act1Count + 1, plan.act3Start - 1)} |`);
+  }
+  indexLines.push(`| 第三幕·解决 | ${rangeStr(plan.act3Start, n)} |`);
+  indexLines.push('', '## 章节索引', '', '| 章 | 标题 | 文件 |', '|---|---|---|');
+  for (let i = 1; i <= n; i++) {
+    indexLines.push(`| ${i} | {章节标题} | chapters/第${i}章.md |`);
+  }
+
+  return { indexContent: `${indexLines.join('\n')}\n`, cards };
 }
 
 /**
