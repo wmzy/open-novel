@@ -329,6 +329,8 @@ export default function ProjectPage() {
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'characters'] });
         } else if (filePath === 'outline.md' || filePath === 'outline-detailed.md') {
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'outline'] });
+        } else if (filePath === 'outline-brief.md') {
+          queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'outline-brief'] });
         } else if (filePath === 'scenes.md') {
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'scenes'] });
         } else if (filePath === 'foreshadow.json') {
@@ -398,7 +400,17 @@ export default function ProjectPage() {
     outline: 'outline-detailed.md',
     scenes: 'scenes.md',
     foreshadow: 'foreshadow.json',
+    wuxia: 'world-building.md',
   };
+
+  // 直接通过 URL 进入某个视图时（handleViewChange 未被调用），
+  // 按 viewToFile 同步默认预览文件。
+  useEffect(() => {
+    const defaultFile = viewToFile[activeView];
+    if (defaultFile && defaultFile !== previewFile) {
+      setPreviewFile(defaultFile);
+    }
+  }, [activeView]);
 
   const handleViewChange = (view: string) => {
     setActiveView(view);
