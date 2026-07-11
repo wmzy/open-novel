@@ -40,9 +40,22 @@ export function isMarkdownRef(href: string): boolean {
   return /\.md(\?|#|$)/i.test(href);
 }
 
-/** 规范化 .md 引用路径：去掉查询串与锚点，去掉前导 ./。 */
+/**
+ * 规范化 .md 引用路径：
+ *  - 去掉查询串与锚点
+ *  - decodeURIComponent：react-markdown 把中文链接 URL 编码（%E5%89%91…）
+ *  - 去掉前导 ./ / / 和 .novel/ 前缀（agent 文本常用 .novel/xxx.md）
+ *
+ * 注意：不处理 ../ 相对路径前缀——路径解析在 dialog 的 resolveFile 中完成。
+ */
 export function normalizeMdPath(href: string): string {
-  return href.replace(/[?#].*$/, '').replace(/^\.\//, '');
+  let p = href.replace(/[?#].*$/, '');
+  try {
+    p = decodeURIComponent(p);
+  } catch { /* malformed URI, keep as-is */ }
+  return p
+    .replace(/^(\.\/|\/+)/, '')
+    .replace(/^\.novel\//, '');
 }
 
 /** react-markdown 传入 a 组件的 props（含 node 节点引用，需剥离避免传入 DOM）。 */
@@ -174,17 +187,49 @@ export function MarkdownFileDialog({ projectId, filePath, title, onClose }: Prop
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // 加载文件内容
+  // 加载文件内容：先试原始路径，失败则查文件列表做候选解析
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent(currentPath)}`)
-      .then((r) => r.json())
-      .then((data: { content?: string; error?: string }) => {
+
+    const tryFetch = async (p: string) => {
+      const r = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent(p)}`);
+      const data = (await r.json()) as { content?: string; error?: string };
+      if (data.error) return null;
+      return data.content ?? '';
+    };
+
+    const resolveAndFetch = async () => {
+      // 1. 直接试原始路径
+      let content = await tryFetch(currentPath);
+      if (content !== null) return content;
+
+      // 2. 原始路径失败——查文件列表，用后缀匹配候选
+      //    场景：profiles.md 里的链接是 profiles/剑平.md，但该文件实际在
+      //    characters/profiles/剑平.md。又如 ../角色关系图.md 实际在
+      //    characters/角色关系图.md。
+      try {
+        const listResp = await fetch(`/api/projects/${projectId}/files/list`);
+        const listData = (await listResp.json()) as { files?: string[] };
+        const allFiles = listData.files ?? [];
+        // 规范化路径用于后缀匹配：去 ../ 和 ./
+        const normalized = currentPath.replace(/^(\.\.\/)+/, '').replace(/^\.\//, '');
+        const candidate = allFiles.find((f) => f.endsWith(normalized));
+        if (candidate) {
+          content = await tryFetch(candidate);
+          if (content !== null) return content;
+        }
+      } catch { /* list failed, fall through to error */ }
+
+      return null;
+    };
+
+    resolveAndFetch()
+      .then((content) => {
         if (cancelled) return;
-        if (data.error) setError(data.error);
-        else setContent(data.content ?? '');
+        if (content === null) setError('文件未找到：' + currentPath);
+        else setContent(content);
       })
       .catch(() => {
         if (!cancelled) setError('加载失败');

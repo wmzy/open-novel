@@ -402,7 +402,10 @@ projectsRouter.get('/:id/files', async (c) => {
 
   // Normalize and resolve path
   const projectDir = await resolveNovelDir(projectId);
-  const normalizedPath = path.normalize(filePath).replace(/^(\.\.[/\\])+/, '');
+  // 去掉前导 .novel/（agent 文本里常用 .novel/xxx.md 引用文件，
+  // 但 API 从 .novel 目录解析相对路径）
+  const cleanedPath = filePath.replace(/^(\.\/|\/+)/, '').replace(/^\.novel\//, '');
+  const normalizedPath = path.normalize(cleanedPath).replace(/^(\.\.[/\\])+/, '');
   const fullPath = path.resolve(projectDir, normalizedPath);
 
   // Security: ensure path is within project directory (prevent path traversal)
