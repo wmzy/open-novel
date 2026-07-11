@@ -3,7 +3,7 @@ import path from 'node:path';
 import { parseOutlineMeta } from '../shared/outline-meta';
 
 const NOVEL_DIR = '.novel';
-const OUTLINE_FILE = 'outline-detailed.md';
+const OUTLINE_CHAPTERS_DIR = path.join('outline', 'chapters');
 
 /** 读取 .novel/ 下文本文件，失败返回空串。 */
 async function readNovelFile(projectDir: string, rel: string): Promise<string> {
@@ -14,48 +14,14 @@ async function readNovelFile(projectDir: string, rel: string): Promise<string> {
   }
 }
 
-/** 判断章号 N 是否落在范围锚点（如"第16-17章"/"第27-30章"）内。 */
-function chapterInRange(anchorNums: number[], target: number): boolean {
-  if (anchorNums.length === 1) return anchorNums[0] === target;
-  return target >= anchorNums[0] && target <= anchorNums[anchorNums.length - 1];
-}
-
-/** 从大纲全文提取第 N 章块。 */
+/** 从大纲目录读取第 N 章卡片文件。 */
 export async function extractChapterOutline(
   projectDir: string,
   chapter: number,
 ): Promise<string> {
-  const raw = await readNovelFile(projectDir, OUTLINE_FILE);
-  if (!raw) return '';
-
-  const lines = raw.split('\n');
-  const anchorRe = /^####\s+第([\d]+(?:-[\d]+)*)章/;
-  let startIdx = -1;
-
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(anchorRe);
-    if (!m) continue;
-    const nums = m[1].split('-').map((n) => parseInt(n, 10));
-    if (chapterInRange(nums, chapter)) {
-      startIdx = i;
-      break;
-    }
-  }
-
-  if (startIdx === -1) {
-    return `> [第${chapter}章未在 outline-detailed.md 中规划]`;
-  }
-
-  // 截取到下一个 #### 或 ### 之前
-  let endIdx = lines.length;
-  for (let j = startIdx + 1; j < lines.length; j++) {
-    if (/^#{3,4}\s/.test(lines[j])) {
-      endIdx = j;
-      break;
-    }
-  }
-
-  return lines.slice(startIdx, endIdx).join('\n').trim();
+  const content = await readNovelFile(projectDir, `${OUTLINE_CHAPTERS_DIR}/第${chapter}章.md`);
+  if (!content) return `> [第${chapter}章未在 outline/chapters/ 中规划]`;
+  return content;
 }
 
 export interface Cast {
@@ -68,13 +34,14 @@ export interface Cast {
 
 const META_FILE = 'outline-meta.json';
 
-/** 从大纲块表格解析 POV 与出场角色。 */
+/** 从大纲块解析 POV 与出场角色（支持表格格式和 bullet 格式）。 */
 function parseCastFromBlock(block: string): { pov: string; cast: string[] } {
   if (!block) return { pov: '', cast: [] };
   const lines = block.split('\n');
   let pov = '';
   const cast: string[] = [];
   for (const line of lines) {
+    // 表格格式：| POV | 林青 |
     const povM = line.match(/^\|\s*POV\s*\|\s*(.+?)\s*\|/);
     if (povM) {
       pov = povM[1].replace(/（.*?）/g, '').trim();
@@ -83,7 +50,22 @@ function parseCastFromBlock(block: string): { pov: string; cast: string[] } {
     const castM = line.match(/^\|\s*出场角色\s*\|\s*(.+?)\s*\|/);
     if (castM) {
       const cleaned = castM[1].replace(/（.*?）/g, '');
-      for (const part of cleaned.split(/[、，,]/)) {
+      for (const part of cleaned.split(/[、，，]/)) {
+        const n = part.trim();
+        if (n && n !== '（路人）' && n !== '群像') cast.push(n);
+      }
+      continue;
+    }
+    // Bullet 格式：- **POV**：林青  或  - **视点**：林青
+    const bulletPovM = line.match(/^[-*]\s*\*\*(?:POV|视点)\*\*[：:]\s*(.+)/);
+    if (bulletPovM) {
+      pov = bulletPovM[1].replace(/（.*?）/g, '').trim();
+      continue;
+    }
+    const bulletCastM = line.match(/^[-*]\s*\*\*出场角色\*\*[：:]\s*(.+)/);
+    if (bulletCastM) {
+      const cleaned = bulletCastM[1].replace(/（.*?）/g, '');
+      for (const part of cleaned.split(/[、，，]/)) {
         const n = part.trim();
         if (n && n !== '（路人）' && n !== '群像') cast.push(n);
       }

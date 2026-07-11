@@ -9,52 +9,35 @@ describe('chapter-context', () => {
   beforeEach(async () => { dir = await fs.mkdtemp(path.join(os.tmpdir(), 'on-cc-')); });
   afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
 
-  async function writeOutline(content: string) {
-    await fs.mkdir(path.join(dir, '.novel'), { recursive: true });
-    await fs.writeFile(path.join(dir, '.novel', 'outline-detailed.md'), content, 'utf-8');
+  async function writeChapter(chapterNum: number, content: string) {
+    await fs.mkdir(path.join(dir, '.novel', 'outline', 'chapters'), { recursive: true });
+    await fs.writeFile(
+      path.join(dir, '.novel', 'outline', 'chapters', `第${chapterNum}章.md`),
+      content,
+      'utf-8',
+    );
   }
 
 describe('extractChapterOutline', () => {
 
-  it('extracts a single chapter block by anchor', async () => {
-    await writeOutline(`# 卷一
-
-#### 第1章：启程前夜
-| POV | 武松 |
-| 核心事件 | 备战 |
-
-#### 第2章：远行
-| POV | 武松 |
-| 核心事件 | 远行 |`);
+  it('reads a single chapter card file', async () => {
+    await writeChapter(1, '## 第 1 章：启程前夜\n- **POV**：武松\n- **核心事件**：备战');
+    await writeChapter(2, '## 第 2 章：远行\n- **POV**：武松\n- **核心事件**：远行');
     const block = await extractChapterOutline(dir, 1);
-    expect(block).toContain('第1章');
+    expect(block).toContain('第 1 章');
     expect(block).toContain('备战');
     expect(block).not.toContain('远行');
   });
 
-  it('matches range chapters (第16-17章)', async () => {
-    await writeOutline(`#### 第16-17章：江湖初涉
-| POV | 武松 |
-| 核心事件 | 初入江湖 |`);
-    expect(await extractChapterOutline(dir, 16)).toContain('江湖初涉');
-    expect(await extractChapterOutline(dir, 17)).toContain('江湖初涉');
-  });
-
-  it('matches wider range (第27-30章)', async () => {
-    await writeOutline(`#### 第27-30章：棋局
-| POV | 世子 |`);
-    expect(await extractChapterOutline(dir, 29)).toContain('棋局');
-  });
-
-  it('returns placeholder when chapter not found', async () => {
-    await writeOutline(`#### 第1章：a\n| POV | x |`);
+  it('returns placeholder when chapter file not found', async () => {
+    await writeChapter(1, '## 第 1 章：a\n- **POV**：x');
     const block = await extractChapterOutline(dir, 99);
-    expect(block).toContain('未在 outline-detailed.md 中规划');
+    expect(block).toContain('未在 outline/chapters/ 中规划');
   });
 
-  it('returns empty string when outline file missing', async () => {
+  it('returns placeholder when outline directory missing', async () => {
     const block = await extractChapterOutline(dir, 1);
-    expect(block).toBe('');
+    expect(block).toContain('未在 outline/chapters/ 中规划');
   });
 });
 

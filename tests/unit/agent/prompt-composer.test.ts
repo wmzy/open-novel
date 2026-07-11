@@ -712,9 +712,10 @@ describe('composePrompt', () => {
 
     it('injects chapter outline block in writing stage', async () => {
       await seedWritingProject(tempDir);
+      await fs.mkdir(path.join(tempDir, '.novel', 'outline', 'chapters'), { recursive: true });
       await fs.writeFile(
-        path.join(tempDir, '.novel', 'outline-detailed.md'),
-        '#### 第2章：下山\n| POV | 林青 |\n| 核心事件 | 下山遇强敌 |',
+        path.join(tempDir, '.novel', 'outline', 'chapters', '第2章.md'),
+        '## 第 2 章：下山\n- **核心事件**：下山遇强敌',
       );
       const prompt = await composePrompt({
         message: '写第二章',
@@ -729,9 +730,10 @@ describe('composePrompt', () => {
     it('injects cast layer with POV profile in writing stage', async () => {
       const novel = path.join(tempDir, '.novel');
       await seedWritingProject(tempDir);
+      await fs.mkdir(path.join(novel, 'outline', 'chapters'), { recursive: true });
       await fs.writeFile(
-        path.join(novel, 'outline-detailed.md'),
-        '#### 第2章：下山\n| POV | 林青 |\n| 出场角色 | 林青 |',
+        path.join(novel, 'outline', 'chapters', '第2章.md'),
+        '## 第 2 章：下山\n- **POV**：林青\n- **出场角色**：林青',
       );
       await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
       await fs.writeFile(
@@ -752,7 +754,8 @@ describe('composePrompt', () => {
     it('outline block precedes cast layer', async () => {
       const novel = path.join(tempDir, '.novel');
       await seedWritingProject(tempDir);
-      await fs.writeFile(path.join(novel, 'outline-detailed.md'), '#### 第2章\n| POV | 林青 |');
+      await fs.mkdir(path.join(novel, 'outline', 'chapters'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'outline', 'chapters', '第2章.md'), '## 第 2 章\n- **POV**：林青');
       await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
       await fs.writeFile(path.join(novel, 'characters', 'profiles', '林青.md'), '# 林青\n## 出身与经历\nx');
       const prompt = await composePrompt({
@@ -813,9 +816,10 @@ describe('composePrompt', () => {
       const novel = path.join(tempDir, '.novel');
       await seedWritingProject(tempDir);
       // 多个角色，每个档案较大，总长 > 6000 字符
+      await fs.mkdir(path.join(novel, 'outline', 'chapters'), { recursive: true });
       await fs.writeFile(
-        path.join(novel, 'outline-detailed.md'),
-        '#### 第2章：群战\n| POV | 甲 |\n| 出场角色 | 甲、乙、丙、丁、戊 |',
+        path.join(novel, 'outline', 'chapters', '第2章.md'),
+        '## 第 2 章：群战\n- **POV**：甲\n- **出场角色**：甲、乙、丙、丁、戊',
       );
       await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
       for (const name of ['甲', '乙', '丙', '丁', '戊']) {
@@ -847,9 +851,10 @@ describe('composePrompt', () => {
     it('角色档案总内容小于阈值时正常全量注入角色层', async () => {
       const novel = path.join(tempDir, '.novel');
       await seedWritingProject(tempDir);
+      await fs.mkdir(path.join(novel, 'outline', 'chapters'), { recursive: true });
       await fs.writeFile(
-        path.join(novel, 'outline-detailed.md'),
-        '#### 第2章：下山\n| POV | 林青 |\n| 出场角色 | 林青 |',
+        path.join(novel, 'outline', 'chapters', '第2章.md'),
+        '## 第 2 章：下山\n- **POV**：林青\n- **出场角色**：林青',
       );
       await fs.mkdir(path.join(novel, 'characters', 'profiles'), { recursive: true });
       await fs.writeFile(
