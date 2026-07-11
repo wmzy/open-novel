@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { db, ensureDbReady } from '../../../src/db/drizzle';
@@ -80,70 +79,5 @@ describe('GET /api/projects/:id/document/:type', () => {
   it('无效类型返回 400', async () => {
     const res = await apiApp.request(`/api/projects/${projectId}/document/invalid`);
     expect(res.status).toBe(400);
-  });
-});
-
-describe('POST /api/projects/:id/migrate-split', () => {
-  it('迁移 concept.md → concept/ 目录', async () => {
-    const novelDir = path.join(projectDir, '.novel');
-    await fs.mkdir(novelDir, { recursive: true });
-    await fs.writeFile(
-      path.join(novelDir, 'concept.md'),
-      '# 概念\n\n## 核心主题\n\n测试内容\n\n## 基本设定\n\n另一段内容\n',
-    );
-
-    const res = await apiApp.request(`/api/projects/${projectId}/migrate-split`, {
-      method: 'POST',
-    });
-    expect(res.ok).toBe(true);
-    const data = await res.json();
-    const conceptResult = data.results.find((r: { docType: string }) => r.docType === 'concept');
-    expect(conceptResult.migrated).toBe(true);
-    expect(conceptResult.cards).toBe(2);
-
-    // 旧文件已删除
-    expect(existsSync(path.join(novelDir, 'concept.md'))).toBe(false);
-    // 新目录存在
-    expect(existsSync(path.join(novelDir, 'concept', 'index.md'))).toBe(true);
-    expect(existsSync(path.join(novelDir, 'concept', '核心主题.md'))).toBe(true);
-    expect(existsSync(path.join(novelDir, 'concept', '基本设定.md'))).toBe(true);
-  });
-
-  it('迁移 outline-detailed.md → outline/ 目录', async () => {
-    const novelDir = path.join(projectDir, '.novel');
-    await fs.mkdir(novelDir, { recursive: true });
-    await fs.writeFile(
-      path.join(novelDir, 'outline-detailed.md'),
-      '# 详细大纲\n\n## 第 1 章：开头 ｜ 第一幕·设置\n\n- **结构定位**：开篇\n\n## 第 2 章：发展 ｜ 第二幕·对抗\n\n- **结构定位**：推进\n',
-    );
-    await fs.writeFile(
-      path.join(novelDir, 'outline-meta.json'),
-      JSON.stringify({ actBreaks: [1, 1], chapters: [] }),
-    );
-
-    const res = await apiApp.request(`/api/projects/${projectId}/migrate-split`, {
-      method: 'POST',
-    });
-    expect(res.ok).toBe(true);
-    const data = await res.json();
-    const outlineResult = data.results.find((r: { docType: string }) => r.docType === 'outline');
-    expect(outlineResult.migrated).toBe(true);
-    expect(outlineResult.cards).toBe(2);
-
-    expect(existsSync(path.join(novelDir, 'outline-detailed.md'))).toBe(false);
-    expect(existsSync(path.join(novelDir, 'outline', 'index.md'))).toBe(true);
-    expect(existsSync(path.join(novelDir, 'outline', 'chapters', '第1章.md'))).toBe(true);
-    expect(existsSync(path.join(novelDir, 'outline', 'chapters', '第2章.md'))).toBe(true);
-  });
-
-  it('无旧文件时返回 migrated: false', async () => {
-    const res = await apiApp.request(`/api/projects/${projectId}/migrate-split`, {
-      method: 'POST',
-    });
-    expect(res.ok).toBe(true);
-    const data = await res.json();
-    for (const r of data.results) {
-      expect(r.migrated).toBe(false);
-    }
   });
 });

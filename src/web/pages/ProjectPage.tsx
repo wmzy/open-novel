@@ -24,7 +24,6 @@ import WuxiaView from '@/web/components/views/WuxiaView';
 import WritingView from '@/web/components/views/WritingView';
 import { useAgentSelection } from '@/web/hooks/useAgents';
 import { useChatPanelWidth } from '@/web/hooks/useChatPanelWidth';
-import { useNovelFileList } from '@/web/components/views/viewShared';
 
 const layout = css`
   display: flex;
@@ -504,31 +503,6 @@ export default function ProjectPage() {
     }
   };
 
-  // 检测旧格式单文件是否需要迁移
-  const { data: fileList } = useNovelFileList(id!);
-  const hasLegacyFiles = (fileList ?? []).some((f) =>
-    f === 'concept.md' || f === 'world-building.md' || f === 'outline-detailed.md',
-  );
-  const [migrating, setMigrating] = useState(false);
-  const handleMigrate = useCallback(async () => {
-    if (!id) return;
-    setMigrating(true);
-    try {
-      const res = await fetch(`/api/projects/${id}/migrate-split`, { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        const count = data.results?.filter((r: { migrated: boolean }) => r.migrated).length ?? 0;
-        toast.success(`迁移完成：拆分了 ${count} 个文档`);
-        queryClient.invalidateQueries();
-      } else {
-        toast.error('迁移失败');
-      }
-    } catch {
-      toast.error('迁移失败');
-    } finally {
-      setMigrating(false);
-    }
-  }, [id, queryClient]);
 
   if (isLoading) return <div className={stateWrap}>加载中...</div>;
   if (error || !project) {
@@ -562,11 +536,6 @@ export default function ProjectPage() {
           <h2>{project.title}</h2>
           <WorkflowProgress currentStage={project.currentStage} onStageClick={handleViewChange} />
           <div className={toolbarActions}>
-            {hasLegacyFiles && (
-              <button className={previewToggle} onClick={handleMigrate} disabled={migrating} title="将旧格式单文件拆分为卡片目录" style={{ color: 'var(--haze-color-warning, #f59e0b)' }}>
-                {migrating ? '迁移中...' : '迁移卡片格式'}
-              </button>
-            )}
             <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown">MD</button>
             <button className={previewToggle} onClick={() => handleExport('text')} title="导出 TXT">TXT</button>
             <button className={previewToggle} onClick={handleUndo} title="撤销上次更改">撤销</button>
