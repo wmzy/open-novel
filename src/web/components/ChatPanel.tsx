@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRun } from '@/web/hooks/useRun';
 import { useModels, useModelSelection } from '@/web/hooks/useModels';
 import { useConversations } from '@/web/hooks/useConversations';
@@ -161,6 +162,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
   // File autocomplete for @ mentions
   const fileAutocomplete = useFileAutocomplete(projectId);
+  const queryClient = useQueryClient();
 
   const { messages: chatMessages, isRunning, status, contextSize, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
 
@@ -195,6 +197,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   useEffect(() => {
     if (!isRunning && hookConversationId && hookConversationId !== activeConversationId) {
       setActiveConversationId(hookConversationId);
+      // 新会话刚被后端创建，列表缓存尚未包含 → 刷新会话列表，
+      // 否则下方的存在性校验 effect 会把它当成不存在的会话清空，两者互相覆写形成死循环。
+      queryClient.invalidateQueries({ queryKey: ['conversations', projectId] });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isRunning, activeConversationId]);
@@ -350,11 +355,14 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   // 校验恢复的会话 id 仍存在；已被删除则回退到最新会话或清空
   useEffect(() => {
     if (!conversations || activeConversationId === null) return;
+    // hook 持有的会话 id 是刚创建/加载的真实会话，列表可能尚未刷新包含它。
+    // 跳过校验，避免与 sync effect 互相覆写 activeConversationId 造成死循环。
+    if (activeConversationId === hookConversationId) return;
     const stillExists = conversations.some((c) => c.id === activeConversationId);
     if (!stillExists) {
       setActiveConversationId(conversations[0]?.id ?? null);
     }
-  }, [conversations, activeConversationId]);
+  }, [conversations, activeConversationId, hookConversationId]);
 
   // Fetch detected agents
   const { data: agents, isLoading: agentsLoading } = useAgents();

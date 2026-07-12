@@ -7,7 +7,7 @@
  * 归并建议：未来若有更多 ChatPanel 行为测试（命令拦截、autocomplete 等），追加到本文件。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import '@testing-library/jest-dom/vitest';
@@ -30,7 +30,7 @@ const useRunMock = {
   resolveAsk: vi.fn(),
   sendMessage: (...args: unknown[]) => sendMessageSpy(...args),
   cancel: vi.fn(),
-  conversationId: null,
+  conversationId: null as string | null,
   resetConversation: vi.fn(),
   loadConversation: vi.fn(),
 };
@@ -40,7 +40,9 @@ vi.mock('@/web/hooks/useModels', () => ({
   useModels: () => ({ data: [] }),
   useModelSelection: () => ['default', vi.fn()],
 }));
-vi.mock('@/web/hooks/useConversations', () => ({ useConversations: () => ({ data: [] }) }));
+// 可变：会话切换测试需要动态注入列表内容
+const conversationsMock = { data: [] as Array<{ id: string; stage?: string; createdAt: string }> };
+vi.mock('@/web/hooks/useConversations', () => ({ useConversations: () => conversationsMock }));
 vi.mock('@/web/hooks/useAgents', () => ({
   useAgents: () => ({
     data: [{ id: 'claude', name: 'Claude', available: true }],
@@ -83,6 +85,12 @@ function renderPanel() {
 describe('ChatPanel 修订模式', () => {
   beforeEach(() => {
     sendMessageSpy.mockReset();
+    // 重置会话切换相关 mock 到初始状态
+    useRunMock.isRunning = false;
+    useRunMock.conversationId = null;
+    useRunMock.messages = [];
+    localStorage.clear();
+    conversationsMock.data = [];
   });
   afterEach(() => cleanup());
 
@@ -173,5 +181,62 @@ describe('ChatPanel 修订模式', () => {
     fireEvent.change(ta, { target: { value: '改一下' } });
     fireEvent.keyDown(ta, { key: 'Enter' });
     expect(screen.queryByText(/正在修订/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * 会话切换死循环回归测试。
+ *
+ * 来源：用户报告「会话标题切换处一直在死循环自动切换标题」。
+ * 根因：run 完成后 sync effect 把 hook 的新会话 id 写入 activeConversationId，
+ * 但会话列表缓存尚未刷新（不含该 id），存在性校验 effect 又把它回退到列表首个/清空，
+ * 两个 effect 互相覆写形成无限循环，下拉框在两个值间不停闪烁。
+ * 修复：校验 effect 跳过 hook 认可的会话 id；sync 时 invalidate 会话列表。
+ */
+describe('ChatPanel 会话切换不闪烁', () => {
+  beforeEach(() => {
+    useRunMock.isRunning = false;
+    useRunMock.conversationId = null;
+    useRunMock.messages = [];
+    localStorage.clear();
+    conversationsMock.data = [];
+  });
+  afterEach(() => cleanup());
+
+  it('hook 持有新会话 id 但列表尚未刷新时，下拉框稳定指向该会话（不死循环）', async () => {
+    // 模拟刚创建新会话：hook 持有 conv-new，但会话列表缓存还是旧的（仅含 conv-old）
+    useRunMock.isRunning = false;
+    useRunMock.conversationId = 'conv-new';
+    conversationsMock.data = [
+      { id: 'conv-old', stage: 'concept', createdAt: '2025-01-01T00:00:00.000Z' },
+    ];
+
+    renderPanel();
+
+    // 修复后：sync effect 把 activeConversationId 同步为 conv-new，
+    // 存在性校验 effect 跳过（hook 认可），activeConversationId 稳定为 conv-new。
+    // 修复前会因两 effect 互相覆写导致 React Maximum update depth exceeded。
+    // conv-new 不在 select 的 options 中，select.value 会回退，改用持久化值断言。
+    await waitFor(() => {
+      expect(localStorage.getItem('open-novel:active-conversation:p1')).toBe('conv-new');
+    });
+  });
+
+  it('localStorage 恢复的会话 id 不在列表中时，回退到最新会话', async () => {
+    // hook 未持有该会话（初始为 null），模拟 localStorage 残留了已删除会话
+    localStorage.setItem('open-novel:active-conversation:p1', 'conv-deleted');
+    useRunMock.conversationId = null;
+    conversationsMock.data = [
+      { id: 'conv-latest', stage: 'drafting', createdAt: '2025-01-02T00:00:00.000Z' },
+    ];
+
+    renderPanel();
+
+    // 恢复值不在列表且 hook 不认可 → 回退到列表首个
+    await waitFor(() => {
+      const selects = document.querySelectorAll('select');
+      const convSelect = selects[0] as HTMLSelectElement;
+      expect(convSelect.value).toBe('conv-latest');
+    });
   });
 });
