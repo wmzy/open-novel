@@ -27,6 +27,7 @@ function KeyboardShortcuts() {
 const HomePage = lazy(() => import('./web/pages/HomePage'));
 const ProjectPage = lazy(() => import('./web/pages/ProjectPage'));
 const SettingsPage = lazy(() => import('./web/pages/SettingsPage'));
+const HelpPage = lazy(() => import('./web/pages/HelpPage'));
 
 export default function App() {
   return (
@@ -41,6 +42,7 @@ export default function App() {
                 <Route path="/" element={<HomePage />} />
                 <Route path="/projects/:id" element={<ProjectPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/help" element={<HelpPage />} />
               </Routes>
             </Suspense>
           </ErrorBoundary>

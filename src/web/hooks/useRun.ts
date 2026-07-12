@@ -23,6 +23,7 @@ export function useRun(conversationId?: string) {
   const [isRunning, setIsRunning] = useState(false);
   const [status, setStatus] = useState<string>('');
   const [contextSize, setContextSize] = useState<{ chars: number; tokens: number } | null>(null);
+  const [runtimeUsage, setRuntimeUsage] = useState<{ used: number; size: number; costUsd?: number } | null>(null);
   const [availableCommands, setAvailableCommands] = useState<AgentCommand[]>([]);
   const [pendingAsk, setPendingAsk] = useState<AskPrompt | null>(null);
   const activeRunsRef = useRef(new Set<string>());
@@ -109,6 +110,7 @@ export function useRun(conversationId?: string) {
               setIsRunning(false);
               setStatus('');
               setContextSize(null);
+              // runtimeUsage 保留：run 结束后继续展示上次上下文用量
               break;
             }
             case 'stderr': {
@@ -162,6 +164,7 @@ export function useRun(conversationId?: string) {
     setIsRunning(true);
     setStatus('starting');
     setContextSize(null);
+    // runtimeUsage 不重置：新消息复用上次的上下文基线，usage_update 会覆盖
 
     try {
       const res = await fetch('/api/runs', {
@@ -393,6 +396,16 @@ export function useRun(conversationId?: string) {
   function handleAgentEvent(event: Record<string, unknown>) {
     const type = event.type as string;
 
+    // runtime_usage 是临时 UI 状态（运行时真实上下文 token），不挂到消息上
+    if (type === 'runtime_usage') {
+      setRuntimeUsage({
+        used: Number(event.used || 0),
+        size: Number(event.size || 0),
+        costUsd: event.costUsd as number | undefined,
+      });
+      return;
+    }
+
     // commands 是临时 UI 状态，不挂到消息上
     if (type === 'commands') {
       setAvailableCommands((event.commands as AgentCommand[]) ?? []);
@@ -569,10 +582,12 @@ export function useRun(conversationId?: string) {
   const resetConversation = useCallback(() => {
     conversationIdRef.current = null;
     setMessages([]);
+    setRuntimeUsage(null);
   }, []);
 
   const loadConversation = useCallback(async (convId: string) => {
     conversationIdRef.current = convId;
+    setRuntimeUsage(null);
     try {
       const res = await fetch(`/api/conversations/${convId}/messages`);
       if (!res.ok) return;
@@ -591,6 +606,7 @@ export function useRun(conversationId?: string) {
     isRunning,
     status,
     contextSize,
+    runtimeUsage,
     availableCommands,
     pendingAsk,
     resolveAsk,

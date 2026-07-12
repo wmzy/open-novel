@@ -3,6 +3,24 @@ import type { StreamEvent } from './types';
 type EventSink = (event: StreamEvent) => void;
 type BlockState = { type?: string; name?: string; id?: string; input: string };
 
+/**
+ * 从 claude 模型名推断上下文窗口大小（tokens）。
+ * Claude Code stream-json 不在 result 事件中提供窗口大小，需从模型名映射。
+ */
+function claudeContextWindow(model: string): number {
+  const m = model.toLowerCase();
+  // Claude 4 系列（Sonnet/Opus）— API 默认 200k
+  if (m.includes('sonnet-4') || m.includes('opus-4')) return 200_000;
+  // Claude 3.7 Sonnet — 200k
+  if (m.includes('sonnet-3') || m.includes('3-7')) return 200_000;
+  // Claude 3.5 系列 — 200k
+  if (m.includes('3-5')) return 200_000;
+  // Claude 3 系列（Haiku 3k 窗口较小）
+  if (m.includes('haiku-3') && !m.includes('3-5')) return 200_000;
+  // 未知模型：保守返回 200k（Claude 平台默认）
+  return 200_000;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -95,7 +113,14 @@ export function createClaudeStreamHandler(onEvent: EventSink, onComplete?: () =>
     }
     if (obj.type === 'result') {
       const cost = typeof obj.total_cost_usd === 'number' ? obj.total_cost_usd : null;
-      onEvent({ type: 'usage', usage: obj.usage ?? null, costUsd: cost });
+      const usage = obj.usage as Record<string, unknown> | null;
+      onEvent({ type: 'usage', usage: usage ?? null, costUsd: cost });
+      // 额外发 runtime_usage：input_tokens ≈ 当前上下文 token，size 从模型推断
+      const used = (usage?.input_tokens as number) ?? 0;
+      if (used > 0) {
+        const model = typeof obj.model === 'string' ? obj.model : '';
+        onEvent({ type: 'runtime_usage', used, size: claudeContextWindow(model), costUsd: cost });
+      }
       onComplete?.();
       return;
     }

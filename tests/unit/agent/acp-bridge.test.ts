@@ -92,9 +92,31 @@ describe('convertSessionUpdate', () => {
     expect(events).toEqual([]);
   });
 
-  it('忽略 plan / usage_update 等无关 sessionUpdate', () => {
+  it('忽略 plan 等无关 sessionUpdate', () => {
     expect(convertSessionUpdate({ sessionUpdate: 'plan' } as any)).toEqual([]);
-    expect(convertSessionUpdate({ sessionUpdate: 'usage_update' } as any)).toEqual([]);
+  });
+
+  it('把 usage_update 转为 runtime_usage 事件（含 cost）', () => {
+    const events = convertSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 12500,
+      size: 200000,
+      cost: { amount: 0.05, currency: 'USD' },
+    } as any);
+    expect(events).toEqual([
+      { type: 'runtime_usage', used: 12500, size: 200000, costUsd: 0.05 },
+    ]);
+  });
+
+  it('usage_update 无 cost 时 costUsd 为 null', () => {
+    const events = convertSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 500,
+      size: 1000,
+    } as any);
+    expect(events).toEqual([
+      { type: 'runtime_usage', used: 500, size: 1000, costUsd: null },
+    ]);
   });
 
   it('把 available_commands_update 转为 commands 事件', () => {

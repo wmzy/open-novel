@@ -492,6 +492,42 @@ export const deepenHintLabel = css`
   color: var(--haze-color-text);
 `;
 
+/** 上下文使用指示条：展示 ACP runtime usage（used / window size） */
+export const ctxBar = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 1rem;
+  font-size: 0.7rem;
+  color: var(--haze-color-text-secondary);
+  background: var(--haze-color-bg);
+  border-top: 1px solid var(--haze-color-border);
+  font-variant-numeric: tabular-nums;
+`;
+
+/** progress bar 轨道 */
+export const ctxBarTrack = css`
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--haze-color-border);
+  overflow: hidden;
+  max-width: 100px;
+`;
+
+/** progress bar 填充：默认主色 */
+export const ctxBarFill = css`
+  height: 100%;
+  border-radius: 2px;
+  background: var(--haze-color-primary);
+  transition: width 0.3s ease, background 0.3s ease;
+`;
+
+/** progress bar 警告态：上下文占用 >80% */
+export const ctxBarWarn = css`
+  background: var(--haze-color-error, #e5484d);
+`;
+
 /** 深化弹框：用户提示文本区 */
 export const deepenHintInput = css`
   width: 100%;

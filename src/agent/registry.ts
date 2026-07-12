@@ -39,14 +39,12 @@ export const opencodeAgentDef: RuntimeAgentDef = {
   bin: 'opencode',
   versionArgs: ['--version'],
   fallbackModels: [{ id: 'default', label: 'Default' }],
-  buildArgs: (prompt, extraAllowedDirs = []) => {
-    const args = ['--prompt', prompt, '--non-interactive'];
-    const dirs = extraAllowedDirs.filter((d) => typeof d === 'string' && d.length > 0);
-    if (dirs.length > 0) args.push('--add-dir', ...dirs);
-    return args;
-  },
-  streamFormat: 'json-event-stream',
+  // ACP 模式：opencode acp 启动 JSON-RPC server，支持 usage_update（上下文窗口 + 成本）。
+  buildArgs: () => ['acp'],
+  streamFormat: 'acp-json-rpc',
+  usesAcp: true,
   installUrl: 'https://github.com/opencode-ai/opencode',
+  docsUrl: 'https://opencode.ai/docs/acp/',
 };
 
 export const ompAgentDef: RuntimeAgentDef = {

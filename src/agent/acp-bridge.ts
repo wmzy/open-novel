@@ -17,6 +17,7 @@ import {
   type ToolCallUpdate,
   type AvailableCommandsUpdate,
   type SessionConfigOption,
+  type UsageUpdate,
 } from '@agentclientprotocol/sdk';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -134,7 +135,8 @@ function extractEnumOptions(propSchema: Record<string, unknown>): string[] {
  * - agent_thought_chunk (text) → thinking_delta
  * - tool_call → tool_use
  * - tool_call_update (completed/failed) → tool_result
- * - 其余（plan / usage_update / user_message_chunk 等）忽略
+ * - usage_update → runtime_usage（运行时真实上下文 token + 窗口大小）
+ * - 其余（plan / user_message_chunk 等）忽略
  */
 export function convertSessionUpdate(update: SessionUpdate): StreamEvent[] {
   const events: StreamEvent[] = [];
@@ -189,8 +191,18 @@ export function convertSessionUpdate(update: SessionUpdate): StreamEvent[] {
       });
       break;
     }
+    case 'usage_update': {
+      const uu = update as UsageUpdate;
+      events.push({
+        type: 'runtime_usage',
+        used: uu.used,
+        size: uu.size,
+        costUsd: uu.cost?.amount ?? null,
+      });
+      break;
+    }
     default:
-      // plan / plan_update / plan_removed / usage_update / user_message_chunk /
+      // plan / plan_update / plan_removed / user_message_chunk /
       // current_mode_update / config_option_update / session_info_update
       break;
   }

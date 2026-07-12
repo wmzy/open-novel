@@ -35,6 +35,7 @@ import {
   deepenConfirmBtn, deepenCancelBtn, deepenBanner,
   deepenScores, deepenHintLabel, deepenHintInput,
   planToggle, planToggleActive,
+  ctxBar, ctxBarTrack, ctxBarFill, ctxBarWarn,
 } from './ChatPanel.styles';
 
 interface Command {
@@ -76,6 +77,12 @@ const emptyHint = css`
   font-size: 0.75rem;
   opacity: 0.7;
 `;
+
+/** 格式化 token 数为可读字符串（1.2k / 850） */
+function fmtTok(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
 
 /** 活跃运行数标记 */
 const activeCount = css`
@@ -164,7 +171,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const fileAutocomplete = useFileAutocomplete(projectId);
   const queryClient = useQueryClient();
 
-  const { messages: chatMessages, isRunning, status, contextSize, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+  const { messages: chatMessages, isRunning, status, contextSize, runtimeUsage, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
 
   // 灵感注入：来自视图 💡 按钮 dispatch 的事件，直接 sendMessage（消息已组装好）
   useEffect(() => {
@@ -664,8 +671,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         <div className={statusStrip}>
           <span className={statusDot} />
           <span>{status || '运行中...'}</span>
-          {contextSize && (
-            <span className={activeCount}>Ctx {contextSize.tokens >= 1000 ? `${(contextSize.tokens / 1000).toFixed(1)}k` : contextSize.tokens} tok · {(contextSize.chars / 1000).toFixed(1)}k chars</span>
+          {!runtimeUsage && contextSize && (
+            <span className={activeCount}>Ctx {fmtTok(contextSize.tokens)} tok · {(contextSize.chars / 1000).toFixed(1)}k chars</span>
           )}
           {activeRunCount > 1 && <span className={activeCount}>({activeRunCount} active)</span>}
         </div>
@@ -808,6 +815,29 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
                 否
               </button>
             </div>
+          )}
+        </div>
+      )}
+
+      {runtimeUsage && (
+        <div className={ctxBar}>
+          <span>
+            {fmtTok(runtimeUsage.used)} tok
+            {runtimeUsage.size > 0 && ` / ${fmtTok(runtimeUsage.size)} tok`}
+          </span>
+          {runtimeUsage.size > 0 && (
+            <>
+              <div className={ctxBarTrack}>
+                <div
+                  className={cx(ctxBarFill, runtimeUsage.used / runtimeUsage.size > 0.8 && ctxBarWarn)}
+                  style={{ width: `${Math.min(100, (runtimeUsage.used / runtimeUsage.size) * 100)}%` }}
+                />
+              </div>
+              <span>{Math.round((runtimeUsage.used / runtimeUsage.size) * 100)}%</span>
+            </>
+          )}
+          {runtimeUsage.costUsd != null && runtimeUsage.costUsd > 0 && (
+            <span>${runtimeUsage.costUsd.toFixed(4)}</span>
           )}
         </div>
       )}

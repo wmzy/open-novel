@@ -48,6 +48,7 @@ export default function NavHeader() {
       <div className={links}>
         <Link to="/" className={`${link} ${isActive('/') ? activeLink : ''}`}>首页</Link>
         <Link to="/settings" className={`${link} ${isActive('/settings') ? activeLink : ''}`}>设置</Link>
+        <Link to="/help" className={`${link} ${isActive('/help') ? activeLink : ''}`}>帮助</Link>
       </div>
       <div className={navSpacer}>
         <ThemeToggle />
