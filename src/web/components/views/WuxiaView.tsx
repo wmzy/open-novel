@@ -64,6 +64,12 @@ const DIMENSIONS: Array<{ keys: string[]; title: string; color: string; hint: st
     hint: '门派架构、正邪中立势力、江湖格局',
   },
   {
+    keys: ['江湖经济', '经济', '生计', '营生', '镖局', '产业'],
+    title: '江湖经济',
+    color: '#d97706',
+    hint: '侠客生计、门派财源、产业链与经济冲突',
+  },
+  {
     keys: ['武功体系', '武功', '武学', '内力', '功法', '招式', '轻功'],
     title: '武功体系',
     color: '#f97316',
@@ -74,6 +80,12 @@ const DIMENSIONS: Array<{ keys: string[]; title: string; color: string; hint: st
     title: '百工技艺',
     color: '#0ea5e9',
     hint: '冶金火药、机关医毒——武能的天花板',
+  },
+  {
+    keys: ['情报网络', '情报', '信息', '通讯', '消息', '飞鸽'],
+    title: '情报网络',
+    color: '#6366f1',
+    hint: '通讯手段、情报机构、信息战与可靠性分级',
   },
   {
     keys: ['神兵', '兵器', '利器', '名剑', '名刀'],
