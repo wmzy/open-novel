@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { buildEnrichPrompt } from '../../../src/agent/enricher';
+import { initPlugins } from '../../../src/plugins/registry';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 
 /**
  * buildEnrichPrompt：补全缺失结构化数据的 agent 指令构建器。
@@ -53,5 +57,40 @@ describe('buildEnrichPrompt', () => {
   it('限制 agent 只能访问项目目录内', () => {
     const prompt = buildEnrichPrompt(meta);
     expect(prompt).toMatch(/绝不访问.*之外|项目目录.*内/);
+  });
+
+  describe('模板维度补充（skillId 驱动）', () => {
+    let tmpDir: string;
+
+    beforeAll(() => initPlugins());
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'enrich-dim-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('无 skillId 时不包含维度补充步骤', () => {
+      const prompt = buildEnrichPrompt({ projectDir: tmpDir });
+      expect(prompt).not.toContain('第五步·模板维度补充');
+      expect(prompt).not.toContain('追加到对应文件末尾');
+    });
+
+    it('检测到缺失 ## 维度节时，prompt 包含第五步并列出缺失节', () => {
+      // 模拟旧项目：world-building.md 只有部分节
+      fs.mkdirSync(path.join(tmpDir, '.novel'), { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, '.novel', 'world-building.md'),
+        '# 世界观设定\n\n## 时代背景\n南宋。\n\n## 武功体系\n内功。\n',
+      );
+
+      const prompt = buildEnrichPrompt({ projectDir: tmpDir, skillId: 'wuxia' });
+      expect(prompt).toContain('第五步');
+      expect(prompt).toContain('模板维度补充');
+      // wuxia 模板有 10 个 ## 节，项目只写了 2 个，缺失至少含经济/情报
+      expect(prompt).toMatch(/江湖经济|情报网络|阵法/);
+    });
   });
 });

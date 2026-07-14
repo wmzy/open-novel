@@ -692,7 +692,7 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
           chapterCount: projectMeta?.chapterCount ?? 0,
         })
       : currentStage === 'enrich'
-        ? buildEnrichPrompt({ projectDir })
+        ? buildEnrichPrompt({ projectDir, skillId })
         : buildStageInstructions(currentStage, autonomous)
           || STAGE_INSTRUCTIONS[currentStage]
           || `着手推进小说项目的「${currentStage}」阶段。`;

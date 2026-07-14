@@ -452,7 +452,7 @@ export default function HelpPage() {
                     <tr><th>命令 / 视图</th><th>作用</th><th>何时使用</th></tr>
                   </thead>
                   <tbody>
-                    <tr><td><code>/enrich</code></td><td>扫描并补全缺失的结构化数据（state / outline-meta / 关系图，只增不覆盖）</td><td>从旧项目迁移、或手动编辑后修复元数据</td></tr>
+                    <tr><td><code>/enrich</code></td><td>扫描并补全缺失的结构化数据（state / outline-meta / 关系图 / 模板新增维度节，只增不覆盖）</td><td>从旧项目迁移、手动编辑后修复元数据、或插件模板更新后补充新增维度</td></tr>
                     <tr><td><code>/import {'<路径>'}</code></td><td>导入源文本并逆向拆书（自动切章 + 分析）</td><td>有已有小说文本想导入系统分析</td></tr>
                     <tr><td><code>/draft</code></td><td>进入写作阶段，逐章创作正文</td><td>设定完成后开始写正文</td></tr>
                     <tr><td><code>/revision</code></td><td>审阅阶段：检查逻辑/伏笔遗漏/OOC/AI 味，逐章修订</td><td>初稿完成后系统排查问题</td></tr>
