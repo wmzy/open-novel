@@ -154,6 +154,7 @@ interface Section {
 const sections: Section[] = [
   { id: 'quickstart', title: '快速开始' },
   { id: 'workflow', title: '创作流程' },
+  { id: 'wuxia', title: '武侠创作' },
   { id: 'writing', title: '触发 AI 写作' },
   { id: 'editor', title: '章节编辑与重写' },
   { id: 'quality', title: '质量检查' },
@@ -248,6 +249,61 @@ export default function HelpPage() {
                 <p className={paragraph}>
                   在右侧聊天面板选择对应阶段后发送指令（如「请完善世界观设定」），AI 会读取前序阶段产出并写入本阶段文档。侧边栏还提供「总览」「伏笔」「故事脉络」「角色关系」等辅助视图。
                 </p>
+              </div>
+            </section>
+
+            <section id="wuxia" className={section}>
+              <h2 className={sectionTitle}>武侠创作</h2>
+              <div className={sectionBody}>
+                <p className={paragraph}>
+                  创建项目时选择「武侠」题材，系统会自动加载武侠专属模板与写作技能（<code>plugins/wuxia/SKILL.md</code>），
+                  并在侧边栏增加「武侠」视图入口。
+                </p>
+
+                <h3 className={h3}>武侠仪表盘</h3>
+                <p className={paragraph}>
+                  侧边栏点击「武侠」进入设定仪表盘，它聚合两个数据源：
+                </p>
+                <ul className={ul}>
+                  <li><b>独立设定文件</b>（<code>.novel/wuxia/</code>）：按内容自动归类到「功法体系」「神兵利器」「势力总览」「势力详情」等分组</li>
+                  <li><b>世界观维度</b>（<code>world-building.md</code> 的武侠 <code>##</code> 节）+ <b>角色武学路数</b>（<code>characters/profiles.md</code> 中的能力/手段/功法/兵器子节）</li>
+                </ul>
+                <p className={paragraph}>仪表盘以彩色卡片按维度展示，支持以下操作：</p>
+                <table className={table}>
+                  <thead>
+                    <tr><th>操作</th><th>说明</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>✎ 修订</td><td>对单张卡片（某一节）发指令式重写，如「给这个门派增加一个隐藏派规」</td></tr>
+                    <tr><td>⇄ 重命名</td><td>重命名节标题或文件</td></tr>
+                    <tr><td>🔁 深化</td><td>让 AI 自主循环补全世界观中的武侠设定空缺</td></tr>
+                    <tr><td>💡 灵感</td><td>为势力详情卡片生成即兴灵感（门派风格、势力弱点等）</td></tr>
+                  </tbody>
+                </table>
+
+                <h3 className={h3}>专属模板</h3>
+                <p className={paragraph}>
+                  武侠项目的概念与世界观文档使用定制模板，包含武侠特有的结构化区块：
+                </p>
+                <ul className={ul}>
+                  <li><code>concept.md</code>：江湖背景、核心冲突（正邪之争 / 门派纷争 / 个人命运）、武侠元素、道德主题</li>
+                  <li><code>world-building.md</code>：时代背景、江湖格局（正派 / 邪派 / 中立势力表格）、武功体系（内功 / 外功 / 轻功 / 暗器）、百工技艺、神兵利器、江湖规矩、历史恩怨</li>
+                </ul>
+
+                <h3 className={h3}>武侠写作技法</h3>
+                <p className={paragraph}>
+                  武侠技能在通用写作纪律之外注入题材专属约束，核心要点：
+                </p>
+                <ul className={ul}>
+                  <li><b>打斗场景</b>：用动词链与距离感写动作，一招一果；招式命名点缀画面，不可取代画面</li>
+                  <li><b>武功内力</b>：写代价与限制——发一成力伤一分己，内力有尽时，强招有反噬；比拼写体内具体感受，不写「冲击波」</li>
+                  <li><b>门派江湖</b>：门派落到戒律、传承、立场上，江湖张力来自道义两难而非正邪脸谱</li>
+                  <li><b>反 AI 味</b>：武侠版六种模式自检——抽象情绪标签、模板心理独白、排比堆砌、万能形容词、转折连词滥用、情节概括代替演绎</li>
+                </ul>
+                <div className={callout}>
+                  <div className={calloutTitle}>⚔ 写作提示</div>
+                  武侠的质量检查面板会额外审视：武学体系自洽（战力是否膨胀失控）、江湖生态完整（正邪对立是否有深度）、武学成长曲线（主角实力提升节奏）、恩怨因果链是否完整。
+                </div>
               </div>
             </section>
 
