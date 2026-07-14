@@ -231,24 +231,244 @@ export default function HelpPage() {
             <section id="workflow" className={section}>
               <h2 className={sectionTitle}>创作流程</h2>
               <div className={sectionBody}>
-                <p className={paragraph}>创作分为六个阶段，每个阶段产出对应的设定文档：</p>
+                <p className={paragraph}>
+                  创作分为六个阶段，每个阶段产出对应的设定文档。但这<b>不是单向流水线</b>——小说需要反复修改，你可以随时回到任意阶段调整设定、修订章节或重做某个环节，写作阶段会自动引用最新设定。
+                </p>
                 <div className={flow}>{'概念 → 世界观 → 角色 → 大纲 → 场景 → 写作'}</div>
+                <div className={callout}>
+                  <div className={calloutTitle}>🔄 迭代而非流水线</div>
+                  六个阶段是工具箱，不是必须一次走完的传送带。实际创作中你会不断回头：写到第 10 章发现世界观有漏洞，切回 <code>/world</code> 修设定；角色弧光不合理，切回 <code>/characters</code> 调整。工具提供三种修改粒度：
+                  <ul className={ul}>
+                    <li><b>单节修订</b>（✎）：在任意卡片上点 ✎，对那一节发指令式重写——AI 只改相关段落，不碰其余（外科手术规则：改动不超 30%）</li>
+                    <li><b>深化循环</b>（🔁）：让 AI 自主迭代改写，审查→修订→评分，直到改进饱和</li>
+                    <li><b>阶段重做</b>：切回任意阶段重新生成，或用 <code>/revision</code>（检查逻辑/伏笔/OOC）、<code>/polish</code>（润色行文）系统打磨</li>
+                  </ul>
+                  所有修改都有安全网：每次写入自动创建快照，不满意用「撤销」回退；关键节点用「存版本」锁定。放心改。
+                </div>
+
+                <h3 className={h3}>各阶段详解</h3>
+
+                <p className={paragraph}>
+                  <b>1. 概念</b>{' '}— 快捷指令 <code>/concept</code>
+                </p>
+                <p className={paragraph}>
+                  构思核心概念、一句话梗概、核心冲突与情感基调。AI 会先用范例展示「好的概念长什么样」，再用选择题确认主角原型、核心冲突方向、主题和基调，综合选择后生成。
+                </p>
+                <ul className={ul}>
+                  <li><b>产出</b>：<code>.novel/concept/</code> 目录下每个要素一个独立 <code>.md</code> 文件 + <code>index.md</code> 索引</li>
+                  <li><b>视图操作</b>：每张卡片支持 ✎ 修订（重写某一节）、⇄ 重命名；梗概自动编号显示</li>
+                  <li><b>适用场景</b>：项目刚创建、只有模糊想法时，用本阶段把灵感精炼成可执行的故事前提</li>
+                </ul>
+
+                <p className={paragraph}>
+                  <b>2. 世界观</b>{' '}— 快捷指令 <code>/world</code>
+                </p>
+                <p className={paragraph}>
+                  构建世界设定——时代背景、地理环境、社会结构、力量体系、文化规则等。AI 会确认世界类型（现实/架空/异世界）、力量体系风格、社会结构后生成。卡片按类别自动分配主题色。
+                </p>
+                <ul className={ul}>
+                  <li><b>产出</b>：<code>.novel/world/</code> 目录下每个 <code>##</code> 节一个独立 <code>.md</code> 文件 + <code>index.md</code> 索引</li>
+                  <li><b>视图操作</b>：✎ 修订、⇄ 重命名、🔁 <b>深化</b>（自主循环补全设定空缺，见下文）、Markdown/源码模式切换</li>
+                  <li><b>适用场景</b>：需要建立完整、自洽的世界规则和势力格局时</li>
+                </ul>
+
+                <p className={paragraph}>
+                  <b>3. 角色</b>{' '}— 快捷指令 <code>/characters</code>
+                </p>
+                <p className={paragraph}>
+                  撰写角色档案——主角、反派与关键配角。每个角色需落出驱动力三角（外在目标 / 内在需求 / 核心缺陷），涵盖动机、背景、关系与角色弧光。AI 会确认主角目标、内在需求、核心缺陷、配角规模后生成。
+                </p>
+                <ul className={ul}>
+                  <li><b>产出</b>：<code>.novel/characters/profiles.md</code>（全部角色集中在一个文件）</li>
+                  <li><b>视图操作</b>：✎ 修订（重写整个文件或某个角色节）、⇄ 重命名</li>
+                  <li><b>适用场景</b>：需要丰满的、有弧光的角色阵容时；大纲和写作阶段会引用此处定义的角色状态</li>
+                </ul>
+
+                <p className={paragraph}>
+                  <b>4. 大纲</b>{' '}— 快捷指令 <code>/outline</code>
+                </p>
+                <p className={paragraph}>
+                  将故事拆解为逐章大纲，包括三幕结构、章节节拍与字数分配。AI 会先与你敲定三幕骨架（起点、触发事件、中点转折、高潮走向），确认后再展开逐章规划。同时自动登记全书伏笔。
+                </p>
+                <ul className={ul}>
+                  <li><b>产出</b>：<code>.novel/outline/chapters/第N章.md</code>（每章一个文件）+ <code>index.md</code> 索引 + <code>outline-meta.json</code>（三幕分界 + 视点角色）+ <code>foreshadow.json</code>（伏笔登记）</li>
+                  <li><b>视图操作</b>：概览/详细标签切换；概览展示三幕结构图，详细展示逐章 POV 时间线；✎ 修订</li>
+                  <li><b>脚手架</b>：输入「生成大纲脚手架」可调用 API 自动生成与章节数匹配的逐章骨架，作为起点打磨</li>
+                  <li><b>适用场景</b>：需要清晰的叙事结构和节奏控制时；生成的伏笔表会在写作阶段自动追踪</li>
+                </ul>
+
+                <p className={paragraph}>
+                  <b>5. 场景</b>{' '}— 快捷指令 <code>/scenes</code>
+                </p>
+                <p className={paragraph}>
+                  将大纲拆解为详细场景，规划主动场景（Scene：目标→冲突→灾难/转折）与被动场景（Sequel：反应→困境→新决定）的交替节奏。AI 会确认场景密度、节奏模式和自动化程度后生成。
+                </p>
+                <ul className={ul}>
+                  <li><b>产出</b>：<code>.novel/scenes.md</code>（全部场景集中在一个文件）</li>
+                  <li><b>视图操作</b>：按章节分组展示，主动/被动场景以不同颜色徽标区分；✎ 修订</li>
+                  <li><b>脚手架</b>：输入「生成场景脚手架」可自动生成逐章主动/被动场景配对模板</li>
+                  <li><b>适用场景</b>：写作前需要精确规划每一章的节奏起伏和情绪弧线时</li>
+                </ul>
+
+                <p className={paragraph}>
+                  <b>6. 写作</b>{' '}— 快捷指令 <code>/draft</code>
+                </p>
+                <p className={paragraph}>
+                  逐章创作正文。AI 进入自治模式（不再提问），按层级自动注入核心设定、角色状态、本章大纲、出场角色档案、前文摘要和待兑现伏笔。详见下方「触发 AI 写作」。
+                </p>
+                <ul className={ul}>
+                  <li><b>产出</b>：<code>.novel/chapters/第N章.md</code>（正文 + 摘要 + 状态记录）</li>
+                  <li><b>视图操作</b>：统计面板（已写章数/总字数/平均字数）；章节列表点击进入编辑器；每章 ✎ 修订</li>
+                  <li><b>适用场景</b>：设定完成后的正文创作；也可在 <code>/revision</code>（修改）和 <code>/polish</code>（润色）阶段进一步打磨</li>
+                </ul>
+
+                <h3 className={h3}>三种交互模式</h3>
                 <table className={table}>
                   <thead>
-                    <tr><th>阶段</th><th>产出</th><th>说明</th></tr>
+                    <tr><th>模式</th><th>触发方式</th><th>行为</th><th>适用场景</th></tr>
                   </thead>
                   <tbody>
-                    <tr><td>概念</td><td><code>concept.md</code></td><td>核心概念、前提、主要冲突</td></tr>
-                    <tr><td>世界观</td><td><code>world-building.md</code></td><td>世界设定、规则、历史、文化</td></tr>
-                    <tr><td>角色</td><td><code>characters/profiles.md</code></td><td>角色动机、背景、关系、弧光</td></tr>
-                    <tr><td>大纲</td><td><code>outline-detailed.md</code></td><td>逐章大纲（幕、节拍、字数）</td></tr>
-                    <tr><td>场景</td><td><code>scenes.md</code></td><td>逐章场景（主动 Scene / 被动 Sequel）</td></tr>
-                    <tr><td>写作</td><td><code>chapters/第N章.md</code></td><td>正文 + 摘要 + 状态记录</td></tr>
+                    <tr>
+                      <td><b>采访式</b>（默认）</td>
+                      <td>直接发送指令</td>
+                      <td>AI 先展示范例，用选择题收集创作偏好，追问细节后落盘，最后列清单确认</td>
+                      <td>规划阶段（概念~场景）日常使用，想把控创作方向</td>
+                    </tr>
+                    <tr>
+                      <td><b>自治式</b></td>
+                      <td><code>/explore</code></td>
+                      <td>AI 不提问，所有创作决策自主做出，直接落盘</td>
+                      <td>夜间探索、想看 AI 独立产出的方案、批量推进</td>
+                    </tr>
+                    <tr>
+                      <td><b>Plan Mode</b></td>
+                      <td>输入框旁 📋 规划按钮</td>
+                      <td>AI 只分析规划、输出方案卡，不修改任何文件，等确认后再执行</td>
+                      <td>想先看 AI 的计划再决定是否执行、评估改动范围</td>
+                    </tr>
                   </tbody>
                 </table>
+
+                <h3 className={h3}>深化循环（🔁）</h3>
                 <p className={paragraph}>
-                  在右侧聊天面板选择对应阶段后发送指令（如「请完善世界观设定」），AI 会读取前序阶段产出并写入本阶段文档。侧边栏还提供「总览」「伏笔」「故事脉络」「角色关系」等辅助视图。
+                  适用于<b>概念/世界观/角色/大纲/场景</b>五个规划阶段（写作阶段不用）。在阶段视图点击 🔁 <b>深化</b> 后，AI 进入自主循环，不需你逐轮操作。
                 </p>
+
+                <h4 className={h3} style={{fontSize:'0.95rem'}}>工作原理：审查者-作者双相循环</h4>
+                <p className={paragraph}>
+                  每两轮为一个周期——第 1 轮 AI 扮演<b>审查者</b>找出问题，第 2 轮切换为<b>作者</b>逐条修订，第 3 轮又换回审查者……如此交替。关键设计：
+                </p>
+                <ul className={ul}>
+                  <li><b>盲审机制</b>：审查者<b>不看</b>历史改进日志，每轮形成独立判断，避免“自我满足”</li>
+                  <li><b>视角轮替</b>：每轮审查用不同专家视角（如角色阶段轮换：心理分析师 → 戏剧冲突专家 → 读者代入测试 → 叙事功能审计师 → 跨阶段一致性审计师），确保各维度都被覆盖</li>
+                  <li><b>跨阶段校验</b>：每阶段的最后一个视角会读取前序/后序阶段产出，检查一致性（如审查角色时会检查是否与世界观体系脱节）</li>
+                </ul>
+
+                <h4 className={h3} style={{fontSize:'0.95rem'}}>每轮产出</h4>
+                <table className={table}>
+                  <thead>
+                    <tr><th>轮次</th><th>角色</th><th>做什么</th><th>写入文件</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>奇数轮（1, 3, 5…）</td><td>🔍 审查者</td><td>按当前专家视角审查产出，逐维度打 1-5 分，挑出 2-3 个最薄弱问题并给改进建议</td><td><code>deepen-critique.md</code>（覆盖上一轮）</td></tr>
+                    <tr><td>偶数轮（2, 4, 6…）</td><td>✏️ 作者</td><td>读审查报告 → 逐条回应（成立则修订，不成立则说明原因）→ 主动扩展缺失内容 → 记录评分变化</td><td>阶段产出文件 + <code>deepen-log.md</code>（追加）</td></tr>
+                  </tbody>
+                </table>
+
+                <h4 className={h3} style={{fontSize:'0.95rem'}}>评分维度（每阶段 5 个）</h4>
+                <table className={table}>
+                  <thead>
+                    <tr><th>阶段</th><th>5 个质量维度</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>概念</td><td>核心冲突锐度 · 主题深度 · 独特性 · 情感钩子 · 可展开性</td></tr>
+                    <tr><td>世界观</td><td>体系自洽性 · 历史纵深 · 文化丰富度 · 冲突潜力 · 感官沉浸</td></tr>
+                    <tr><td>角色</td><td>动机清晰度 · 关系丰富度 · 弧光完整性 · 差异化程度 · 功能性覆盖</td></tr>
+                    <tr><td>大纲</td><td>三幕结构 · 因果链紧密度 · 伏笔密度 · 情感节奏 · 主题贯穿</td></tr>
+                    <tr><td>场景</td><td>场景目的性 · 主动被动交替 · 冲突烈度 · 感官落地 · 信息节制</td></tr>
+                  </tbody>
+                </table>
+
+                <h4 className={h3} style={{fontSize:'0.95rem'}}>具体示例：角色阶段深化</h4>
+                <div className={callout}>
+                  <div className={calloutTitle}>场景：你的反派“墨先生”动机单薄，想自动完善</div>
+                  <p className={paragraph} style={{marginTop:'0.5rem'}}>
+                    <b>启动</b>：在角色视图点 🔁，设截止时间 06:00，特别指导填「墨先生是反派，他的动机太单薄了，需要更深的执念和内心矛盾」
+                  </p>
+                  <p className={paragraph}>
+                    <b>第 1 轮（审查 · 心理分析师视角）</b>：AI 扮演心理分析师审查角色档案，输出：<br/>
+                    「动机清晰度 3分：墨先生的“复仇”动机缺乏心理根基，读者不知道为什么他非复仇不可。<br/>
+                    问题1：墨先生对主角的恨意只用了“灭门之仇”一笔带过，没有展现创伤如何扭曲了他的价值观。<br/>
+                    问题2：他的核心缺陷未定义——是偏执？恐惧被遗忘？还是自我毁灭倾向？」
+                  </p>
+                  <p className={paragraph}>
+                    <b>第 2 轮（修订 · 作者角色）</b>：AI 读审查报告，回应：为墨先生补充创伤闪回段、定义核心缺陷为“对被遗忘的极度恐惧”、新增他与师父的决裂因果链。评分变化：动机清晰度 3→5。记录到 <code>deepen-log.md</code>。
+                  </p>
+                  <p className={paragraph}>
+                    <b>第 3 轮（审查 · 戏剧冲突专家视角）</b>：换新视角再审，这次关注关系张力：<br/>
+                    「关系丰富度 2分：墨先生与主角只有单维对立，缺少暧昧或误解层。<br/>
+                    问题1：两人没有共通过去的纠葛，纯粋的敌人关系缺乏戏剧燃料。」
+                  </p>
+                  <p className={paragraph}>
+                    <b>第 4 轮（修订）</b>：新增墨先生与主角师父曾是同门的设定，二人有“同门相残”的宿命感……
+                  </p>
+                  <p className={paragraph}>
+                    循环继续，直到 <b>连续 2 次审查都找不到实质问题</b>（饱和信号）、截止时间到、或你手动点 ✕ 停止。
+                  </p>
+                </div>
+
+                <h4 className={h3} style={{fontSize:'0.95rem'}}>停止条件</h4>
+                <ul className={ul}>
+                  <li><b>改进饱和</b>：连续 2 轮审查报告都标记「无实质改进」，说明产出已足够好</li>
+                  <li><b>截止时间到</b>：达到你设的截止时间自动停止</li>
+                  <li><b>连续 2 轮失败</b>：连续 2 轮运行出错（如 Agent 崩溃），自动退出</li>
+                  <li><b>最大轮数</b>：最多 20 轮（10 个审查-修订周期）作为兜底</li>
+                  <li><b>手动停止</b>：随时点状态条上的 ✕，或发送任意消息中断</li>
+                </ul>
+                <p className={paragraph}>
+                  最低运行 6 轮——在此之前即使出现饱和信号也不会停止，确保有足够的迭代深度。
+                </p>
+
+                <h4 className={h3} style={{fontSize:'0.95rem'}}>启动前与运行中</h4>
+                <ul className={ul}>
+                  <li><b>安全网</b>：启动时自动创建里程碑快照（<code>deepen-{`{stage}`}-start</code>），不满意可用「撤销」一键回退到深化前状态</li>
+                  <li><b>状态条</b>：底部实时显示「🔁 深化中 · 第 N 轮（审查/修订） · 截止 HH:MM」+ 📊 评分轨迹（如「动机清晰度 3→5, 关系丰富度 2→4」）</li>
+                  <li><b>特别指导</b>：可选文本，给 AI 一个方向（如「增加更多女性角色」「加强反派动机深度」），每轮都会注入</li>
+                </ul>
+
+                <div className={callout}>
+                  <div className={calloutTitle}>💡 什么时候用深化？</div>
+                  <ul className={ul} style={{marginTop:'0.5rem'}}>
+                    <li>初版设定太薄、缺乏深度时（如角色动机单薄、世界观体系有漏洞）</li>
+                    <li>想要无人值守地迭代改写（睡前启动，设定截止时间，早上看结果）</li>
+                    <li>卡壳时想看 AI 从不同视角能挑出什么问题</li>
+                  </ul>
+                  深化只作用于<b>规划阶段</b>（概念/世界观/角色/大纲/场景），不改章节正文。正文打磨用 <code>/revision</code> 和 <code>/polish</code>。
+                </div>
+
+                <h3 className={h3}>辅助命令与视图</h3>
+                <table className={table}>
+                  <thead>
+                    <tr><th>命令 / 视图</th><th>作用</th><th>何时使用</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td><code>/enrich</code></td><td>扫描并补全缺失的结构化数据（state / outline-meta / 关系图，只增不覆盖）</td><td>从旧项目迁移、或手动编辑后修复元数据</td></tr>
+                    <tr><td><code>/import {'<路径>'}</code></td><td>导入源文本并逆向拆书（自动切章 + 分析）</td><td>有已有小说文本想导入系统分析</td></tr>
+                    <tr><td><code>/draft</code></td><td>进入写作阶段，逐章创作正文</td><td>设定完成后开始写正文</td></tr>
+                    <tr><td><code>/revision</code></td><td>审阅阶段：检查逻辑/伏笔遗漏/OOC/AI 味，逐章修订</td><td>初稿完成后系统排查问题</td></tr>
+                    <tr><td><code>/polish</code></td><td>润色阶段：用词精准度、句式节奏、对话自然度</td><td>修订后最终行文打磨</td></tr>
+                    <tr><td><code>/retry</code></td><td>重试上一条消息</td><td>上一次结果不满意想重新生成</td></tr>
+                    <tr><td>侧边栏「伏笔」</td><td>查看全书伏笔埋设/回收状态</td><td>检查伏笔回收率、追踪未兑现的线索</td></tr>
+                    <tr><td>侧边栏「故事脉络」</td><td>可视化叙事弧线走势</td><td>检视整体节奏和张分布</td></tr>
+                    <tr><td>侧边栏「角色关系」</td><td>角色关系图谱</td><td>审视角色间的连接和势力结构</td></tr>
+                    <tr><td>侧边栏「总览」</td><td>项目统计、进度条、最近章节与快照</td><td>了解项目整体状态和写作进度</td></tr>
+                  </tbody>
+                </table>
+
+                <div className={callout}>
+                  <div className={calloutTitle}>💡 修改设定后的善后</div>
+                  回到前期阶段调整设定后，用 <code>/enrich</code> 同步更新结构化元数据（state / outline-meta / 角色关系图），确保后续写作引用的是最新状态。已写成的章节不会自动追溯修改，如需调整已完成章节以匹配新设定，用章节编辑器的✎ 修订逐一处理。
+                </div>
               </div>
             </section>
 
