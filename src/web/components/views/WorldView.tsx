@@ -1,13 +1,14 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useNovelDocument } from '@/web/hooks/useNovelDocument';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
 import { sanitizeFileName } from '@/shared/split-document';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
+import InspirationPicker from '../InspirationPicker';
 
 interface Props {
   projectId: string;
@@ -51,6 +52,7 @@ function colorFor(title: string, fallbackIndex: number): string {
 export default function WorldView({ projectId }: Props) {
   const { data, isLoading } = useNovelDocument(projectId, 'world');
   const [viewMode, setViewMode] = useViewMode();
+  const [showInspiration, setShowInspiration] = useState(false);
   const revision = useFileRevision({ projectId, targetFile: 'world/index.md', stage: 'world' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
@@ -97,8 +99,12 @@ export default function WorldView({ projectId }: Props) {
           onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'world' } }))}
           title="自主循环深化世界观阶段"
         >🔁 深化</button>
+        <button className={inspireToggleBtn} onClick={() => setShowInspiration((v) => !v)}>
+          {showInspiration ? '▾ 收起灵感' : '💡 灵感'}
+        </button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      {showInspiration && <InspirationPicker stage="world" />}
       <div className={worldGrid}>{sections.map(renderCategory)}</div>
       {revision.renameDialog}
     </div>

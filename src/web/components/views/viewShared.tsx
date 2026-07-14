@@ -86,7 +86,7 @@ export const reviseBtn = css`
   }
 `;
 
-/** 重命名按钮样式：与 reviseBtn 同尺寸，用次级文字色区分机械操作。 */
+/** 重命名按钮样式：与 reviseBtn 同尺寸，用次级文本色区分机械操作。 */
 export const renameBtn = css`
   padding: 0.25rem 0.6rem;
   border: 1px solid var(--haze-color-border);
@@ -99,6 +99,18 @@ export const renameBtn = css`
     border-color: var(--haze-color-text-secondary);
     color: var(--haze-color-text);
   }
+`;
+
+/** 灵感切换按钮样式：与 reviseBtn/renameBtn 同尺寸，用于展开/收起灵感选择器。 */
+export const inspireToggleBtn = css`
+  font-size: 0.75rem;
+  background: none;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+  color: var(--haze-color-text);
+  &:hover { background: var(--haze-color-bg-hover, rgba(255, 255, 255, 0.05)); }
 `;
 
 /** 卡片底座。 */

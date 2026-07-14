@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { css, cx } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
@@ -9,6 +9,8 @@ import { buildArcDiagram, buildPovTimeline } from '../../../shared/diagram-build
 import { parseOutlineMeta } from '../../../shared/outline-meta';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 import { useNovelDocument } from '@/web/hooks/useNovelDocument';
+import { useFileRevision } from '@/web/hooks/useFileRevision';
+import InspirationPicker from '../InspirationPicker';
 
 interface Props {
   projectId: string;
@@ -120,6 +122,8 @@ export default function OutlineView({ projectId }: Props) {
   const { data: briefData } = useNovelFile(projectId, 'outline-brief', 'outline-brief.md');
   const [viewMode, setViewMode] = useViewMode();
   const [tab, setTab] = useState<'detail' | 'brief'>('detail');
+  const [showInspiration, setShowInspiration] = useState(false);
+  const revision = useFileRevision({ projectId, targetFile: 'outline/index.md', stage: 'outline' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
   const briefSections = useMemo(() => (briefData ? parseSections(briefData).sections : []), [briefData]);
@@ -186,13 +190,19 @@ export default function OutlineView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>大纲</h3>
+        <button className={reviseBtn} onClick={() => revision.openRevise()}>✎ 修订</button>
+        <button className={renameBtn} onClick={() => revision.openRename()}>⇄ 重命名</button>
         <button
           className={reviseBtn}
           onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'outline' } }))}
           title="自主循环深化大纲阶段"
         >🔁 深化</button>
+        <button className={inspireToggleBtn} onClick={() => setShowInspiration((v) => !v)}>
+          {showInspiration ? '▾ 收起灵感' : '💡 灵感'}
+        </button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      {showInspiration && <InspirationPicker stage="outline" />}
       <div className={tabBar}>
         <button className={cx(tabBtn, tab === 'detail' && tabBtnActive)} onClick={() => setTab('detail')}>详细</button>
         <button className={cx(tabBtn, tab === 'brief' && tabBtnActive)} onClick={() => setTab('brief')}>概览</button>
@@ -220,6 +230,7 @@ export default function OutlineView({ projectId }: Props) {
       ) : (
         <div className={chapterList}>{briefSections.map(renderBriefSection)}</div>
       )}
+      {revision.renameDialog}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { css, cx } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
 import { CollapsibleDiagram } from '../MermaidDiagram';
@@ -99,17 +99,6 @@ function detectRole(title: string): RoleStyle {
 const namingToggleBtn = css`
   font-size: 0.75rem;
   color: var(--haze-color-primary);
-  background: none;
-  border: 1px solid var(--haze-color-border);
-  border-radius: 4px;
-  padding: 0.15rem 0.5rem;
-  cursor: pointer;
-  &:hover { background: var(--haze-color-bg-hover, rgba(255,255,255,0.05)); }
-`;
-
-/** 灵感按钮切换：与 namingToggleBtn 同尺寸。 */
-const inspireToggleBtn = css`
-  font-size: 0.75rem;
   background: none;
   border: 1px solid var(--haze-color-border);
   border-radius: 4px;

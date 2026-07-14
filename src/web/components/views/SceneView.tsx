@@ -1,11 +1,13 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
 import type { ViewMode } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection, MdSubsection } from './parseSections';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
+import { useFileRevision } from '@/web/hooks/useFileRevision';
+import InspirationPicker from '../InspirationPicker';
 
 interface Props {
   projectId: string;
@@ -97,6 +99,8 @@ function renderSceneCard(sub: MdSubsection, keyPrefix: string, index: number, vi
 export default function SceneView({ projectId }: Props) {
   const { data, isLoading } = useNovelFile(projectId, 'scenes', 'scenes.md');
   const [viewMode, setViewMode] = useViewMode();
+  const [showInspiration, setShowInspiration] = useState(false);
+  const revision = useFileRevision({ projectId, targetFile: 'scenes.md', stage: 'scenes' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
 
@@ -131,14 +135,21 @@ export default function SceneView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>场景</h3>
+        <button className={reviseBtn} onClick={() => revision.openRevise()}>✎ 修订</button>
+        <button className={renameBtn} onClick={() => revision.openRename()}>⇄ 重命名</button>
         <button
           className={reviseBtn}
           onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'scenes' } }))}
           title="自主循环深化场景阶段"
         >🔁 深化</button>
+        <button className={inspireToggleBtn} onClick={() => setShowInspiration((v) => !v)}>
+          {showInspiration ? '▾ 收起灵感' : '💡 灵感'}
+        </button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      {showInspiration && <InspirationPicker stage="scene" />}
       <div className={chapterGroupList}>{sections.map(renderChapter)}</div>
+      {revision.renameDialog}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { css, cx } from '@linaria/core';
 import { useQueries } from '@tanstack/react-query';
@@ -19,10 +19,12 @@ import {
   ViewToolbar,
   useViewMode,
   viewHeaderRow,
+  inspireToggleBtn,
 } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import InlineInspiration from '../InlineInspiration';
+import InspirationPicker from '../InspirationPicker';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
 import { useNovelDocument } from '@/web/hooks/useNovelDocument';
 import { sanitizeFileName } from '@/shared/split-document';
@@ -304,6 +306,7 @@ export default function WuxiaView({ projectId }: Props) {
     'characters/profiles.md'
   );
   const [viewMode, setViewMode] = useViewMode();
+  const [showInspiration, setShowInspiration] = useState(false);
   const revision = useFileRevision({ projectId, targetFile: 'world/index.md', stage: 'wuxia' });
 
   // .novel/wuxia/ 独立文件（旧工具迁移项目）
@@ -392,8 +395,12 @@ export default function WuxiaView({ projectId }: Props) {
           onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'world' } }))}
           title="自主循环深化武侠设定阶段"
         >🔁 深化</button>
+        <button className={inspireToggleBtn} onClick={() => setShowInspiration((v) => !v)}>
+          {showInspiration ? '▾ 收起灵感' : '💡 灵感'}
+        </button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      {showInspiration && <InspirationPicker stage="wuxia" />}
 
       {!hasWorldDim && !hasChars && !hasWuxiaFiles && (
         <EmptyState message="世界观与角色档案中暂无可识别的武侠维度内容。" command="/world" />

@@ -1,12 +1,13 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { css, cx } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
 import { useNovelDocument } from '@/web/hooks/useNovelDocument';
 import { sanitizeFileName } from '@/shared/split-document';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
+import InspirationPicker from '../InspirationPicker';
 
 interface Props {
   projectId: string;
@@ -90,6 +91,7 @@ function isHighlight(title: string): boolean {
 export default function ConceptView({ projectId }: Props) {
   const { data, isLoading } = useNovelDocument(projectId, 'concept');
   const [viewMode, setViewMode] = useViewMode();
+  const [showInspiration, setShowInspiration] = useState(false);
   const revision = useFileRevision({ projectId, targetFile: 'concept/index.md', stage: 'concept' });
 
   const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
@@ -151,8 +153,12 @@ export default function ConceptView({ projectId }: Props) {
           onClick={() => window.dispatchEvent(new CustomEvent(DEEPEN_TO_CHAT_EVENT, { detail: { stage: 'concept' } }))}
           title="自主循环深化概念阶段"
         >🔁 深化</button>
+        <button className={inspireToggleBtn} onClick={() => setShowInspiration((v) => !v)}>
+          {showInspiration ? '▾ 收起灵感' : '💡 灵感'}
+        </button>
         <ViewToolbar mode={viewMode} onChange={setViewMode} />
       </div>
+      {showInspiration && <InspirationPicker stage="concept" />}
       <div className={conceptGrid}>{sections.map(renderElement)}</div>
       {revision.renameDialog}
     </div>
