@@ -324,6 +324,13 @@ function isWritingStage(stage: string): boolean {
   return WRITING_STAGES.has(stage);
 }
 
+/** 规划阶段：预注入 concept/world 核心设定文件，省去 agent 多轮 Read 往返。 */
+const PLANNING_STAGES = new Set(['concept', 'world', 'characters', 'outline', 'scenes']);
+
+function isPlanningStage(stage: string): boolean {
+  return PLANNING_STAGES.has(stage);
+}
+
 /**
  * 检测用户消息与当前阶段的错配。
  *
@@ -392,6 +399,71 @@ async function buildCoreSettingsLayer(projectDir: string): Promise<string> {
 
   if (blocks.length === 0) return '';
   return `### 核心设定层（恒定）\n${blocks.join('\n\n')}`;
+}
+
+/** 预注入预算上限：超过此值退化为索引模式。 */
+const PLANNING_CONTEXT_BUDGET = 80 * 1024; // 80KB
+
+/** 规划阶段预注入的目录（按优先级排序）。 */
+const PLANNING_DIRS = ['concept', 'world'];
+
+/**
+ * 读取 .novel/{dir}/ 下所有 .md 文件内容，按文件名排序返回。
+ */
+async function readNovelDirFiles(
+  projectDir: string,
+  dir: string,
+): Promise<Array<{ rel: string; content: string }>> {
+  const dirPath = path.join(projectDir, '.novel', dir);
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dirPath);
+  } catch {
+    return [];
+  }
+  const result: Array<{ rel: string; content: string }> = [];
+  for (const name of entries.sort()) {
+    if (!name.endsWith('.md')) continue;
+    const content = await readNovelFile(projectDir, `${dir}/${name}`);
+    if (content) {
+      result.push({ rel: `${dir}/${name}`, content });
+    }
+  }
+  return result;
+}
+
+/**
+ * 为规划阶段预注入核心设定文件内容，省去 agent 多轮 Read 往返。
+ *
+ * 背景：按请求计费模式下，concept 阶段 agent 平均需读 5-10 个文件
+ * （2-3 轮 LLM 调用）。预注入可省去全部 Read 轮次。
+ *
+ * 注入范围：concept/ 全部 .md + world/ 全部 .md + outline-brief.md。
+ * 总量超 80KB 时退化为索引模式（只注入文件名列表 + 按需 Read 提示）。
+ */
+async function buildPlanningContextLayer(projectDir: string): Promise<string> {
+  const files: Array<{ rel: string; content: string }> = [];
+
+  for (const dir of PLANNING_DIRS) {
+    files.push(...await readNovelDirFiles(projectDir, dir));
+  }
+
+  const brief = await readNovelFile(projectDir, 'outline-brief.md');
+  if (brief) {
+    files.push({ rel: 'outline-brief.md', content: brief });
+  }
+
+  if (files.length === 0) return '';
+
+  const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
+
+  if (totalSize > PLANNING_CONTEXT_BUDGET) {
+    const fileList = files.map((f) => `- ${f.rel}`).join('\n');
+    return `## 项目核心设定索引\n以下文件已存在但未注入全文（总量 ${Math.round(totalSize / 1024)}KB 超过 80KB 预算）。\n如需了解具体内容，请用 Read 工具读取相关文件。\n\n${fileList}`;
+  }
+
+  const blocks = files.map((f) => `### ${f.rel}\n${f.content}`);
+  return `## 项目核心设定（已注入——无需再 Read）\n\n${blocks.join('\n\n')}`;
 }
 
 /** 文风参考索引层：列出可用文风参考文件，不注入全文。 */
@@ -805,6 +877,15 @@ ${questionRule}
     const layers = await buildWritingContextLayers(projectDir, currentChapter);
     if (layers) {
       parts.push(`\n${layers}`);
+    }
+  }
+
+  // 规划阶段（非 deepen）：预注入 concept/world 核心设定文件，
+  // 省去 agent 每轮 Read 往返（按请求计费模式下省 2+ 轮 LLM 调用）
+  if (isPlanningStage(currentStage) && !deepenContext) {
+    const planningLayer = await buildPlanningContextLayer(projectDir);
+    if (planningLayer) {
+      parts.push(`\n${planningLayer}`);
     }
   }
 

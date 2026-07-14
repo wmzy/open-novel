@@ -568,7 +568,7 @@ describe('composePrompt', () => {
       expect(prompt).toContain('黑玉印章');
     });
 
-    it('does not inject layers in concept stage (unchanged behavior)', async () => {
+    it('does not inject writing-stage Novel Context Layers in concept stage', async () => {
       await seedWritingProject(tempDir);
       const prompt = await composePrompt({
         message: 'hi',
@@ -576,7 +576,10 @@ describe('composePrompt', () => {
         stage: 'concept',
         projectDir: tempDir,
       });
+      // 写作阶段的分层上下文不注入（状态/摘要/伏笔等）
       expect(prompt).not.toContain('## Novel Context Layers');
+      // 但规划阶段核心设定已注入（见 planning-stage context layer 测试）
+      expect(prompt).toContain('## 项目核心设定');
       // 仍保留文件名列表行为
       expect(prompt).toContain('## Project Files');
     });
@@ -873,6 +876,129 @@ describe('composePrompt', () => {
       expect(prompt).toContain('太窄');
       // 不出现索引模式
       expect(prompt).not.toContain('### 本章出场角色索引');
+    });
+  });
+
+  describe('planning-stage context layer (预注入核心设定)', () => {
+    /** 创建含 concept/world 详情文件的测试项目 */
+    async function seedPlanningProject(d: string) {
+      const novel = path.join(d, '.novel');
+      await fs.mkdir(path.join(novel, 'concept'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'concept', 'index.md'), '# 概念索引');
+      await fs.writeFile(path.join(novel, 'concept', '核心主题.md'), '# 核心主题\n侠义与灭门');
+      await fs.writeFile(path.join(novel, 'concept', '一句话梗概.md'), '少年复仇的故事');
+      await fs.mkdir(path.join(novel, 'world'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'world', 'index.md'), '# 世界观索引');
+      await fs.writeFile(path.join(novel, 'world', '世界规则.md'), '剑气可以凝结');
+      await fs.writeFile(path.join(novel, 'outline-brief.md'), '# 大纲简述\n第一幕：灭门');
+    }
+
+    it('concept 阶段注入 concept/world 全部文件 + outline-brief', async () => {
+      await seedPlanningProject(tempDir);
+      const prompt = await composePrompt({
+        message: '帮我完善概念',
+        projectId: 'p',
+        stage: 'concept',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## 项目核心设定（已注入——无需再 Read）');
+      // concept 文件全部注入
+      expect(prompt).toContain('### concept/核心主题.md');
+      expect(prompt).toContain('侠义与灭门');
+      expect(prompt).toContain('### concept/一句话梗概.md');
+      expect(prompt).toContain('少年复仇的故事');
+      // world 文件注入
+      expect(prompt).toContain('### world/世界规则.md');
+      expect(prompt).toContain('剑气可以凝结');
+      // outline-brief 注入
+      expect(prompt).toContain('### outline-brief.md');
+      expect(prompt).toContain('第一幕：灭门');
+    });
+
+    it('所有规划阶段均注入核心设定', async () => {
+      await seedPlanningProject(tempDir);
+      for (const stage of ['concept', 'world', 'characters', 'outline', 'scenes']) {
+        const prompt = await composePrompt({
+          message: 'go',
+          projectId: 'p',
+          stage,
+          projectDir: tempDir,
+        });
+        expect(prompt).toContain('## 项目核心设定', `stage=${stage} 应注入核心设定`);
+      }
+    });
+
+    it('写作阶段不注入 planning context layer', async () => {
+      await seedPlanningProject(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## 项目核心设定');
+      // 写作阶段用的是 Novel Context Layers（核心设定层是索引模式）
+      expect(prompt).toContain('### 核心设定层（恒定）');
+    });
+
+    it('concept/world 文件总量超 80KB 时退化为索引模式', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'concept'), { recursive: true });
+      // 写两个大文件，总计 >80KB
+      const big = 'x'.repeat(50 * 1024);
+      await fs.writeFile(path.join(novel, 'concept', '大文件1.md'), big);
+      await fs.writeFile(path.join(novel, 'concept', '大文件2.md'), big);
+      const prompt = await composePrompt({
+        message: 'go',
+        projectId: 'p',
+        stage: 'concept',
+        projectDir: tempDir,
+      });
+      // 退化为索引模式
+      expect(prompt).toContain('## 项目核心设定索引');
+      expect(prompt).toContain('超过 80KB 预算');
+      expect(prompt).toContain('concept/大文件1.md');
+      // 不注入全文
+      expect(prompt).not.toContain('## 项目核心设定（已注入');
+    });
+
+    it('deepen 模式跳过 planning context layer（由 deepen 块自行注入）', async () => {
+      await seedPlanningProject(tempDir);
+      const prompt = await composePrompt({
+        message: '继续深化',
+        projectId: 'p',
+        stage: 'concept',
+        projectDir: tempDir,
+        deepenContext: { round: 1 },
+      });
+      // deepen 模式不注入 planning context
+      expect(prompt).not.toContain('## 项目核心设定（已注入');
+      // deepen 注入自己的阶段产出文件
+      expect(prompt).toContain('## 当前阶段产出文件');
+    });
+
+    it('concept/world 均为空时不注入 planning context', async () => {
+      // tempDir 为空（无 .novel/concept 和 .novel/world）
+      const prompt = await composePrompt({
+        message: 'go',
+        projectId: 'p',
+        stage: 'concept',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## 项目核心设定');
+    });
+
+    it('planning context 位于 Project Files 与 Available Tools 之间', async () => {
+      await seedPlanningProject(tempDir);
+      const prompt = await composePrompt({
+        message: 'go',
+        projectId: 'p',
+        stage: 'concept',
+        projectDir: tempDir,
+      });
+      const idx = (s: string) => prompt.indexOf(s);
+      expect(idx('## Project Files')).toBeLessThan(idx('## 项目核心设定'));
+      expect(idx('## 项目核心设定')).toBeLessThan(idx('## Available Tools'));
     });
   });
 
