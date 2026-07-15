@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode, type ComponentProps } from 'react';
+import { useState, useEffect, useMemo, memo, type ReactNode, type ComponentProps } from 'react';
 import { css, cx } from '@linaria/core';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -268,7 +268,7 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
   return blocks;
 }
 
-export default function AgentMessage({ role, content, events, startedAt, endedAt, usage, contextSize, error, artifacts, onResend, onReply, projectId }: Props) {
+export default memo(function AgentMessage({ role, content, events, startedAt, endedAt, usage, contextSize, error, artifacts, onResend, onReply, projectId }: Props) {
   const { a: mdLinkA, dialog: mdFileDialog } = useMdFilePreview(projectId);
   if (role === 'user') {
     return (
@@ -289,7 +289,10 @@ export default function AgentMessage({ role, content, events, startedAt, endedAt
     );
   }
 
-  const blocks = events?.length ? buildBlocks(events) : (content ? [{ kind: 'text' as const, text: content }] : []);
+  const blocks = useMemo(
+    () => events?.length ? buildBlocks(events) : (content ? [{ kind: 'text' as const, text: content }] : []),
+    [events, content],
+  );
   const hasContent = blocks.length > 0 || content;
 
   return (
@@ -329,7 +332,7 @@ export default function AgentMessage({ role, content, events, startedAt, endedAt
       {mdFileDialog}
     </div>
   );
-}
+});
 
 function TextBlock({ text, linkComponent }: { text: string; linkComponent?: (props: ComponentProps<'a'> & { node?: unknown }) => ReactNode }) {
   const components = linkComponent ? ({ a: linkComponent } as const) : undefined;

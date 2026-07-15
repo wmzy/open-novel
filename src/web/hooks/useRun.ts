@@ -2,7 +2,10 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { AgentEvent, AgentCommand, AskPrompt } from '@/agent/types';
 import { consumeSseStream, MAX_RECONNECT_ATTEMPTS } from './sse-stream';
 
+let msgIdCounter = 0;
+
 export interface ChatMessage {
+  id: string;
   role: 'user' | 'assistant';
   content: string;
   events?: AgentEvent[];
@@ -63,6 +66,7 @@ export function useRun(conversationId?: string) {
             case 'message': {
               // 历史/固化的完整消息
               setMessages((prev) => [...prev, {
+                id: String(msgIdCounter++),
                 role: data.role as 'user' | 'assistant',
                 content: data.content as string,
                 events: data.events as AgentEvent[] | undefined,
@@ -76,7 +80,7 @@ export function useRun(conversationId?: string) {
               setMessages((prev) => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== 'assistant') {
-                  return [...prev, { role: 'assistant', content: '', events: [], startedAt: Date.now() }];
+                  return [...prev, { id: String(msgIdCounter++), role: 'assistant', content: '', events: [], startedAt: Date.now() }];
                 }
                 return prev;
               });
@@ -160,7 +164,7 @@ export function useRun(conversationId?: string) {
     deepenRound?: number;
   }) => {
     // Add user message
-    setMessages((prev) => [...prev, { role: 'user', content: params.message }]);
+    setMessages((prev) => [...prev, { id: String(msgIdCounter++), role: 'user', content: params.message }]);
     setIsRunning(true);
     setStatus('starting');
     setContextSize(null);
@@ -186,7 +190,7 @@ export function useRun(conversationId?: string) {
             last.error = errorMsg;
             last.endedAt = Date.now();
           } else {
-            updated.push({ role: 'assistant', content: '', error: errorMsg, endedAt: Date.now() });
+            updated.push({ id: String(msgIdCounter++), role: 'assistant', content: '', error: errorMsg, endedAt: Date.now() });
           }
           return updated;
         });
@@ -205,7 +209,7 @@ export function useRun(conversationId?: string) {
       assistantContentRef.current = '';
       assistantEventsRef.current = null;
       assistantArtifactsRef.current = null;
-      setMessages((prev) => [...prev, { role: 'assistant', content: '', events: [], startedAt }]);
+      setMessages((prev) => [...prev, { id: String(msgIdCounter++), role: 'assistant', content: '', events: [], startedAt }]);
 
       // Connect to SSE stream with reconnection support
       let lastEventId: string | undefined;
@@ -352,6 +356,7 @@ export function useRun(conversationId?: string) {
       cleanup(runId);
     } catch (err) {
       setMessages((prev) => [...prev, {
+        id: String(msgIdCounter++),
         role: 'assistant',
         content: '',
         error: err instanceof Error ? err.message : 'Unknown error',
@@ -384,6 +389,11 @@ export function useRun(conversationId?: string) {
       const last = updated[updated.length - 1];
       if (last?.role !== 'assistant') return updated;
 
+      // content 和 events 在同一帧统一更新，避免每个 delta 单独触发一次渲染
+      if (text) {
+        last.content += text;
+        assistantContentRef.current = last.content;
+      }
       const events = [...(last.events || [])];
       if (text) events.push({ kind: 'text', text });
       if (thinking) events.push({ kind: 'thinking', text: thinking });
@@ -420,17 +430,7 @@ export function useRun(conversationId?: string) {
 
     // Handle text/thinking deltas with batching
     if (type === 'text_delta') {
-      const delta = String(event.delta || '');
-      pendingTextDelta += delta;
-      setMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last?.role === 'assistant') {
-          last.content += delta;
-          assistantContentRef.current = last.content;
-        }
-        return updated;
-      });
+      pendingTextDelta += String(event.delta || '');
       if (!rafId) rafId = requestAnimationFrame(flushDeltas);
       return;
     }
@@ -593,6 +593,7 @@ export function useRun(conversationId?: string) {
       if (!res.ok) return;
       const data = await res.json();
       setMessages(data.map((m: { role: string; content: string; events?: AgentEvent[]; artifacts?: { count: number; paths: string[] } }) => ({
+        id: String(msgIdCounter++),
         role: m.role as 'user' | 'assistant',
         content: m.content,
         events: m.events ?? undefined,

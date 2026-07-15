@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRun } from '@/web/hooks/useRun';
@@ -392,6 +392,18 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     setIsPinned(distanceFromBottom < 80);
   };
 
+  // 稳定回调：避免每次渲染创建新函数引用，使 AgentMessage memo 生效
+  const handleResend = useCallback((content: string) => {
+    setInput(content);
+    textareaRef.current?.focus();
+  }, []);
+
+  const handleReply = useCallback((content: string) => {
+    const quote = content.split('\n').map((line) => `> ${line}`).join('\n');
+    setInput(`Regarding:\n${quote}\n\n`);
+    textareaRef.current?.focus();
+  }, []);
+
   const handleSend = async () => {
     if (!input.trim() || !agentAvailable || isRunning) return;
 
@@ -485,7 +497,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     }
   };
 
-  const localCommands: Command[] = [
+  const localCommands: Command[] = useMemo(() => [
     { name: '/concept', description: '进入概念阶段', source: 'app', action: () => { onStageChange?.('concept'); sendMessage({ projectId, agentId, skillId, stage: 'concept', message: '切换到概念阶段' }); } },
     { name: '/world', description: '进入世界观阶段', source: 'app', action: () => { onStageChange?.('world'); sendMessage({ projectId, agentId, skillId, stage: 'world', message: '切换到世界观阶段' }); } },
     { name: '/characters', description: '进入角色阶段', source: 'app', action: () => { onStageChange?.('characters'); sendMessage({ projectId, agentId, skillId, stage: 'characters', message: '切换到角色阶段' }); } },
@@ -499,7 +511,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     { name: '/enrich', description: '补全缺失的结构化数据（state/outline-meta/关系图，只增不覆盖）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage: 'enrich', message: '扫描并补全缺失的结构化数据' }); } },
     { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage, message: last.content }); } },
     { name: '/explore', description: '自治推进当前阶段（不提问，AI 自主决策并落盘）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage, message: '自治推进当前阶段，所有创作决策自主做出', autonomous: true, model: selectedModel !== 'default' ? selectedModel : undefined }); } },
-  ];
+  ], [onStageChange, sendMessage, projectId, agentId, skillId, stage, resetConversation, chatMessages, selectedModel]);
 
   // Agent 端 slash command（omp 经 ACP available_commands_update 推送，无 action → 填入输入框发给 agent）
   const agentCommands: Command[] = effectiveCommands.map((c) => ({
@@ -622,8 +634,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
             </div>
           </div>
         )}
-        {chatMessages.map((msg, i) => (
-          <div key={i}>
+        {chatMessages.map((msg) => (
+          <div key={msg.id}>
             <AgentMessage
               role={msg.role}
               content={msg.content}
@@ -635,15 +647,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
               error={msg.error}
               artifacts={msg.artifacts}
               projectId={projectId}
-              onResend={msg.role === 'user' ? (content) => {
-                setInput(content);
-                textareaRef.current?.focus();
-              } : undefined}
-              onReply={msg.role === 'assistant' ? (content) => {
-                const quote = content.split('\n').map((line) => `> ${line}`).join('\n');
-                setInput(`Regarding:\n${quote}\n\n`);
-                textareaRef.current?.focus();
-              } : undefined}
+              onResend={msg.role === 'user' ? handleResend : undefined}
+              onReply={msg.role === 'assistant' ? handleReply : undefined}
             />
             {msg.revisionDiff && msg.revisionDiff.diff && (
               <RevisionDiffPanel
