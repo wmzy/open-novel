@@ -101,7 +101,7 @@ describe('composePrompt', () => {
             projectDir: tempDir,
           });
           expect(prompt).toContain('本阶段的协作方式：采访式');
-          expect(prompt).toContain('question 工具');
+          expect(prompt).toContain('提问工具');
         });
       }
 
@@ -126,6 +126,54 @@ describe('composePrompt', () => {
           projectDir: tempDir,
         });
         expect(prompt).not.toContain('本阶段的协作方式：采访式');
+      });
+
+      // 守卫：agent 不得用文字表格/列表代替提问工具呈现选项
+      it('规划阶段注入「禁止用纯文字列举选项」铁律', async () => {
+        const prompt = await composePrompt({
+          message: '帮我完善概念',
+          projectId: 'p',
+          stage: 'concept',
+          projectDir: tempDir,
+        });
+        expect(prompt).toContain('铁律');
+        expect(prompt).toContain('禁止用纯文字列举');
+        // 多决策场景指导
+        expect(prompt).toContain('逐个发起提问');
+      });
+
+      it('TOOL_INSTRUCTIONS 含禁止文字代替提问工具的规则', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'concept',
+          projectDir: tempDir,
+        });
+        expect(prompt).toContain('NEVER present A/B/C options');
+      });
+
+      it('非自治模式 questionRule 含禁止文字代替条款', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+        });
+        expect(prompt).toContain('禁止用文字代替提问工具');
+      });
+
+      // 守卫：prompt 中不应硬编码单一工具名，应使用环境无关的「提问工具」
+      it('行为指令使用「提问工具」而非硬编码 question', async () => {
+        const prompt = await composePrompt({
+          message: '帮我完善概念',
+          projectId: 'p',
+          stage: 'concept',
+          projectDir: tempDir,
+        });
+        // TOOL_INSTRUCTIONS 应列出所有已知名称
+        expect(prompt).toContain('ask / AskUserQuestion / question');
+        // 行为指令应使用「提问工具」
+        expect(prompt).toContain('用提问工具就');
       });
 
       it('writing 阶段指令采用职责分离（正文与状态更新分离）', async () => {
@@ -193,7 +241,7 @@ describe('composePrompt', () => {
           // 采访式协议不存在
           expect(prompt).not.toContain('本阶段的协作方式：采访式');
           // 决策清单不存在（autonomous 跳过）
-          expect(prompt).not.toContain('本阶段需要用 question 工具与用户确认的关键创作决策');
+          expect(prompt).not.toContain('本阶段需要用 提问工具与用户确认的关键创作决策');
         });
       }
 
@@ -218,7 +266,7 @@ describe('composePrompt', () => {
           autonomous: true,
         });
         expect(prompt).toContain('采用「自治式」');
-        expect(prompt).toContain('禁用 question 工具');
+        expect(prompt).toContain('禁用提问工具');
       });
 
       it('default (no autonomous) keeps interview protocol unchanged', async () => {

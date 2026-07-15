@@ -48,19 +48,21 @@ export interface ComposePromptOptions {
 }
 
 // 规划阶段共用的「采访式」协作流程。拼接进 concept/world/characters/outline/scenes 的指令。
-// 设计依据：旧版 opencode-novel-plugin 的引导式问答（先示范→question 选择题→多轮追问→分步确认）。
+// 设计依据：旧版 opencode-novel-plugin 的引导式问答（先示范→提问工具选择题→多轮追问→分步确认）。
 // 写作阶段不注入本协议，保持自治。
 const INTERVIEW_PROTOCOL = [
   '',
   '## 本阶段的协作方式：采访式',
-  '这是规划阶段，动手落盘前先与用户协作确认创作方向，不要一次性写满文件就交差。流程：',
+  '规划阶段中，每当涉及需要用户拍板的方向性选择——无论是一次性创作流程的开头，还是用户中途提问引发的讨论——都必须通过提问工具让用户做选择，不要一次性写满文件就交差。流程：',
   '1. **先示范**：用 2-3 句话展示一个与本项目类型相近、完成度高的范例，让用户对「好的产出长什么样」有具体感觉。',
-  '2. **结构化选择**：用 question 工具就下方列出的关键创作决策提问。每题给 3-5 个选项，每个选项配一句话说明其含义与走向影响。用选择题代替开放式填空；不确定时主动把你推荐的选项标出来。',
-  '3. **追问细节**：用户做出主要选择后，基于其选择用 question 工具再追问 1 轮（每轮不超过 3 题）补全关键细节。',
+  '2. **结构化选择**：用提问工具就下方列出的关键创作决策提问。每题给 3-5 个选项，每个选项配一句话说明其含义与走向影响。用选择题代替开放式填空；不确定时主动把你推荐的选项标出来。',
+  '3. **追问细节**：用户做出主要选择后，基于其选择用提问工具再追问 1 轮（每轮不超过 3 题）补全关键细节。',
   '4. **落盘**：综合用户的选择生成内容，写入对应文件。',
   '5. **确认收尾**：用简短清单列出你做的关键决策，邀请用户确认或要求调整；确认后再推进到下一阶段。',
   '',
-  '> 「采访式」≠ brainstorming 式审批门——你不是做完一步停下来等用户批准才能继续，而是在动手前用选择题收集用户的创作偏好。所有需要用户拍板的方向性选择都必须通过 question 工具提问，不要用纯文字列举选项让用户回复字母。',
+  '**铁律：禁止用纯文字列举 A/B/C 方案让用户打字回复。** 任何需要用户在两个或以上方案间做选择的场景——包括中途讨论、修改建议、确认方向——都必须调用提问工具呈现选项，由前端渲染为可点击的选择框。多个独立决策时，逐个发起提问（每次一个决策），先写分析文字，再连续调用提问工具。',
+  '',
+  '> 「采访式」≠ brainstorming 式审批门——你不是做完一步停下来等用户批准才能继续，而是在需要用户偏好输入时用选择题收集，其余时候自主推进。',
   '',
 ].join('\n');
 
@@ -75,32 +77,32 @@ const STAGE_HEAD: Record<string, string> = {
 
 /** 规划阶段「关键创作决策」清单——仅在采访式（非自治）模式下注入。 */
 const DECISION_PROMPTS: Record<string, string> = {
-  concept: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  concept: `**本阶段需要用提问工具与用户确认的关键创作决策**：
 - 主角原型（身份与处境）
 - 核心冲突（外部矛盾 + 主角内心矛盾的方向）
 - 故事主题 / 道德前提
 - 整体情感基调`,
 
-  world: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  world: `**本阶段需要用提问工具与用户确认的关键创作决策**：
 - 世界类型（现实 / 架空 / 异世界 / 未来 / 混合）
 - 力量体系（无 / 简单 / 复杂；若为武侠或修仙，追问功法体系风格）
 - 社会结构（权力分布、阶层、主要势力）`,
 
-  characters: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  characters: `**本阶段需要用提问工具与用户确认的关键创作决策**：
 - 主角外在目标（复仇 / 最强 / 保护 / 真相 / 自由 等）
 - 主角内在需求（信任 / 接纳 / 放下 / 归属 等）
 - 主角核心缺陷（自负 / 恐惧亲密 / 非黑即白 / 逃避 / 控制欲 等）
 - 核心矛盾（理念 / 利益 / 宿命 / 误解）
 - 配角规模（2 个 / 3-4 个 / 5+）`,
 
-  outline: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  outline: `**本阶段需要用提问工具与用户确认的关键创作决策**：
 - 三幕骨架的起点（常态世界状态）
 - 触发事件类型（打破常态的关键事件）
 - 中点转折方向（故事方向逆转的关键时刻）
 - 高潮与结局走向
-**分步确认**：先用 question 工具与用户敲定三幕骨架，用户确认结构满意后，再展开逐章详细规划——不要一次性把逐章大纲全部写完。`,
+**分步确认**：先用提问工具与用户敲定三幕骨架，用户确认结构满意后，再展开逐章详细规划——不要一次性把逐章大纲全部写完。`,
 
-  scenes: `**本阶段需要用 question 工具与用户确认的关键创作决策**：
+  scenes: `**本阶段需要用提问工具与用户确认的关键创作决策**：
 - 场景密度（每章平均 2-3 / 3-4 / 4-5 个场景）
 - 节奏模式（严格交替 / 整体平衡 / 前松后紧）
 - 自动化程度（逐章引导 / 批量审核 / 仅关键章）`,
@@ -156,7 +158,7 @@ const AUTONOMOUS_PROTOCOL = [
   '## 本阶段的协作方式：自治式',
   '这是无人值守的自治运行。你不需要等待用户输入——所有创作决策由你自主做出。流程：',
   '1. **理解方向**：仔细阅读 User Request 中给定的创作方向（种子概念/世界类型/主角原型等）。',
-  '2. **自主决策**：对于本阶段需要确定的创作选择（角色原型、世界类型、核心冲突等），基于给定方向自主选择最契合、最有戏剧张力的方案。不要用 question 工具提问。',
+  '2. **自主决策**：对于本阶段需要确定的创作选择（角色原型、世界类型、核心冲突等），基于给定方向自主选择最契合、最有戏剧张力的方案。不要用提问工具提问。',
   '3. **高质量产出**：按照 Skill Instructions 的质量标准，产出完整的阶段产出文件。',
   '4. **落盘**：将内容写入对应的 .novel/ 文件。',
   '5. **不要调用 PATCH API 推进阶段**——阶段推进由外部调度器控制。',
@@ -188,7 +190,7 @@ const PLAN_MODE_INSTRUCTION = [
   '要求：',
   '1. 先分析用户需求、当前上下文和风险；需要了解现状时可用 Read 等只读方式收集信息。',
   '2. 在 Plan Mode 中不要主动执行会改变作品或工作区状态的操作；等用户确认计划后再进入执行。',
-  '3. 如果需求、范围或实现取舍存在不确定性，先用 question 工具提问，不要把不确定点偷偷写成假设。',
+  '3. 如果需求、范围或实现取舍存在不确定性，先用提问工具提问，不要把不确定点偷偷写成假设。',
   '4. 方案明确后，输出最终方案卡：用清晰 Markdown 列出目标、关键步骤和取舍，邀请用户确认后再执行。',
   '5. 不要在用户确认前写入任何文件或修改现有内容。',
   '',
@@ -687,13 +689,13 @@ You have access to the following tools:
 - **Write** — Write a file (creates or overwrites). Use: { "file_path": "path/to/file", "content": "file content" }
 - **Edit** — Edit a file with find-and-replace. Use: { "file_path": "path/to/file", "old_string": "text to find", "new_string": "replacement text" }
 - **Bash** — Run a shell command. Use: { "command": "command to run" }
-- **question** — Ask the user a clarifying question. Use: { "question": "your question", "header": "short label", "options": [{ "label": "Option A", "description": "what this means" }] }
+- **提问工具**（ask / AskUserQuestion / question——名称因 agent CLI 而异）— 向用户呈现可点击选项让其做选择。提供问题文本和 3-5 个选项，每个选项含简短 label 和一句话说明。
 
 ## Important Tool Usage Rules
 
 1. **Always Read before Write** — You MUST read a file before writing to it. The Write tool requires the file to have been read first. If you need to create a new file or overwrite an existing one, read it first (even if it's empty or a template).
 2. **Use Edit for partial changes** — When modifying specific parts of a file, use Edit instead of Write to preserve unchanged content.
-3. **Use question tool** — When you need user input to proceed (e.g., choosing between approaches, clarifying requirements).`;
+3. **Use 提问工具 (ask/AskUserQuestion/question)** — When you need user input to proceed (e.g., choosing between approaches, clarifying requirements). NEVER present A/B/C options as text tables/lists in your reply expecting the user to type back a letter — always use the 提问工具 so the user gets clickable options.`;
 
 const OUTPUT_FORMAT = `## Output Format
 
@@ -777,15 +779,15 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
   // 全局「指令优先级」块中两条协作规则，按 autonomous 切换
   const collaborationRule = autonomous
     ? `- **按阶段切换协作方式**：
-  - 规划阶段（concept / world / characters / outline / scenes）采用「自治式」——基于 User Request 给定的方向自主决策并落盘，**禁用 question 工具提问**，不要等待用户输入。
+  - 规划阶段（concept / world / characters / outline / scenes）采用「自治式」——基于 User Request 给定的方向自主决策并落盘，**禁用提问工具提问**，不要等待用户输入。
   - 写作阶段（writing / drafting / revision / polish）同样自治——基于注入的上下文直接撰写章节正文。`
     : `- **按阶段切换协作方式**：
-  - 规划阶段（concept / world / characters / outline / scenes）采用「采访式」——动手落盘前，用 question 工具就关键创作决策与用户确认（详见各 Stage 指令中的「采访式」流程）。
-  - 写作阶段（writing / drafting / revision / polish）采用「自治式」——基于注入的上下文直接撰写章节正文，写完在回复里说明你的选择即可；只有遇到会从根本上改变后续几万字走向且无法回滚的岔路口时，才用 question 工具问一个问题。`;
+  - 规划阶段（concept / world / characters / outline / scenes）采用「采访式」——动手落盘前，用提问工具就关键创作决策与用户确认（详见各 Stage 指令中的「采访式」流程）。
+  - 写作阶段（writing / drafting / revision / polish）采用「自治式」——基于注入的上下文直接撰写章节正文，写完在回复里说明你的选择即可；只有遇到会从根本上改变后续几万字走向且无法回滚的岔路口时，才用提问工具问一个问题。`;
 
   const questionRule = autonomous
-    ? '- **禁用 question 工具**：本会话为无人值守自治运行，所有创作决策由你自主做出。'
-    : '- **何时用 question 工具**：当需要用户在创作方向上拍板时使用（规划阶段的关键决策、写作阶段无法回滚的岔路口）；纯执行与文笔打磨一律自行判断，不要为细节反复打断用户。';
+    ? '- **禁用提问工具**：本会话为无人值守自治运行，所有创作决策由你自主做出。'
+    : '- **何时用提问工具**：当需要用户在创作方向上拍板时使用（规划阶段的关键决策、写作阶段无法回滚的岔路口）；纯执行与文笔打磨一律自行判断，不要为细节反复打断用户。\n- **禁止用文字代替提问工具**：当你准备了 A/B/C 等多个方案需要用户选择时，必须调用提问工具，禁止在回复正文中用表格或列表列出方案让用户打字回复。正确做法：先在正文中写出分析和推荐理由，然后调用提问工具呈现选项。';
 
   // Compose the full prompt
   // 创作者指令（CREATOR.md）：用户自定义的最高优先级约束，覆盖以下所有指令。
