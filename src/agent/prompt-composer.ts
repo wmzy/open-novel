@@ -706,13 +706,13 @@ You have access to the following tools:
 - **Write** — Write a file (creates or overwrites). Use: { "file_path": "path/to/file", "content": "file content" }
 - **Edit** — Edit a file with find-and-replace. Use: { "file_path": "path/to/file", "old_string": "text to find", "new_string": "replacement text" }
 - **Bash** — Run a shell command. Use: { "command": "command to run" }
-- **提问工具**（ask / AskUserQuestion / question——名称因 agent CLI 而异）— 向用户呈现可点击选项让其做选择。提供问题文本和 3-5 个选项，每个选项含简短 label 和一句话说明。
+- **提问工具 (ask)** — 向用户呈现可点击选项让其做选择。使用方式：调用 ask 工具，提供 questions 数组，每题含 id、question、options（3-5 个选项，每项含 label 和 description）。
 
 ## Important Tool Usage Rules
 
 1. **Always Read before Write** — You MUST read a file before writing to it. The Write tool requires the file to have been read first. If you need to create a new file or overwrite an existing one, read it first (even if it's empty or a template).
 2. **Use Edit for partial changes** — When modifying specific parts of a file, use Edit instead of Write to preserve unchanged content.
-3. **Use 提问工具 (ask/AskUserQuestion/question)** — When you need user input to proceed (e.g., choosing between approaches, clarifying requirements). NEVER present A/B/C options as text tables/lists in your reply expecting the user to type back a letter — always use the 提问工具 so the user gets clickable options.`;
+3. **Use 提问工具 (ask)** — When you need user input to proceed (e.g., choosing between approaches, clarifying requirements). NEVER present A/B/C options as text tables/lists in your reply expecting the user to type back a letter — always call the ask tool so the user gets clickable options.`;
 
 const OUTPUT_FORMAT = `## Output Format
 
