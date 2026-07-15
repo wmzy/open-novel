@@ -12,7 +12,7 @@ import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { detectAiPatterns, detectDegradation, buildExcludeGrams } from '../../agent/quality-checker';
 import type { AgentEvent, StreamEvent } from '../../agent/types';
 import { ensureContextArtifacts, getStateTable } from '../../agent/context-manager';
-import { readFile, rename } from 'node:fs/promises';
+import { readFile, readdir, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
@@ -281,6 +281,7 @@ runsRouter.post('/', async (c) => {
   // revise 模式：读取目标文件全文作为上下文 + baseSnapshot（run-local 快照，用于 close handler 生成 diff）
   let reviseContent: string | undefined;
   let baseSnapshot: string | undefined;
+  let reviseFileList: string[] | undefined;
   if (mode === 'revise' && targetFile) {
     // targetFile 相对 .novel/（如 "chapters/第3章.md"）；尝试两种解析以兼容绝对/带前缀路径
     const candidates = path.isAbsolute(targetFile)
@@ -293,8 +294,41 @@ runsRouter.post('/', async (c) => {
     if (!resolved) {
       return c.json({ error: `Target file not found: ${targetFile}` }, 404);
     }
-    reviseContent = await readFile(resolved, 'utf-8');
-    baseSnapshot = reviseContent;
+    const indexContent = await readFile(resolved, 'utf-8');
+    baseSnapshot = indexContent;
+
+    // 拆分文档检测：targetFile 形如 <type>/index.md 时，内容实际分布在 <type>/chapters/*.md
+    // （或 <type>/*.md）卡片文件中。仅注入 index.md 会让 LLM 看不到实际内容。
+    // 检测到后读取合并内容 + 卡片文件列表，提示词中引导 LLM 用 Edit 修改具体卡片文件。
+    const splitMatch = targetFile.match(/^(concept|world|outline)\/index\.md$/);
+    if (splitMatch) {
+      const docDir = path.dirname(resolved);
+      let entries: string[];
+      try {
+        entries = (await readdir(docDir, { recursive: true })) as string[];
+      } catch {
+        entries = [];
+      }
+      const cardFiles = entries
+        .filter((f) => f !== 'index.md' && f.endsWith('.md'))
+        .sort();
+
+      if (cardFiles.length > 0) {
+        const parts: string[] = [indexContent.trim(), ''];
+        for (const relPath of cardFiles) {
+          try {
+            const content = await readFile(path.join(docDir, relPath), 'utf-8');
+            parts.push(content.trim(), '');
+          } catch { /* skip unreadable */ }
+        }
+        reviseContent = parts.join('\n').trim() + '\n';
+        reviseFileList = cardFiles.map((f) => `${splitMatch[1]}/${f}`);
+      } else {
+        reviseContent = indexContent;
+      }
+    } else {
+      reviseContent = indexContent;
+    }
   }
 
   const composedPrompt = await composePrompt({
@@ -308,6 +342,7 @@ runsRouter.post('/', async (c) => {
     reviseTarget: targetFile,
     reviseNote: revisionNote,
     reviseContent,
+    reviseFileList,
     autonomous,
     planMode,
     deepenContext: deepenRound != null ? { round: deepenRound } : undefined,

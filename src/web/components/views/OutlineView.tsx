@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { css, cx } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
+import { useNovelFile, EmptyState, loadingWrap, pageHeading, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn, cardReviseBtn } from './viewShared';
+import { sanitizeFileName } from '@/shared/split-document';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
@@ -73,6 +74,7 @@ const chapterBadge = css`
 /** 章节标题文本。 */
 const chapterTitle = css`
   font-weight: 500;
+  flex: 1;
 `;
 
 /** 概览/详细标签栏。 */
@@ -161,11 +163,23 @@ export default function OutlineView({ projectId }: Props) {
     const isOpen = !collapsed.has(i);
     return (
       <div key={i} className={chapterCard}>
-        <button type="button" className={chapterHeader} onClick={() => toggle(i)} aria-expanded={isOpen}>
+        <div
+          className={chapterHeader}
+          onClick={() => toggle(i)}
+          role="button"
+          tabIndex={0}
+          aria-expanded={isOpen}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(i); } }}
+        >
           <span className={chevron}>{isOpen ? '▾' : '▸'}</span>
           {num !== null && <span className={chapterBadge}>第 {num} 章</span>}
           <span className={chapterTitle}>{titleField || s.title}</span>
-        </button>
+          <button
+            className={cardReviseBtn}
+            onClick={(e) => { e.stopPropagation(); revision.openRevise(`outline/chapters/${sanitizeFileName(s.title)}.md`, titleField || s.title); }}
+            title="修订这一节"
+          >✎</button>
+        </div>
         {isOpen && (
           <div className={chapterBody}>
             <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
@@ -178,7 +192,13 @@ export default function OutlineView({ projectId }: Props) {
   const renderBriefSection = (s: MdSection, i: number) => (
     <div key={i} className={chapterCard}>
       <div className={chapterHeader} style={{ cursor: 'default' }}>
+        <span className={chevron} style={{ visibility: 'hidden' }}>▸</span>
         <span className={chapterTitle}>{s.title}</span>
+        <button
+          className={cardReviseBtn}
+          onClick={() => revision.openRevise('outline-brief.md', s.title)}
+          title="修订这一节"
+        >✎</button>
       </div>
       <div className={chapterBody}>
         <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
@@ -190,7 +210,7 @@ export default function OutlineView({ projectId }: Props) {
     <div>
       <div className={viewHeaderRow}>
         <h3 className={pageHeading}>大纲</h3>
-        <button className={reviseBtn} onClick={() => revision.openRevise()}>✎ 修订</button>
+        <button className={reviseBtn} onClick={() => revision.openRevise(tab === 'brief' ? 'outline-brief.md' : (data?.sourceFile ?? 'outline/index.md'))}>✎ 修订</button>
         <button className={renameBtn} onClick={() => revision.openRename()}>⇄ 重命名</button>
         <button
           className={reviseBtn}

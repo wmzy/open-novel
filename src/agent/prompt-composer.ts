@@ -26,6 +26,9 @@ export interface ComposePromptOptions {
   reviseNote?: string;
   /** revise 模式：目标文件当前全文。 */
   reviseContent?: string;
+  /** revise 模式：拆分文档的卡片文件列表（相对 .novel/）。存在时表示 reviseContent 是合并内容，
+   *  LLM 需用 Edit 修改具体卡片文件而非 index.md。 */
+  reviseFileList?: string[];
 
   /** 自治模式：跳过采访式协议，前期阶段改为自主决策。默认 false。 */
   autonomous?: boolean;
@@ -244,13 +247,27 @@ ${WRITING_OUTPUT_PROTOCOL}`,
 /**
  * 修订模式的指令（替代 STAGE_INSTRUCTIONS）。注入目标文件全文 + 修订意见 + 外科手术规则。
  * 设计依据见 spec §3.4。 */
-function buildReviseInstructions(reviseContent: string, reviseNote: string): string {
+function buildReviseInstructions(reviseContent: string, reviseNote: string, reviseFileList?: string[]): string {
+  const isSplitDoc = reviseFileList && reviseFileList.length > 0;
+  const fileListSection = isSplitDoc
+    ? `
+### 文件结构
+这是一个**拆分式文档**，索引文件（index.md）仅记录目录，实际内容分布在以下卡片文件中：
+${reviseFileList!.map((f) => `- \`.novel/${f}\``).join('\n')}
+
+修订时请用 Read 工具读取相关卡片文件确认内容，用 Edit 工具直接修改对应的卡片文件（而非 index.md）。
+`
+    : '';
+
+  const targetHeader = isSplitDoc
+    ? '### 目标文档全文（合并自索引 + 所有卡片文件）\n以下内容已读入上下文供你参考，实际修改时请针对具体卡片文件使用 Edit 工具：'
+    : '### 目标文件\n以下是你需要修订的文件全文（已读入上下文，无需再 Read）：';
+
   return `## 当前任务：修订已有内容
 
 你不是在从零创作，而是在对一份已有的文件做**定向修订**。
-
-### 目标文件
-以下是你需要修订的文件全文（已读入上下文，无需再 Read）：
+${fileListSection}
+${targetHeader}
 
 \`\`\`
 ${reviseContent}
@@ -707,7 +724,7 @@ const OUTPUT_FORMAT = `## Output Format
 
 export async function composePrompt(options: ComposePromptOptions): Promise<string> {
   const { message, projectId, skillId, stage, projectDir, history,
-          mode = 'generate', reviseTarget, reviseNote, reviseContent,
+          mode = 'generate', reviseTarget, reviseNote, reviseContent, reviseFileList,
           autonomous = false, planMode = false, deepenContext, agentId,
           interruptedResume } = options;
 
@@ -759,7 +776,7 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
   // Stage-specific instructions (generate 模式) 或 revise 指令 (revise 模式)
   const currentStage = stage || 'concept';
   const stageInstructions = isRevise
-    ? buildReviseInstructions(reviseContent!, reviseNote!)
+    ? buildReviseInstructions(reviseContent!, reviseNote!, reviseFileList)
     : currentStage === 'decompose'
       ? buildReverseDecomposePrompt({
           projectDir,
