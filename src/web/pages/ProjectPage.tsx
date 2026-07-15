@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { css } from '@linaria/core';
@@ -11,20 +11,25 @@ import RewritePanel from '@/web/components/RewritePanel';
 import QualityCheckPanel from '@/web/components/QualityCheckPanel';
 import FilePreview from '@/web/components/FilePreview';
 import { useFilePreview } from '@/web/hooks/useFilePreview';
-import DashboardView from '@/web/components/views/DashboardView';
-import ConceptView from '@/web/components/views/ConceptView';
-import WorldView from '@/web/components/views/WorldView';
-import CharacterView from '@/web/components/views/CharacterView';
-import OutlineView from '@/web/components/views/OutlineView';
-import SceneView from '@/web/components/views/SceneView';
-import ForeshadowView from '@/web/components/views/ForeshadowView';
-import StoryArcView from '@/web/components/views/StoryArcView';
-import CharacterGraphView from '@/web/components/views/CharacterGraphView';
-import WuxiaView from '@/web/components/views/WuxiaView';
-import WritingView from '@/web/components/views/WritingView';
 import { useAgentSelection } from '@/web/hooks/useAgents';
 import { useChatPanelWidth } from '@/web/hooks/useChatPanelWidth';
 import { useDocSourceFile } from '@/web/hooks/useDocSourceFile';
+
+// 视图组件懒加载 —— 只在切换到对应视图时下载
+const DashboardView = lazy(() => import('@/web/components/views/DashboardView'));
+const ConceptView = lazy(() => import('@/web/components/views/ConceptView'));
+const WorldView = lazy(() => import('@/web/components/views/WorldView'));
+const CharacterView = lazy(() => import('@/web/components/views/CharacterView'));
+const OutlineView = lazy(() => import('@/web/components/views/OutlineView'));
+const SceneView = lazy(() => import('@/web/components/views/SceneView'));
+const ForeshadowView = lazy(() => import('@/web/components/views/ForeshadowView'));
+const StoryArcView = lazy(() => import('@/web/components/views/StoryArcView'));
+const CharacterGraphView = lazy(() => import('@/web/components/views/CharacterGraphView'));
+const WuxiaView = lazy(() => import('@/web/components/views/WuxiaView'));
+const WritingView = lazy(() => import('@/web/components/views/WritingView'));
+
+/** Sidebar chapters 回退常量——避免每次渲染新建数组导致 memo 失效。 */
+const EMPTY_CHAPTERS: Array<{ number: number; title: string | null }> = [];
 
 const layout = css`
   display: flex;
@@ -306,7 +311,15 @@ export default function ProjectPage() {
     };
   }, []);
 
+  // 使用 ref 持有 previewFile 避免 SSE 因视图切换重建
+  const previewFileRef = useRef(previewFile);
+  previewFileRef.current = previewFile;
+
+  const readFileRef = useRef(readFile);
+  readFileRef.current = readFile;
+
   // Subscribe to project updates and file changes via SSE
+  // 只依赖 id 而非 previewFile/readFile，避免视图切换时断线重连
   useEffect(() => {
     if (!id) return;
     const es = new EventSource(`/api/projects/${id}/events`);
@@ -345,17 +358,21 @@ export default function ProjectPage() {
           queryClient.invalidateQueries({ queryKey: ['project', id] });
         }
 
-        // Refresh preview if showing this file
-        if (previewFile && filePath === previewFile) {
-          readFile(previewFile).then((content) => {
+        // Refresh preview if showing this file（通过 ref 避免依赖 previewFile）
+        const currentPreviewFile = previewFileRef.current;
+        const currentReadFile = readFileRef.current;
+        if (currentPreviewFile && filePath === currentPreviewFile) {
+          currentReadFile(currentPreviewFile).then((content) => {
             if (content) setPreviewContent(content);
           });
         }
       } catch { /* ignore */ }
     });
 
-    return () => es.close();
-  }, [id, refetchProject, previewFile, readFile, queryClient]);
+    return () => {
+      es.close();
+    };
+  }, [id, refetchProject, queryClient]);
 
   // Auto-switch view when stage changes (only if user hasn't manually navigated)
   const [hasManualNav, setHasManualNav] = useState(false);
@@ -399,7 +416,7 @@ export default function ProjectPage() {
   // Map view to file path for preview
   // doc 类型用后端返回的 sourceFile（旧格式回退到单文件）
   const docSourceFile = useDocSourceFile(id!);
-  const viewToFile: Record<string, string> = {
+  const viewToFile = useMemo<Record<string, string>>(() => ({
     concept: docSourceFile.concept ?? 'concept/index.md',
     world: docSourceFile.world ?? 'world/index.md',
     characters: 'characters/profiles.md',
@@ -407,7 +424,7 @@ export default function ProjectPage() {
     scenes: 'scenes.md',
     foreshadow: 'foreshadow.json',
     wuxia: docSourceFile.world ?? 'world/index.md',
-  };
+  }), [docSourceFile.concept, docSourceFile.world, docSourceFile.outline]);
 
   // 直接通过 URL 进入某个视图时（handleViewChange 未被调用），
   // 按 viewToFile 同步默认预览文件。
@@ -418,14 +435,14 @@ export default function ProjectPage() {
     }
   }, [activeView]);
 
-  const handleViewChange = (view: string) => {
+  const handleViewChange = useCallback((view: string) => {
     setActiveView(view);
     setHasManualNav(true);
     if (viewToFile[view]) {
       setPreviewFile(viewToFile[view]);
       setShowPreview(true);
     }
-  };
+  }, [viewToFile]);
 
   const handleExport = (format: 'markdown' | 'text') => {
     window.open(`/api/projects/${id}/export/${format}`, '_blank');
@@ -532,7 +549,7 @@ export default function ProjectPage() {
 
   return (
     <div className={layout}>
-      <Sidebar activeView={activeView} onViewChange={handleViewChange} chapters={chapters || []} />
+      <Sidebar activeView={activeView} onViewChange={handleViewChange} chapters={chapters ?? EMPTY_CHAPTERS} />
       <div className={main}>
         <div className={topBar}>
           <Link to="/" className={backLink}>← 首页</Link>
@@ -554,7 +571,9 @@ export default function ProjectPage() {
           </div>
         </div>
         <div className={content}>
-          <ViewRouter activeView={activeView} projectId={id!} onViewChange={handleViewChange} agentId={activeAgentId} skillId={project.skillId} />
+          <Suspense fallback={<div className={stateWrap}>加载视图...</div>}>
+            <ViewRouter activeView={activeView} projectId={id!} onViewChange={handleViewChange} agentId={activeAgentId} skillId={project.skillId} />
+          </Suspense>
         </div>
       </div>
       {showPreview && (

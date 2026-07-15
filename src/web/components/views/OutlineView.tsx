@@ -57,6 +57,24 @@ const chevron = css`
   transition: transform 0.15s;
 `;
 
+const chevronHidden = css`
+  visibility: hidden;
+`;
+
+/** 大纲小节头部（不可点击，纯展示）。 */
+const chapterHeaderStatic = css`
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  background: none;
+  border: none;
+  cursor: default;
+  font-size: 0.95rem;
+  color: var(--haze-color-text);
+`;
+
 /** 章节号徽标。 */
 const chapterBadge = css`
   display: inline-flex;
@@ -191,8 +209,8 @@ export default function OutlineView({ projectId }: Props) {
 
   const renderBriefSection = (s: MdSection, i: number) => (
     <div key={i} className={chapterCard}>
-      <div className={chapterHeader} style={{ cursor: 'default' }}>
-        <span className={chevron} style={{ visibility: 'hidden' }}>▸</span>
+      <div className={chapterHeaderStatic}>
+        <span className={cx(chevron, chevronHidden)}>▸</span>
         <span className={chapterTitle}>{s.title}</span>
         <button
           className={cardReviseBtn}

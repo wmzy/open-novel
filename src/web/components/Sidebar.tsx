@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { css } from '@linaria/core';
 import { ALL_VIEWS } from '@/shared/stages';
 
@@ -49,7 +50,8 @@ interface Props {
   chapters: Array<{ number: number; title: string | null }>;
 }
 
-export default function Sidebar({ activeView, onViewChange, chapters }: Props) {
+function Sidebar({ activeView, onViewChange, chapters }: Props) {
+
   const views = ALL_VIEWS;
 
   return (
@@ -73,3 +75,5 @@ export default function Sidebar({ activeView, onViewChange, chapters }: Props) {
     </div>
   );
 }
+
+export default memo(Sidebar);

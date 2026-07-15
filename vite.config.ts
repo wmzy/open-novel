@@ -119,6 +119,26 @@ export default defineConfig({
   build: {
     outDir: './dist/client',
     chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/react-router-dom/') ||
+            id.includes('node_modules/scheduler/')
+          ) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/@tanstack/react-query')) {
+            return 'vendor-query';
+          }
+          if (id.includes('node_modules/haze-ui/') || id.includes('node_modules/sonner/')) {
+            return 'vendor-ui';
+          }
+        },
+      },
+    },
   },
   server: {
     port: 3006,

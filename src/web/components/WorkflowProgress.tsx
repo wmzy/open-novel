@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { css } from '@linaria/core';
 import { STAGES, getStageIndex } from '@/shared/stages';
 
@@ -36,7 +37,7 @@ interface Props {
   onStageClick: (stage: string) => void;
 }
 
-export default function WorkflowProgress({ currentStage, onStageClick }: Props) {
+function WorkflowProgress({ currentStage, onStageClick }: Props) {
   const currentIdx = getStageIndex(currentStage);
   return (
     <div data-testid="workflow-progress">
@@ -51,3 +52,5 @@ export default function WorkflowProgress({ currentStage, onStageClick }: Props) 
     </div>
   );
 }
+
+export default memo(WorkflowProgress);

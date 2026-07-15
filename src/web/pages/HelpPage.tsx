@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { css } from '@linaria/core';
+import { css, cx } from '@linaria/core';
 import { pageContainer } from '@/styles/shared';
 import NavHeader from '@/web/components/NavHeader';
 
@@ -144,6 +144,14 @@ const h3 = css`
   font-weight: 600;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
+`;
+
+const h3Sm = css`
+  font-size: 0.95rem;
+`;
+
+const ulWithGap = css`
+  margin-top: 0.5rem;
 `;
 
 interface Section {
@@ -354,7 +362,7 @@ export default function HelpPage() {
                   适用于<b>概念/世界观/角色/大纲/场景</b>五个规划阶段（写作阶段不用）。在阶段视图点击 🔁 <b>深化</b> 后，AI 进入自主循环，不需你逐轮操作。
                 </p>
 
-                <h4 className={h3} style={{fontSize:'0.95rem'}}>工作原理：审查者-作者双相循环</h4>
+                <h4 className={cx(h3, h3Sm)}>工作原理：审查者-作者双相循环</h4>
                 <p className={paragraph}>
                   每两轮为一个周期——第 1 轮 AI 扮演<b>审查者</b>找出问题，第 2 轮切换为<b>作者</b>逐条修订，第 3 轮又换回审查者……如此交替。关键设计：
                 </p>
@@ -364,7 +372,7 @@ export default function HelpPage() {
                   <li><b>跨阶段校验</b>：每阶段的最后一个视角会读取前序/后序阶段产出，检查一致性（如审查角色时会检查是否与世界观体系脱节）</li>
                 </ul>
 
-                <h4 className={h3} style={{fontSize:'0.95rem'}}>每轮产出</h4>
+                <h4 className={cx(h3, h3Sm)}>每轮产出</h4>
                 <table className={table}>
                   <thead>
                     <tr><th>轮次</th><th>角色</th><th>做什么</th><th>写入文件</th></tr>
@@ -375,7 +383,7 @@ export default function HelpPage() {
                   </tbody>
                 </table>
 
-                <h4 className={h3} style={{fontSize:'0.95rem'}}>评分维度（每阶段 5 个）</h4>
+                <h4 className={cx(h3, h3Sm)}>评分维度（每阶段 5 个）</h4>
                 <table className={table}>
                   <thead>
                     <tr><th>阶段</th><th>5 个质量维度</th></tr>
@@ -389,10 +397,10 @@ export default function HelpPage() {
                   </tbody>
                 </table>
 
-                <h4 className={h3} style={{fontSize:'0.95rem'}}>具体示例：角色阶段深化</h4>
+                <h4 className={cx(h3, h3Sm)}>具体示例：角色阶段深化</h4>
                 <div className={callout}>
                   <div className={calloutTitle}>场景：你的反派“墨先生”动机单薄，想自动完善</div>
-                  <p className={paragraph} style={{marginTop:'0.5rem'}}>
+                  <p className={cx(paragraph, ulWithGap)}>
                     <b>启动</b>：在角色视图点 🔁，设截止时间 06:00，特别指导填「墨先生是反派，他的动机太单薄了，需要更深的执念和内心矛盾」
                   </p>
                   <p className={paragraph}>
@@ -417,7 +425,7 @@ export default function HelpPage() {
                   </p>
                 </div>
 
-                <h4 className={h3} style={{fontSize:'0.95rem'}}>停止条件</h4>
+                <h4 className={cx(h3, h3Sm)}>停止条件</h4>
                 <ul className={ul}>
                   <li><b>改进饱和</b>：连续 2 轮审查报告都标记「无实质改进」，说明产出已足够好</li>
                   <li><b>截止时间到</b>：达到你设的截止时间自动停止</li>
@@ -429,7 +437,7 @@ export default function HelpPage() {
                   最低运行 6 轮——在此之前即使出现饱和信号也不会停止，确保有足够的迭代深度。
                 </p>
 
-                <h4 className={h3} style={{fontSize:'0.95rem'}}>启动前与运行中</h4>
+                <h4 className={cx(h3, h3Sm)}>启动前与运行中</h4>
                 <ul className={ul}>
                   <li><b>安全网</b>：启动时自动创建里程碑快照（<code>deepen-{`{stage}`}-start</code>），不满意可用「撤销」一键回退到深化前状态</li>
                   <li><b>状态条</b>：底部实时显示「🔁 深化中 · 第 N 轮（审查/修订） · 截止 HH:MM」+ 📊 评分轨迹（如「动机清晰度 3→5, 关系丰富度 2→4」）</li>
@@ -438,7 +446,7 @@ export default function HelpPage() {
 
                 <div className={callout}>
                   <div className={calloutTitle}>💡 什么时候用深化？</div>
-                  <ul className={ul} style={{marginTop:'0.5rem'}}>
+                  <ul className={cx(ul, ulWithGap)}>
                     <li>初版设定太薄、缺乏深度时（如角色动机单薄、世界观体系有漏洞）</li>
                     <li>想要无人值守地迭代改写（睡前启动，设定截止时间，早上看结果）</li>
                     <li>卡壳时想看 AI 从不同视角能挑出什么问题</li>
