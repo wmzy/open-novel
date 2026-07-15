@@ -307,7 +307,7 @@ export default function WuxiaView({ projectId }: Props) {
   );
   const [viewMode, setViewMode] = useViewMode();
   const [showInspiration, setShowInspiration] = useState(false);
-  const revision = useFileRevision({ projectId, targetFile: 'world/index.md', stage: 'wuxia' });
+  const revision = useFileRevision({ projectId, targetFile: worldData?.sourceFile ?? 'world/index.md', stage: 'wuxia' });
 
   // .novel/wuxia/ 独立文件（旧工具迁移项目）
   const { data: fileList } = useNovelFileList(projectId);
@@ -344,7 +344,7 @@ export default function WuxiaView({ projectId }: Props) {
   const hasWuxiaFiles = wuxiaGroups.some((g) => g.items.length > 0);
 
   const worldSections = useMemo(
-    () => (worldData ? parseSections(worldData).sections : []),
+    () => (worldData ? parseSections(worldData.content).sections : []),
     [worldData]
   );
   const charSections = useMemo(

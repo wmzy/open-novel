@@ -24,6 +24,7 @@ import WuxiaView from '@/web/components/views/WuxiaView';
 import WritingView from '@/web/components/views/WritingView';
 import { useAgentSelection } from '@/web/hooks/useAgents';
 import { useChatPanelWidth } from '@/web/hooks/useChatPanelWidth';
+import { useDocSourceFile } from '@/web/hooks/useDocSourceFile';
 
 const layout = css`
   display: flex;
@@ -396,14 +397,16 @@ export default function ProjectPage() {
   }, [previewFile, readFile]);
 
   // Map view to file path for preview
+  // doc 类型用后端返回的 sourceFile（旧格式回退到单文件）
+  const docSourceFile = useDocSourceFile(id!);
   const viewToFile: Record<string, string> = {
-    concept: 'concept/index.md',
-    world: 'world/index.md',
+    concept: docSourceFile.concept ?? 'concept/index.md',
+    world: docSourceFile.world ?? 'world/index.md',
     characters: 'characters/profiles.md',
-    outline: 'outline/index.md',
+    outline: docSourceFile.outline ?? 'outline/index.md',
     scenes: 'scenes.md',
     foreshadow: 'foreshadow.json',
-    wuxia: 'world/index.md',
+    wuxia: docSourceFile.world ?? 'world/index.md',
   };
 
   // 直接通过 URL 进入某个视图时（handleViewChange 未被调用），

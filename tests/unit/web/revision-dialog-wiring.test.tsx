@@ -27,8 +27,8 @@ vi.mock('@/web/components/views/viewShared', async () => {
 
 // mock useNovelDocument：ConceptView/WorldView/OutlineView 用它拉取合并后的拆分文档
 vi.mock('@/web/hooks/useNovelDocument', () => ({
-  useNovelDocument: () => ({
-    data: '# 标题\n\n## 一句话梗概\n\n一个少年的复仇故事。\n',
+  useNovelDocument: (_projectId: string, docType: string) => ({
+    data: { content: '# 标题\n\n## 一句话梗概\n\n一个少年的复仇故事。\n', sourceFile: `${docType}/index.md` },
     isLoading: false,
   }),
 }));

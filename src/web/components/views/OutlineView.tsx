@@ -123,9 +123,9 @@ export default function OutlineView({ projectId }: Props) {
   const [viewMode, setViewMode] = useViewMode();
   const [tab, setTab] = useState<'detail' | 'brief'>('detail');
   const [showInspiration, setShowInspiration] = useState(false);
-  const revision = useFileRevision({ projectId, targetFile: 'outline/index.md', stage: 'outline' });
+  const revision = useFileRevision({ projectId, targetFile: data?.sourceFile ?? 'outline/index.md', stage: 'outline' });
 
-  const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
+  const sections = useMemo(() => (data ? parseSections(data.content).sections : []), [data]);
   const briefSections = useMemo(() => (briefData ? parseSections(briefData).sections : []), [briefData]);
 
   // 跟踪“已折叠”的章节：默认空集 = 全部展开。这样在数据加载完成后新出现的章节也默认展开，

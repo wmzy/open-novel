@@ -102,6 +102,11 @@ function cleanTitle(raw: string): string {
  * - `rawMd` 保留每块直接内容的原始 Markdown；`fullRawMd` 含子分组完整内容。
  */
 export function parseSections(md: string): ParsedDoc {
+  // 后端可能返回缺少 content 字段的对象（类型断言掩盖了 undefined），
+  // 这里防御非字符串输入，避免 .replace 崩溃。
+  if (typeof md !== 'string' || md.length === 0) {
+    return { title: '', sections: [] };
+  }
   const lines = md.replace(/\r\n/g, '\n').split('\n');
   const sections: MdSection[] = [];
 

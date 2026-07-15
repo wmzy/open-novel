@@ -22,6 +22,13 @@ const DIR_MAP: Record<DocType, string> = {
   outline: 'outline',
 };
 
+/** DocType → 旧格式单文件名（拆分前的 .novel/ 根文件）。 */
+const LEGACY_FILE: Record<DocType, string> = {
+  concept: 'concept.md',
+  world: 'world-building.md',
+  outline: 'outline-detailed.md',
+};
+
 documentsRouter.get('/:id/document/:type', async (c) => {
   const docType = c.req.param('type') as DocType;
   if (!VALID_TYPES.has(docType)) {
@@ -30,12 +37,21 @@ documentsRouter.get('/:id/document/:type', async (c) => {
 
   const novelDir = await resolveNovelDir(c.req.param('id'));
   const docDir = path.join(novelDir, DIR_MAP[docType]);
+  const indexPath = path.join(docDir, 'index.md');
 
+  // 优先读拆分格式（<docType>/index.md + 卡片）；不存在则回退旧单文件
   let indexContent: string;
   try {
-    indexContent = await readFile(path.join(docDir, 'index.md'), 'utf-8');
+    indexContent = await readFile(indexPath, 'utf-8');
   } catch {
-    return c.json({ error: `${docType} document not found` }, 404);
+    // 旧格式回退：读 .novel/<legacy-file>
+    const legacyPath = path.join(novelDir, LEGACY_FILE[docType]);
+    try {
+      const legacyContent = await readFile(legacyPath, 'utf-8');
+      return c.json({ content: legacyContent.trim() + '\n', sourceFile: LEGACY_FILE[docType] });
+    } catch {
+      return c.json({ error: `${docType} document not found` }, 404);
+    }
   }
 
   // 读目录下所有卡片（排除 index.md），按文件名排序
@@ -58,7 +74,7 @@ documentsRouter.get('/:id/document/:type', async (c) => {
     } catch { /* skip unreadable */ }
   }
 
-  return c.json({ content: parts.join('\n').trim() + '\n' });
+  return c.json({ content: parts.join('\n').trim() + '\n', sourceFile: `${DIR_MAP[docType]}/index.md` });
 });
 
 export default documentsRouter;

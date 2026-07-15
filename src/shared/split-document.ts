@@ -101,9 +101,10 @@ export function buildIndexMarkdown(
   docTitle: string,
   cards: SplitCard[],
   actBreaks?: [number, number],
+  totalChapters?: number,
 ): string {
   if (docType === 'outline') {
-    return buildOutlineIndex(docTitle, cards, actBreaks);
+    return buildOutlineIndex(docTitle, cards, actBreaks, totalChapters);
   }
   return buildSimpleIndex(docType, docTitle, cards);
 }
@@ -133,6 +134,7 @@ function buildOutlineIndex(
   docTitle: string,
   cards: SplitCard[],
   actBreaks?: [number, number],
+  totalChapters?: number,
 ): string {
   const lines: string[] = [
     `# 详细大纲索引：${docTitle}`,
@@ -144,7 +146,12 @@ function buildOutlineIndex(
   // 三幕结构
   if (actBreaks && cards.length > 0) {
     const [act1End, act2End] = actBreaks;
-    const total = cards.length;
+    // 从卡片内容中提取最大章号，兜底用卡片数
+    const allChapterNums = cards
+      .flatMap((c) => [...c.content.matchAll(/第\s*(\d+)\s*章/g)])
+      .map((m) => parseInt(m[1], 10))
+      .filter((n) => !Number.isNaN(n));
+    const total = totalChapters ?? (allChapterNums.length > 0 ? Math.max(...allChapterNums) : cards.length);
     lines.push('## 三幕结构', '', '| 幕 | 章节范围 |', '|---|---|');
     lines.push(`| 第一幕·设置 | 第1–${act1End}章 |`);
     if (act2End > act1End) {

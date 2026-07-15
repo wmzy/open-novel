@@ -69,6 +69,35 @@ describe('GET /api/projects/:id/document/:type', () => {
     expect(data.content).toContain('# 详细大纲索引');
     expect(data.content).toContain('## 第 1 章');
     expect(data.content).toContain('结构定位');
+    expect(data.sourceFile).toBe('outline/index.md');
+  });
+
+  it('旧格式回退：outline/index.md 不存在时读 outline-detailed.md', async () => {
+    await fs.mkdir(path.join(projectDir, '.novel'), { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, '.novel', 'outline-detailed.md'),
+      '# 旧格式大纲\n\n## 第 1 章\n\n内容。',
+    );
+
+    const res = await apiApp.request(`/api/projects/${projectId}/document/outline`);
+    expect(res.ok).toBe(true);
+    const data = await res.json();
+    expect(data.content).toContain('旧格式大纲');
+    expect(data.sourceFile).toBe('outline-detailed.md');
+  });
+
+  it('旧格式回退：concept/index.md 不存在时读 concept.md', async () => {
+    await fs.mkdir(path.join(projectDir, '.novel'), { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, '.novel', 'concept.md'),
+      '# 旧格式概念\n\n一个故事。',
+    );
+
+    const res = await apiApp.request(`/api/projects/${projectId}/document/concept`);
+    expect(res.ok).toBe(true);
+    const data = await res.json();
+    expect(data.content).toContain('旧格式概念');
+    expect(data.sourceFile).toBe('concept.md');
   });
 
   it('文档不存在返回 404', async () => {

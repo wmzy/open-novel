@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
-import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
@@ -19,6 +19,8 @@ import {
   generateOutlineDetailedSplit,
   type TemplateGenOptions,
 } from '../../shared/template-generator';
+import { splitMarkdownToCards, buildIndexMarkdown, DOC_DIR } from '../../shared/split-document';
+import type { DocType } from '../../shared/split-document';
 import timelineRouter from './timeline';
 import documentsRouter from './documents';
 
@@ -609,6 +611,82 @@ projectsRouter.get('/:id/templates/:templateName', async (c) => {
     path: TEMPLATE_FILE_PATHS[templateName],
     content,
   });
+});
+
+/**
+ * 迁移：将旧格式单文件（concept.md / world-building.md / outline-detailed.md）
+ * 拆分为目录 + 索引 + 卡片文件。新项目无需调用。
+ * 幂等：目录已存在且有 index.md 时跳过该文档。
+ */
+projectsRouter.post('/:id/migrate-split', async (c) => {
+  const id = c.req.param('id');
+  const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+  if (!project) return c.json({ error: 'Not found' }, 404);
+
+  const novelDir = path.join(project.path, '.novel');
+
+  const migrations: Array<{ oldFile: string; docType: DocType }> = [
+    { oldFile: 'concept.md', docType: 'concept' },
+    { oldFile: 'world-building.md', docType: 'world' },
+    { oldFile: 'outline-detailed.md', docType: 'outline' },
+  ];
+
+  // outline 三幕分界从 outline-meta.json 读取
+  let actBreaks: [number, number] | undefined;
+  try {
+    const metaRaw = readFileSync(path.join(novelDir, 'outline-meta.json'), 'utf-8');
+    const meta = JSON.parse(metaRaw);
+    if (Array.isArray(meta.actBreaks) && meta.actBreaks.length >= 2) {
+      actBreaks = [meta.actBreaks[0], meta.actBreaks[1]];
+    }
+  } catch { /* no meta file */ }
+
+  const results: Array<{ docType: string; cards: number; migrated: boolean; skipped: boolean }> = [];
+
+  for (const migration of migrations) {
+    const oldPath = path.join(novelDir, migration.oldFile);
+    const newDir = path.join(novelDir, DOC_DIR[migration.docType]);
+
+    // 幂等：目录已有 index.md 则跳过
+    if (existsSync(path.join(newDir, 'index.md'))) {
+      results.push({ docType: migration.docType, cards: 0, migrated: false, skipped: true });
+      continue;
+    }
+
+    let content: string;
+    try {
+      content = readFileSync(oldPath, 'utf-8');
+    } catch {
+      results.push({ docType: migration.docType, cards: 0, migrated: false, skipped: false });
+      continue;
+    }
+
+    const split = splitMarkdownToCards(content, migration.docType);
+    const finalActBreaks = migration.docType === 'outline' ? actBreaks : undefined;
+    const indexContent = buildIndexMarkdown(
+      migration.docType,
+      `《${project.title}》`,
+      split.cards,
+      finalActBreaks,
+      migration.docType === 'outline' ? project.chapterCount ?? undefined : undefined,
+    );
+
+    mkdirSync(newDir, { recursive: true });
+    writeFileSync(path.join(newDir, 'index.md'), indexContent, 'utf-8');
+
+    for (const card of split.cards) {
+      const cardPath = path.join(newDir, card.fileName);
+      mkdirSync(path.dirname(cardPath), { recursive: true });
+      writeFileSync(cardPath, card.content, 'utf-8');
+    }
+
+    // 删旧文件
+    try { unlinkSync(oldPath); } catch { /* already gone */ }
+
+    results.push({ docType: migration.docType, cards: split.cards.length, migrated: true, skipped: false });
+  }
+
+  return c.json({ ok: true, results });
 });
 
 export default projectsRouter;

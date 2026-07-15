@@ -213,6 +213,12 @@ describe('parseSections', () => {
     expect(parseSections('\n\n  \n')).toEqual({ title: '', sections: [] });
   });
 
+  it('undefined/null 输入不崩溃，返回空结构', () => {
+    // 回归：OutlineView 传入后端返回的 data.content（类型断言为 string 但运行时可能 undefined）
+    expect(parseSections(undefined as unknown as string)).toEqual({ title: '', sections: [] });
+    expect(parseSections(null as unknown as string)).toEqual({ title: '', sections: [] });
+  });
+
   it('ATX 闭合 # 被从标题中去除', () => {
     const doc = parseSections('## 分组 ###\n');
     expect(doc.sections[0].title).toBe('分组');

@@ -53,9 +53,9 @@ export default function WorldView({ projectId }: Props) {
   const { data, isLoading } = useNovelDocument(projectId, 'world');
   const [viewMode, setViewMode] = useViewMode();
   const [showInspiration, setShowInspiration] = useState(false);
-  const revision = useFileRevision({ projectId, targetFile: 'world/index.md', stage: 'world' });
+  const revision = useFileRevision({ projectId, targetFile: data?.sourceFile ?? 'world/index.md', stage: 'world' });
 
-  const sections = useMemo(() => (data ? parseSections(data).sections : []), [data]);
+  const sections = useMemo(() => (data ? parseSections(data.content).sections : []), [data]);
 
   if (isLoading) return <div className={loadingWrap}>加载中...</div>;
   if (!data) return <EmptyState message="尚未创建世界观。" command="/world" />;
