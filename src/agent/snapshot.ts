@@ -201,3 +201,60 @@ export async function gitSync(projectDir: string): Promise<{ success: boolean; m
     return { success: false, message: `同步失败: ${message}` };
   }
 }
+
+/**
+ * 确保项目仓库处于双分支模型：main（只读镜像）+ draft（工作区）。
+ * - 两者都不存在：从当前 HEAD 创建 main 与 draft，checkout 到 draft
+ * - main 不存在：从当前 HEAD 创建 main（不动位置）
+ * - draft 不存在：从当前 HEAD 创建 draft
+ * - checkout 到 draft
+ *
+ * 幂等：已处于双分支模型时无副作用。
+ */
+export async function ensureDraftBranch(projectDir: string): Promise<void> {
+  await ensureGitInit(projectDir);
+
+  const hasBranch = async (name: string): Promise<boolean> => {
+    try {
+      await execFileAsync('git', ['rev-parse', '--verify', name], { cwd: projectDir });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // 若无任何提交（空仓库），先建一个初始提交作为分支基点
+  try {
+    await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectDir });
+  } catch {
+    await execFileAsync('git', ['add', '-A'], { cwd: projectDir });
+    try {
+      await execFileAsync('git', ['commit', '--allow-empty', '-m', '[auto] init'], { cwd: projectDir });
+    } catch { /* nothing to commit, allow-empty 兜底 */ }
+  }
+
+  // 推断"当前分支名"作为基点（迁移前可能是 master/main/其他）
+  const { stdout: curOut } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectDir });
+  const cur = curOut.trim();
+
+  // 确保 main 存在（若 cur 就是 main/master 则复用；否则从当前 HEAD 建 main）
+  const mainExists = await hasBranch('main');
+  if (!mainExists) {
+    // 若用户原分支是 master，将其视为 main（不强制改名：在 main 上 mirror master 的位置）
+    const masterExists = await hasBranch('master');
+    if (masterExists && cur === 'master') {
+      await execFileAsync('git', ['branch', 'main', 'master'], { cwd: projectDir });
+    } else {
+      await execFileAsync('git', ['branch', 'main'], { cwd: projectDir });
+    }
+  }
+
+  // 确保 draft 存在
+  const draftExists = await hasBranch('draft');
+  if (!draftExists) {
+    await execFileAsync('git', ['branch', 'draft'], { cwd: projectDir });
+  }
+
+  // checkout 到 draft
+  await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
+}
