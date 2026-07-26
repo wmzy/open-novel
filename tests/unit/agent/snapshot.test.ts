@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ensureGitInit, createSnapshot, ensureDraftBranch } from '../../../src/agent/snapshot';
+import { ensureGitInit, createSnapshot, ensureDraftBranch, reviewDiff } from '../../../src/agent/snapshot';
 
 const execFileAsync = promisify(execFile);
 
@@ -58,5 +58,61 @@ describe('ensureDraftBranch', () => {
     expect(await currentBranch(dir)).toBe('main');
     await ensureDraftBranch(dir);
     expect(await currentBranch(dir)).toBe('draft');
+  });
+});
+
+describe('reviewDiff', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await makeRepo();
+    await ensureDraftBranch(dir);
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('draft==main 时返回空审阅', async () => {
+    const r = await reviewDiff(dir);
+    expect(r.commits).toHaveLength(0);
+    expect(r.files).toHaveLength(0);
+    expect(r.totalAdded).toBe(0);
+    expect(r.totalRemoved).toBe(0);
+  });
+
+  it('draft 领先 main 时返回 commit 列表 + per-file diff', async () => {
+    await fs.writeFile(path.join(dir, 'ch1.md'), '第一章内容\n');
+    await createSnapshot(dir, '写第一章');
+
+    const r = await reviewDiff(dir);
+    expect(r.commits.length).toBeGreaterThanOrEqual(1);
+    expect(r.files.some((f) => f.path === 'ch1.md')).toBe(true);
+    const ch1 = r.files.find((f) => f.path === 'ch1.md')!;
+    expect(ch1.status).toBe('added');
+    expect(ch1.addedLines).toBeGreaterThan(0);
+    expect(ch1.diff).toContain('+第一章内容');
+    expect(r.totalAdded).toBeGreaterThan(0);
+  });
+
+  it('working tree 有未提交改动时先 checkpoint commit，diff 包含之', async () => {
+    await fs.writeFile(path.join(dir, 'ch1.md'), '第一章\n');
+    await createSnapshot(dir, '写第一章');
+    // 未提交改动
+    await fs.writeFile(path.join(dir, 'ch2.md'), '第二章\n');
+
+    const r = await reviewDiff(dir);
+    expect(r.files.some((f) => f.path === 'ch2.md')).toBe(true);
+  });
+
+  it('修改/删除文件状态正确', async () => {
+    await fs.writeFile(path.join(dir, 'ch1.md'), 'AAA\nBBB\nCCC\n');
+    await createSnapshot(dir, '加 ch1');
+    await fs.writeFile(path.join(dir, 'ch1.md'), 'AAA\nXXX\nCCC\n'); // 修改
+    await fs.rm(path.join(dir, 'README.md')); // 删除
+    await createSnapshot(dir, '改 ch1 删 README');
+
+    const r = await reviewDiff(dir);
+    const ch1 = r.files.find((f) => f.path === 'ch1.md');
+    const readme = r.files.find((f) => f.path === 'README.md');
+    expect(ch1?.status).toBe('modified');
+    expect(readme?.status).toBe('deleted');
   });
 });

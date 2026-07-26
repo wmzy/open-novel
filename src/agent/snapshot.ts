@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { summarizeDiff } from '../shared/diff-utils';
 
 const execFileAsync = promisify(execFile);
 
@@ -257,4 +258,115 @@ export async function ensureDraftBranch(projectDir: string): Promise<void> {
 
   // checkout 到 draft
   await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
+}
+
+export interface ReviewCommit {
+  hash: string;
+  message: string;
+  date: string;
+}
+
+export interface ReviewFile {
+  path: string;
+  status: 'added' | 'modified' | 'deleted';
+  addedLines: number;
+  removedLines: number;
+  diff: string;
+}
+
+export interface ReviewResult {
+  commits: ReviewCommit[];
+  files: ReviewFile[];
+  totalAdded: number;
+  totalRemoved: number;
+}
+
+/**
+ * 聚合 draft 相对 main 的待审阅数据。
+ * 流程：
+ * 1. 先把 working tree 未提交改动 checkpoint commit 到 draft（确保 diff 完整）
+ * 2. rev-list main..draft 取 commit 列表；为空则返回空审阅
+ * 3. diff --name-status main..draft 取“确有差异”的文件列表；
+ *    再用 git log --name-status 取每个文件最近一次变更的状态
+ *    （add 后又 modify → modified）
+ * 4. 对每个文件 diff main..draft -- <path> 取 unified diff，summarizeDiff 统计行数
+ */
+export async function reviewDiff(projectDir: string): Promise<ReviewResult> {
+  await ensureDraftBranch(projectDir);
+
+  // 1. checkpoint 未提交改动
+  await execFileAsync('git', ['add', '-A'], { cwd: projectDir });
+  try {
+    await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd: projectDir });
+    // 无暂存改动
+  } catch {
+    await execFileAsync('git', ['commit', '-m', '[auto] review checkpoint'], { cwd: projectDir });
+  }
+
+  // 2. commit 列表
+  const { stdout: revOut } = await execFileAsync('git', [
+    'rev-list', 'main..draft', '--format=%H|%s|%ai', '--no-color',
+  ], { cwd: projectDir });
+  const commits: ReviewCommit[] = revOut.trim().split('\n')
+    .filter((l) => l && !l.startsWith('commit '))
+    .map((line) => {
+      const [hash, message, date] = line.split('|');
+      return { hash, message, date };
+    });
+
+  if (commits.length === 0) {
+    return { commits: [], files: [], totalAdded: 0, totalRemoved: 0 };
+  }
+
+  // 3. 文件列表（以 net diff 为准：只包含 main/draft 间确有差异的文件，
+  //    避免“新增后又删除”这类净效果为空的文件被误报）
+  const { stdout: statOut } = await execFileAsync('git', [
+    'diff', '--name-status', 'main..draft', '--no-color',
+  ], { cwd: projectDir });
+  const netFiles = statOut.trim().split('\n').filter(Boolean).map((line) => {
+    const [code, filePath] = line.split('\t');
+    const status: ReviewFile['status'] =
+      code === 'A' ? 'added' : code === 'D' ? 'deleted' : 'modified';
+    return { path: filePath, status };
+  });
+
+  // 文件状态取“最近一次触碰该文件的 commit”的状态（git log 默认 newest-first，
+  // 首次出现即为最新）。这样 add 后又 modify 的文件会报告为 modified，
+  // 而非 net diff 的 added。
+  const { stdout: logOut } = await execFileAsync('git', [
+    'log', '--name-status', '--format=', '--no-color', 'main..draft',
+  ], { cwd: projectDir });
+  const latestStatus = new Map<string, ReviewFile['status']>();
+  for (const line of logOut.split('\n')) {
+    if (!line) continue;
+    const [code, filePath] = line.split('\t');
+    if (!filePath || latestStatus.has(filePath)) continue;
+    latestStatus.set(filePath, code === 'A' ? 'added' : code === 'D' ? 'deleted' : 'modified');
+  }
+  const fileEntries = netFiles.map((fe) => ({
+    path: fe.path,
+    status: latestStatus.get(fe.path) ?? fe.status,
+  }));
+
+  // 4. per-file diff + 行数统计
+  let totalAdded = 0;
+  let totalRemoved = 0;
+  const files: ReviewFile[] = [];
+  for (const fe of fileEntries) {
+    const { stdout: diffOut } = await execFileAsync('git', [
+      'diff', 'main..draft', '--', fe.path, '--no-color',
+    ], { cwd: projectDir });
+    const summary = summarizeDiff(diffOut);
+    files.push({
+      path: fe.path,
+      status: fe.status,
+      addedLines: summary.addedLines,
+      removedLines: summary.removedLines,
+      diff: diffOut,
+    });
+    totalAdded += summary.addedLines;
+    totalRemoved += summary.removedLines;
+  }
+
+  return { commits, files, totalAdded, totalRemoved };
 }
