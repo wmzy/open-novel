@@ -12,7 +12,7 @@ import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
 import { detectChapters, type ChunkSource } from '../../shared/text-chunker';
-import { gitSync } from '../../agent/snapshot';
+import { gitSync, ensureDraftBranch } from '../../agent/snapshot';
 import {
   TEMPLATE_GENERATORS,
   TEMPLATE_FILE_PATHS,
@@ -199,6 +199,8 @@ projectsRouter.get('/:id', async (c) => {
   const id = c.req.param('id');
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) return c.json({ error: 'Not found' }, 404);
+  // 迁移到双分支模型（幂等，已有 draft 则跳过）。失败不阻塞项目读取。
+  await ensureDraftBranch(project.path).catch(() => {});
   return c.json({ project: { ...project, skillId: resolveSkillId(project.genre) } });
 });
 

@@ -7,6 +7,9 @@ import { projects } from '../../../src/db/schema';
 import { eq } from 'drizzle-orm';
 import apiApp from '../../../src/api-app';
 import { ensureGitInit, createSnapshot, ensureDraftBranch } from '../../../src/agent/snapshot';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
 
 describe('review API', () => {
   let tempDir: string;
@@ -82,5 +85,40 @@ describe('review API', () => {
   it('项目不存在时返回 404', async () => {
     const res = await apiApp.request('/api/projects/nonexistent/review');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('迁移钩子：GET /:id 触发 ensureDraftBranch', () => {
+  let tempDir: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    await ensureDbReady();
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'migrate-api-'));
+    await ensureGitInit(tempDir);
+    await fs.writeFile(path.join(tempDir, 'README.md'), 'init\n');
+    await createSnapshot(tempDir, 'init');
+    // 注意：不预先 ensureDraftBranch，让 GET /:id 触发
+
+    projectId = 'test_proj_migrate_1';
+    await db.delete(projects).where(eq(projects.id, projectId));
+    await db.insert(projects).values({
+      id: projectId,
+      title: '迁移测试',
+      path: tempDir,
+      genre: 'wuxia',
+    });
+  });
+
+  afterEach(async () => {
+    await db.delete(projects).where(eq(projects.id, projectId)).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('GET /api/projects/:id 后 draft 分支存在', async () => {
+    const res = await apiApp.request(`/api/projects/${projectId}`);
+    expect(res.status).toBe(200);
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', 'draft'], { cwd: tempDir });
+    expect(stdout.trim()).toBeTruthy();
   });
 });
