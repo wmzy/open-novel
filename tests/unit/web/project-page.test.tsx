@@ -33,6 +33,9 @@ vi.mock('@/web/hooks/useAgents', () => ({
 vi.mock('@/web/hooks/useChatPanelWidth', () => ({
   useChatPanelWidth: () => ({ width: 400, isResizing: false, resizeHandleProps: {} }),
 }));
+vi.mock('@/web/hooks/useReview', () => ({
+  useReview: () => ({ review: undefined, isLoading: false, pendingCount: 0, merge: vi.fn(), discard: vi.fn(), merging: false, discarding: false }),
+}));
 // 视图组件无需渲染——404 分支不会走到 ViewRouter。
 vi.mock('@/web/components/views/DashboardView', () => ({ default: () => null }));
 vi.mock('@/web/components/views/ConceptView', () => ({ default: () => null }));

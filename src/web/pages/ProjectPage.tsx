@@ -10,7 +10,9 @@ import EditorPanel from '@/web/components/EditorPanel';
 import RewritePanel from '@/web/components/RewritePanel';
 import QualityCheckPanel from '@/web/components/QualityCheckPanel';
 import FilePreview from '@/web/components/FilePreview';
+import ReviewPanel from '@/web/components/ReviewPanel';
 import { useFilePreview } from '@/web/hooks/useFilePreview';
+import { useReview } from '@/web/hooks/useReview';
 import { useAgentSelection } from '@/web/hooks/useAgents';
 import { useChatPanelWidth } from '@/web/hooks/useChatPanelWidth';
 import { useDocSourceFile } from '@/web/hooks/useDocSourceFile';
@@ -142,6 +144,15 @@ const previewToggle = css`
   &:hover { background: var(--haze-color-bg-secondary); }
 `;
 
+const reviewBadge = css`
+  margin-left: 0.25rem;
+  background: var(--haze-color-primary);
+  color: white;
+  border-radius: 8px;
+  padding: 0 0.4rem;
+  font-size: 0.7rem;
+`;
+
 const rewriteDetails = css`
   border: 1px solid var(--haze-color-border);
   border-radius: 6px;
@@ -269,6 +280,8 @@ export default function ProjectPage() {
   const [previewContent, setPreviewContent] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [snapshotSaving, setSnapshotSaving] = useState(false);
+  const [showReview, setShowReview] = useState(false);
+  const review = useReview(id!);
 
   const queryClient = useQueryClient();
   const { data: project, isLoading, error, refetch: refetchProject } = useQuery({
@@ -556,6 +569,9 @@ export default function ProjectPage() {
           <h2>{project.title}</h2>
           <WorkflowProgress currentStage={project.currentStage} onStageClick={handleViewChange} />
           <div className={toolbarActions}>
+            <button className={previewToggle} onClick={() => setShowReview(true)} title="审阅并合并 draft 到 main">
+              审阅{review.pendingCount > 0 && <span className={reviewBadge}>{review.pendingCount}</span>}
+            </button>
             <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown">MD</button>
             <button className={previewToggle} onClick={() => handleExport('text')} title="导出 TXT">TXT</button>
             <button className={previewToggle} onClick={handleUndo} title="撤销上次更改">撤销</button>
@@ -602,6 +618,32 @@ export default function ProjectPage() {
       >
         <ChatPanel key={id} projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleViewChange} />
       </div>
+      {showReview && (
+        <ReviewPanel
+          review={review.review}
+          onMerge={async () => {
+            try {
+              await review.merge();
+              toast.success('已合并到 main');
+            } catch {
+              toast.error('合并失败');
+            }
+            setShowReview(false);
+          }}
+          onDiscard={async () => {
+            try {
+              await review.discard();
+              toast.success('已丢弃未审阅改动');
+            } catch {
+              toast.error('丢弃失败');
+            }
+            setShowReview(false);
+          }}
+          merging={review.merging}
+          discarding={review.discarding}
+          onClose={() => setShowReview(false)}
+        />
+      )}
     </div>
   );
 }
