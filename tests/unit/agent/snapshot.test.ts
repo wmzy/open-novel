@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ensureGitInit, createSnapshot, ensureDraftBranch, reviewDiff } from '../../../src/agent/snapshot';
+import { ensureGitInit, createSnapshot, ensureDraftBranch, reviewDiff, mergeDraft, discardDraft } from '../../../src/agent/snapshot';
 
 const execFileAsync = promisify(execFile);
 
@@ -114,5 +114,67 @@ describe('reviewDiff', () => {
     const readme = r.files.find((f) => f.path === 'README.md');
     expect(ch1?.status).toBe('modified');
     expect(readme?.status).toBe('deleted');
+  });
+});
+
+/** 读取 main 分支指向的 commit hash。 */
+async function mainHash(dir: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'main'], { cwd: dir });
+  return stdout.trim();
+}
+async function draftHash(dir: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'draft'], { cwd: dir });
+  return stdout.trim();
+}
+
+describe('mergeDraft', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await makeRepo();
+    await ensureDraftBranch(dir);
+    await fs.writeFile(path.join(dir, 'ch1.md'), '第一章\n');
+    await createSnapshot(dir, '写第一章');
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('ff main 到 draft，merge 后 main==draft，working tree 回到 draft', async () => {
+    const beforeDraft = await draftHash(dir);
+    const res = await mergeDraft(dir);
+    expect(res.success).toBe(true);
+    expect(res.fastForward).toBe(true);
+    expect(await mainHash(dir)).toBe(beforeDraft);
+    expect(await currentBranch(dir)).toBe('draft');
+  });
+
+  it('merge 后 reviewDiff 为空', async () => {
+    await mergeDraft(dir);
+    const r = await reviewDiff(dir);
+    expect(r.commits).toHaveLength(0);
+  });
+});
+
+describe('discardDraft', () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await makeRepo();
+    await ensureDraftBranch(dir);
+    await fs.writeFile(path.join(dir, 'ch1.md'), '第一章\n');
+    await createSnapshot(dir, '写第一章');
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('reset draft 到 main，丢弃 commit + working tree 改动', async () => {
+    const beforeMain = await mainHash(dir);
+    const res = await discardDraft(dir);
+    expect(res.success).toBe(true);
+    expect(await draftHash(dir)).toBe(beforeMain);
+    // 文件被丢弃
+    await expect(fs.access(path.join(dir, 'ch1.md'))).rejects.toThrow();
+  });
+
+  it('discard 后 reviewDiff 为空', async () => {
+    await discardDraft(dir);
+    const r = await reviewDiff(dir);
+    expect(r.commits).toHaveLength(0);
   });
 });

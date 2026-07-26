@@ -370,3 +370,58 @@ export async function reviewDiff(projectDir: string): Promise<ReviewResult> {
 
   return { commits, files, totalAdded, totalRemoved };
 }
+
+export interface MergeResult {
+  success: boolean;
+  fastForward: boolean;
+  hash: string | null;
+}
+
+/**
+ * 审阅合并：ff main 到 draft，然后 checkout 回 draft。
+ * main 只读镜像约束下必然 fast-forward。
+ */
+export async function mergeDraft(projectDir: string): Promise<MergeResult> {
+  try {
+    await ensureDraftBranch(projectDir);
+    await execFileAsync('git', ['checkout', 'main'], { cwd: projectDir });
+
+    // 检测能否 ff
+    let fastForward = true;
+    try {
+      await execFileAsync('git', ['merge', '--ff-only', 'draft'], { cwd: projectDir });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Not possible to fast-forward') || msg.includes('non-fast-forward')) {
+        fastForward = false;
+        // 兜底：尝试普通合并（破坏 ff 约束，但避免卡死）
+        await execFileAsync('git', ['merge', '--no-edit', 'draft'], { cwd: projectDir });
+      } else {
+        throw err;
+      }
+    }
+
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'main'], { cwd: projectDir });
+    await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
+    return { success: true, fastForward, hash: stdout.trim() };
+  } catch {
+    return { success: false, fastForward: false, hash: null };
+  }
+}
+
+export interface DiscardResult {
+  success: boolean;
+}
+
+/**
+ * 丢弃整批未审阅：reset draft 到 main（含 working tree 改动）。
+ */
+export async function discardDraft(projectDir: string): Promise<DiscardResult> {
+  try {
+    await ensureDraftBranch(projectDir);
+    await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: projectDir });
+    return { success: true };
+  } catch {
+    return { success: false };
+  }
+}
