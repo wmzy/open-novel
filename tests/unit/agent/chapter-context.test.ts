@@ -143,7 +143,7 @@ describe('buildCastLayer', () => {
 
   it('total budget: degrades to L2 when exceeding 20KB', async () => {
     const big = 'B'.repeat(5900);
-    for (const name of ['武松', '西门庆', '世子', '顾琪']) {
+    for (const name of ['武松', '西门庆', '高俅', '扈三娘']) {
       await fs.writeFile(
         path.join(dir, '.novel', 'characters', 'profiles', `${name}.md`),
         `# ${name}\n\n## 出身与经历\n${big}`,
@@ -151,7 +151,7 @@ describe('buildCastLayer', () => {
     }
     const layer = await buildCastLayer(dir, {
       pov: '武松',
-      full: ['武松', '西门庆', '世子', '顾琪'],
+      full: ['武松', '西门庆', '高俅', '扈三娘'],
       brief: [],
     });
     expect(layer).toContain('速查');

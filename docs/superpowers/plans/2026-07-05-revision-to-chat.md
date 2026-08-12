@@ -451,7 +451,7 @@ beforeEach(() => {
   fetchSpy.mockImplementation(async (url: string, opts?: RequestInit) => {
     const u = String(url);
     if (u.includes('state.json')) {
-      return { ok: true, json: async () => ({ content: '{"characters":[{"name":"剑平"},{"name":"剑臣"}]}' }) } as Response;
+      return { ok: true, json: async () => ({ content: '{"characters":[{"name":"武松"},{"name":"鲁智深"}]}' }) } as Response;
     }
     if (u.includes('/naming/check')) {
       return { ok: true, json: async () => ({ warnings: [] }) } as Response;
@@ -481,16 +481,16 @@ describe('RenameDialog', () => {
     const onClose = vi.fn();
     const { container } = render(createElement(RenameDialog, { projectId: 'p1', targetFile: 'concept.md', onClose }));
     const inputs = container.querySelectorAll('input[type="text"], input:not([type])');
-    fireEvent.change(inputs[0], { target: { value: '剑平' } });
-    fireEvent.change(inputs[1], { target: { value: '剑萍' } });
+    fireEvent.change(inputs[0], { target: { value: '武松' } });
+    fireEvent.change(inputs[1], { target: { value: '武淞' } });
     fireEvent.blur(inputs[1]);
     fireEvent.click(screen.getByText('确认重命名'));
     await waitFor(() => {
       const renameCall = fetchSpy.mock.calls.find(([url]) => String(url).includes('/rename'));
       expect(renameCall).toBeDefined();
       const body = JSON.parse(renameCall![1].body as string);
-      expect(body.oldName).toBe('剑平');
-      expect(body.newName).toBe('剑萍');
+      expect(body.oldName).toBe('武松');
+      expect(body.newName).toBe('武淞');
     });
   });
 });
@@ -880,7 +880,7 @@ cd ~/projects/open-novel && pkill -9 -f 'dist/server/api.js'; nohup node dist/se
 ```
 
 浏览器验证：
-1. 角色视图卡片 ✎ → ChatPanel 提示条显示「正在修订 characters/profiles.md · 剑平」+ 输入框聚焦
+1. 角色视图卡片 ✎ → ChatPanel 提示条显示「正在修订 characters/profiles.md · 武松」+ 输入框聚焦
 2. 输入意见发送 → 对话流出现 assistant 响应 + RevisionDiffPanel（diff 面板）
 3. 卡片 ⇄ 重命名 → RenameDialog 弹出
 4. WritingView 章节 ✎ → 提示条 targetFile 为章节路径

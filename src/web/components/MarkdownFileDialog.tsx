@@ -206,8 +206,8 @@ export function MarkdownFileDialog({ projectId, filePath, title, onClose }: Prop
       if (content !== null) return content;
 
       // 2. 原始路径失败——查文件列表，用后缀匹配候选
-      //    场景：profiles.md 里的链接是 profiles/剑平.md，但该文件实际在
-      //    characters/profiles/剑平.md。又如 ../角色关系图.md 实际在
+      //    场景：profiles.md 里的链接是 profiles/武松.md，但该文件实际在
+      //    characters/profiles/武松.md。又如 ../角色关系图.md 实际在
       //    characters/角色关系图.md。
       try {
         const listResp = await fetch(`/api/projects/${projectId}/files/list`);

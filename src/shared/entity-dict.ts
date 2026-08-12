@@ -93,7 +93,7 @@ function cleanItem(item: string): string {
   return item.replace(/\*\*/g, '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').trim();
 }
 
-/** 从值中取逗号前的主名：「剑平，字试锋」→「剑平」。 */
+/** 从值中取逗号前的主名：「武松，行者」→「武松」。 */
 function primaryName(value: string): string {
   return value.split(/[，,、][^，,、]*$/)[0].split(/，|,|、/)[0].trim();
 }
@@ -132,13 +132,13 @@ export function buildEntityDict(
     const fileType = inferFileType(path);
     if (fileType === 'other') continue;
     const doc = parseSections(content);
-    // 文档标题（# 级）含冒号时取冒号后作为名字候选（如「# 主角：剑平」→「剑平」）
+    // 文档标题（# 级）含冒号时取冒号后作为名字候选（如「# 主角：武松」→「武松」）
     const titleColonIdx = doc.title.search(/[：:]/);
     const docTitleName =
       titleColonIdx >= 0
         ? extractNameFromTitle(doc.title.slice(titleColonIdx + 1))
         : '';
-    // 注意：不从文档标题括号提取 alias——「# 重要背景角色：剑城（父亲）」的括号是定位说明不是外号
+    // 注意：不从文档标题括号提取 alias——「# 重要背景角色：林冲（教头）」的括号是定位说明不是外号
     const fullRaw = content;
 
     for (const section of doc.sections) {
@@ -181,7 +181,7 @@ function processProfilesSection(
   if (sectionName) {
     add(sectionName, 'character', file, section.title, fullRaw);
   }
-  // 文档标题里的名字（如「# 主角：剑平」→「剑平」），兼容无 姓名 字段的档案
+  // 文档标题里的名字（如「# 主角：武松」→「武松」），兼容无 姓名 字段的档案
   if (docTitleName) add(docTitleName, 'character', file, section.title, fullRaw);
   // 标题里的名字：仅当标题与姓名字段值一致时（如「## 林冲」+「- 姓名：林冲」）。
   // 分类标题（「基本信息」「时间线」）与姓名值不一致，不入词典。

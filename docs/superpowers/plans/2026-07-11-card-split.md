@@ -1640,7 +1640,7 @@ Expected: ALL PASS
 
 - [ ] **Step 3: E2E — 迁移旧项目**
 
-对已有项目（如 ygj）：
+对已有项目：
 1. 点击「迁移到卡片格式」按钮
 2. 验证 concept.md / world-building.md / outline-detailed.md 被删除
 3. 验证 concept/ / world/ / outline/ 目录创建，卡片数 = section 数

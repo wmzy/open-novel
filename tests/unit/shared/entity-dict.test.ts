@@ -176,25 +176,25 @@ describe('buildEntityDict', () => {
     expect(dict.get('林冲')?.type).toBe('character'); // 角色优先
   });
 
-  it('支持加粗字段名 **姓名**：剑平', () => {
-    const profiles = `# 主角：剑平
+  it('支持加粗字段名 **姓名**：武松', () => {
+    const profiles = `# 主角：武松
 
 ## 基本信息
 
-- **姓名**：剑平，字试锋
+- **姓名**：武松，行者
 - **年龄**：18岁`;
-    const dict = buildEntityDict([{ path: 'characters/profiles/剑平.md', content: profiles }]);
-    expect(dict.get('剑平')?.type).toBe('character');
+    const dict = buildEntityDict([{ path: 'characters/profiles/武松.md', content: profiles }]);
+    expect(dict.get('武松')?.type).toBe('character');
   });
 
-  it('从文档标题 # 主角：剑平 提取名字', () => {
-    const profiles = `# 主角：剑平
+  it('从文档标题 # 主角：武松 提取名字', () => {
+    const profiles = `# 主角：武松
 
 ## 基本信息
 
-剑平是主角。`;
-    const dict = buildEntityDict([{ path: 'characters/profiles/剑平.md', content: profiles }]);
-    expect(dict.get('剑平')?.type).toBe('character');
+武松是主角。`;
+    const dict = buildEntityDict([{ path: 'characters/profiles/武松.md', content: profiles }]);
+    expect(dict.get('武松')?.type).toBe('character');
   });
 
   it('EntityRef.sectionRaw 含 ## 标题行', () => {
@@ -220,49 +220,49 @@ describe('buildEntityDict', () => {
   });
 
   it('分类标题（基本信息/时间线/性格特征）不进词典', () => {
-    const profiles = `# 主角：剑平
+    const profiles = `# 主角：武松
 
 ## 基本信息
 
-- **姓名**：剑平，字试锋
+- **姓名**：武松，行者
 
 ## 时间线
 
-剑平出山。
+武松上山。
 
 ## 性格特征
 
 沉默寡言。`;
-    const dict = buildEntityDict([{ path: 'characters/profiles/剑平.md', content: profiles }]);
+    const dict = buildEntityDict([{ path: 'characters/profiles/武松.md', content: profiles }]);
     expect(dict.has('基本信息')).toBe(false);
     expect(dict.has('时间线')).toBe(false);
     expect(dict.has('性格特征')).toBe(false);
-    expect(dict.has('剑平')).toBe(true);
+    expect(dict.has('武松')).toBe(true);
   });
 
   it('嵌套列表字段（祖父/父亲）不被误识为别名', () => {
-    const profiles = `# 主角：剑平
+    const profiles = `# 主角：武松
 
 ## 基本信息
 
-- **姓名**：剑平
+- **姓名**：武松
 - **家族**：
-  - 祖父：剑臣
-  - 父亲：剑城`;
-    const dict = buildEntityDict([{ path: 'characters/profiles/剑平.md', content: profiles }]);
+  - 祖父：张三
+  - 父亲：张四`;
+    const dict = buildEntityDict([{ path: 'characters/profiles/武松.md', content: profiles }]);
     expect(dict.has('祖父')).toBe(false);
     expect(dict.has('父亲')).toBe(false);
   });
 
   it('文档标题括号里的定位说明（父亲/重要角色）不入 alias', () => {
-    const profiles = `# 重要背景角色：剑城（父亲）
+    const profiles = `# 重要背景角色：林冲（教头）
 
 ## 基本信息
 
-- **姓名**：剑城，字万楼`;
-    const dict = buildEntityDict([{ path: 'characters/profiles/剑城.md', content: profiles }]);
+- **姓名**：林冲，绰号豹子头`;
+    const dict = buildEntityDict([{ path: 'characters/profiles/林冲.md', content: profiles }]);
     expect(dict.has('父亲')).toBe(false);
-    expect(dict.get('剑城')?.type).toBe('character');
+    expect(dict.get('林冲')?.type).toBe('character');
   });
 
   it('world 描述性子标题（含冒号/破折号）不进词典', () => {

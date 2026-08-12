@@ -79,7 +79,7 @@ describe('extractChapterOutline', () => {
 
   it('matches wider range (第27-30章)', async () => {
     await writeOutline(`#### 第27-30章：棋局
-| POV | 世子 |`);
+| POV | 高俅 |`);
     expect(await extractChapterOutline(dir, 29)).toContain('棋局');
   });
 
@@ -519,7 +519,7 @@ describe('buildCastLayer', () => {
   it('total budget: degrades to L2 when exceeding 20KB', async () => {
     // 4 个角色，每个 profile 6KB → 总 24KB，应降级最后一个为 L2
     const big = 'B'.repeat(5900);
-    for (const name of ['武松', '西门庆', '世子', '顾琪']) {
+    for (const name of ['武松', '西门庆', '高俅', '扈三娘']) {
       await fs.writeFile(
         path.join(dir, '.novel', 'characters', 'profiles', `${name}.md`),
         `# ${name}\n\n## 出身与经历\n${big}`,
@@ -527,7 +527,7 @@ describe('buildCastLayer', () => {
     }
     const layer = await buildCastLayer(dir, {
       pov: '武松',
-      full: ['武松', '西门庆', '世子', '顾琪'],
+      full: ['武松', '西门庆', '高俅', '扈三娘'],
       brief: [],
     });
     // 第四个角色应降级为速查

@@ -58,7 +58,7 @@ describe('normalizeMdPath', () => {
   });
 
   it('decodeURIComponent 还原中文（react-markdown 会 URL 编码）', () => {
-    expect(normalizeMdPath('profiles/%E5%89%91%E5%B9%B3.md')).toBe('profiles/剑平.md');
+    expect(normalizeMdPath('profiles/%E6%AD%A6%E6%9D%BE.md')).toBe('profiles/武松.md');
     expect(normalizeMdPath('%E8%A7%92%E8%89%B2%E5%85%B3%E7%B3%BB%E5%9B%BE.md')).toBe('角色关系图.md');
   });
 
@@ -179,34 +179,34 @@ describe('MarkdownFileDialog 组件', () => {
   });
 
   it('直接路径失败时，用文件列表后缀匹配候选路径', async () => {
-    // 场景：profiles.md 中的链接是 profiles/剑平.md，
-    // 但实际文件在 characters/profiles/剑平.md
+    // 场景：profiles.md 中的链接是 profiles/武松.md，
+    // 但实际文件在 characters/profiles/武松.md
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       // files/list 返回全部文件
       if (url.includes('/files/list')) {
         return new Response(JSON.stringify({
-          files: ['characters/profiles/剑平.md', 'characters/profiles.md'],
+          files: ['characters/profiles/武松.md', 'characters/profiles.md'],
         }));
       }
-      // 直接路径 profiles/剑平.md 失败
-      if (url.includes('path=profiles%2F%E5%89%91%E5%B9%B3.md')) {
+      // 直接路径 profiles/武松.md 失败
+      if (url.includes('path=profiles%2F%E6%AD%A6%E6%9D%BE.md')) {
         return new Response(JSON.stringify({ error: 'File not found' }));
       }
-      // 候选路径 characters/profiles/剑平.md 成功
-      return new Response(JSON.stringify({ content: '# 剑平\n\n复仇少年。' }));
+      // 候选路径 characters/profiles/武松.md 成功
+      return new Response(JSON.stringify({ content: '# 武松\n\n打虎英雄。' }));
     });
 
     render(
       <MarkdownFileDialog
         projectId="proj_1"
-        filePath="profiles/剑平.md"
-        title="剑平"
+        filePath="profiles/武松.md"
+        title="武松"
         onClose={vi.fn()}
       />
     );
 
-    expect(await screen.findByText('复仇少年。')).toBeTruthy();
+    expect(await screen.findByText('打虎英雄。')).toBeTruthy();
     expect(fetchMock).toHaveBeenCalled();
   });
 
@@ -288,10 +288,10 @@ describe('EntityDetailDialog 链接拦截', () => {
 
   it('点击 .md 链接打开预览弹窗而非当前页跳转', async () => {
     const entity: EntityRef = {
-      name: '剑平',
+      name: '武松',
       type: 'character',
       file: 'characters/profiles.md',
-      sectionTitle: '剑平',
+      sectionTitle: '武松',
       sectionRaw: '详见 [世界观](world.md)。',
     };
 
