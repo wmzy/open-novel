@@ -172,17 +172,79 @@ const AUTONOMOUS_PROTOCOL = [
  * 按自治/采访模式组装规划阶段的指令。
  * - 采访式（默认）：STAGE_HEAD + INTERVIEW_PROTOCOL + 决策清单 + STAGE_TAIL
  * - 自治式：STAGE_HEAD + AUTONOMOUS_PROTOCOL + STAGE_TAIL
+ * 大纲阶段（采访式）追加意图采集指令。
  * 非规划阶段（writing/drafting/revision/polish/decompose/enrich）返回空串，由调用方回退到 STAGE_INSTRUCTIONS。
  */
 function buildStageInstructions(stage: string, autonomous: boolean): string {
   const head = STAGE_HEAD[stage];
   if (head === undefined) return '';
   const tail = STAGE_TAIL[stage] ?? '';
-  if (autonomous) {
-    return head + AUTONOMOUS_PROTOCOL + '\n' + tail;
+  const base = autonomous
+    ? head + AUTONOMOUS_PROTOCOL + '\n' + tail
+    : head + INTERVIEW_PROTOCOL + '\n' + (DECISION_PROMPTS[stage] ?? '') + tail;
+  // 大纲阶段（采访式）：追加意图采集指令
+  if (stage === 'outline' && !autonomous) {
+    return base + INTENT_COLLECTION_INSTRUCTION;
   }
-  return head + INTERVIEW_PROTOCOL + '\n' + (DECISION_PROMPTS[stage] ?? '') + tail;
+  return base;
 }
+
+/** 大纲阶段的意图采集指令：先读意图卡 → 追问「未设定」维度 → 合并写回。仅采访式（非自治）注入。 */
+const INTENT_COLLECTION_INSTRUCTION = [
+  '',
+  '## 作者意图采集（仅大纲阶段）',
+  '生成大纲前，先处理作者意图卡（.novel/intent.md）：',
+  '1. 用 Read 读取 .novel/intent.md。若文件不存在，用 Write 按下方模板创建：',
+  '',
+  '```markdown',
+  '# 作者意图卡',
+  '',
+  '> 本文件记录作者的创作意图与偏好。AI 生成、修订、评审均以此为准。',
+  '> 可随时手动编辑；缺失维度用「未设定」标注。',
+  '',
+  '## 节奏偏好',
+  '- 每章字数：未设定',
+  '- 张弛密度：未设定',
+  '- 断章钩子：未设定',
+  '',
+  '## 角色权重',
+  '- 核心角色（弧线优先）：未设定',
+  '- 不可死亡角色：未设定',
+  '- 配角戏份上限：未设定',
+  '',
+  '## 伏笔风格',
+  '- 长线/短线配比：未设定',
+  '- 埋设密度：未设定',
+  '- 回收节奏：未设定',
+  '',
+  '## 文风锚点',
+  '- 语言密度：未设定',
+  '- 对话/描写比例：未设定',
+  '- 用词禁区：未设定',
+  '',
+  '## 理念冲突偏好',
+  '- 理念冲突 vs 武力冲突比重：未设定',
+  '- 说教容忍度：未设定',
+  '- 理念呈现方式：未设定',
+  '',
+  '## 多线叙事规则',
+  '- 单章视角数上限：未设定',
+  '- 线路切换频率：未设定',
+  '',
+  '## 结局方向',
+  '- 基调：未设定',
+  '- 开放/闭合程度：未设定',
+  '',
+  '## 叙事手法',
+  '- 倒叙/插叙容忍度：未设定',
+  '- 时间跳跃：未设定',
+  '```',
+  '',
+  '2. 对仍为「未设定」的维度，用提问工具（ask）逐维追问——选择题形式，每轮不超过 3 题；相关维度可合并一轮。',
+  '3. 追问结果写回 intent.md：写入前重读文件，用 Edit 精确替换你追问过的维度小节，其他小节原样保留。',
+  '4. 用户拒绝补充的维度保持「未设定」，不要编造。',
+  '5. 生成大纲时严格以 intent.md 为约束；大纲内容不得违背其中已设定的偏好。',
+].join('\n');
 
 /** Plan Mode 叠加指令：先分析规划，不直接执行修改操作。 */
 const PLAN_MODE_INSTRUCTION = [

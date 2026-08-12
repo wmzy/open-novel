@@ -1362,4 +1362,47 @@ describe('composePrompt', () => {
       expect(prompt).not.toContain('## 作者意图（以此为准）');
     });
   });
+
+  describe('intent collection instruction', () => {
+    it('injects intent collection instruction in outline stage (non-autonomous)', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'novel',
+        stage: 'outline',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('作者意图采集（仅大纲阶段）');
+      expect(prompt).toContain('.novel/intent.md');
+    });
+
+    it('does not inject in autonomous mode', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'novel',
+        stage: 'outline',
+        projectDir: tempDir,
+        autonomous: true,
+      });
+      expect(prompt).not.toContain('作者意图采集（仅大纲阶段）');
+    });
+
+    it('does not inject in non-outline stages', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'novel',
+        stage: 'characters',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('作者意图采集（仅大纲阶段）');
+    });
+  });
 });
