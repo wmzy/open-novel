@@ -170,8 +170,8 @@ describe('composePrompt', () => {
           stage: 'concept',
           projectDir: tempDir,
         });
-        // TOOL_INSTRUCTIONS 应列出所有已知名称
-        expect(prompt).toContain('ask / AskUserQuestion / question');
+        // TOOL_INSTRUCTIONS 应列出环境无关的「提问工具 (ask)」名称
+        expect(prompt).toContain('提问工具 (ask)');
         // 行为指令应使用「提问工具」
         expect(prompt).toContain('用提问工具就');
       });
@@ -1311,6 +1311,55 @@ describe('composePrompt', () => {
       });
 
       expect(prompt).not.toContain('# 创作者指令（最高优先级');
+    });
+  });
+
+  describe('intent layer injection', () => {
+    it('injects intent layer when intent.md exists', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'intent.md'),
+        '# 作者意图卡\n\n## 节奏偏好\n\n每章 4000 字\n',
+      );
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'novel',
+        stage: 'outline',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## 作者意图（以此为准）');
+      expect(prompt).toContain('每章 4000 字');
+      // 意图层在阶段指令之前
+      expect(prompt.indexOf('## 作者意图（以此为准）')).toBeLessThan(prompt.indexOf('## Current Stage'));
+    });
+
+    it('skips intent layer when intent.md missing', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'novel',
+        stage: 'outline',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## 作者意图（以此为准）');
+    });
+
+    it('skips intent layer when intent.md is empty', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      await fs.writeFile(path.join(tempDir, '.novel', 'intent.md'), '\n');
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        skillId: 'novel',
+        stage: 'outline',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('## 作者意图（以此为准）');
     });
   });
 });

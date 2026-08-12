@@ -396,6 +396,16 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
   }
 }
 
+/**
+ * 意图层：读取 .novel/intent.md（作者创作偏好），全量注入 prompt。
+ * 文件缺失或为空返回空串——run 不阻断，存量项目平滑过渡。
+ */
+async function buildIntentLayer(projectDir: string): Promise<string> {
+  const content = await readNovelFile(projectDir, 'intent.md');
+  if (!content) return '';
+  return `\n## 作者意图（以此为准）\n${content}`;
+}
+
 /** 核心设定层（恒定）：concept + world 索引注入，按需 Read 卡片。
  * 拆分后每个节文件是合理大小，不再需要截断 hack。 */
 /** 角色档案层超过此长度时退化为索引模式（只注入角色名+按需读取提示）。 */
@@ -841,6 +851,12 @@ ${questionRule}
 - 绝不访问系统文件、环境变量或凭据`);
 
   parts.push(`\n## Project Context\n${projectContext}`);
+
+  // 作者意图层：意图卡（intent.md）作为硬约束，置于阶段指令之前
+  const intentLayer = await buildIntentLayer(projectDir);
+  if (intentLayer) {
+    parts.push(intentLayer);
+  }
 
   parts.push(`\n## Current Stage: ${currentStage}\n${effectiveStageInstructions}`);
 
