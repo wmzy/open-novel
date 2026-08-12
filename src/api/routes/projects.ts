@@ -11,6 +11,7 @@ import { resolveSkillId } from '../../shared/skill-id';
 import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
+import { buildIntentSkeleton, type IntentInput } from '../../shared/intent-card';
 import { detectChapters, type ChunkSource } from '../../shared/text-chunker';
 import { gitSync, ensureDraftBranch } from '../../agent/snapshot';
 import {
@@ -63,6 +64,15 @@ projectsRouter.post('/', async (c) => {
     perspective: body.perspective || 'third-person',
   }).returning();
 
+  // 过滤空意图字段：全部为空时按未提供处理（不生成 intent.md）
+  const rawIntent = (body.intent ?? {}) as Record<string, unknown>;
+  const intentEntries = Object.entries(rawIntent).filter(
+    ([, value]) => typeof value === 'string' && value.trim(),
+  ) as Array<[keyof IntentInput, string]>;
+  const intent: IntentInput | undefined = intentEntries.length > 0
+    ? Object.fromEntries(intentEntries) as IntentInput
+    : undefined;
+
   // Auto-initialize workspace
   initWorkspace(userPath, {
     title: project.title,
@@ -71,6 +81,7 @@ projectsRouter.post('/', async (c) => {
     chapterCount: project.chapterCount,
     perspective: project.perspective,
     skillId: body.skillId,
+    intent,
   });
 
   return c.json({ project }, 201);
@@ -288,6 +299,8 @@ interface WorkspaceOpts {
   chapterCount: number;
   perspective: string;
   skillId?: string;
+  /** 新建项目表单采集的创作偏好（可选）。 */
+  intent?: IntentInput;
 }
 
 /**
@@ -344,6 +357,11 @@ function initWorkspace(projectDir: string, opts: WorkspaceOpts): void {
       targetWords: String(opts.targetWords),
       chapterCount: String(opts.chapterCount),
     });
+  }
+
+  // 意图卡：表单提供的创作偏好写入 intent.md（存量项目 .novel 已存在时函数已提前 return，不受影响）
+  if (opts.intent) {
+    writeFileSync(path.join(novelDir, 'intent.md'), buildIntentSkeleton(opts.intent), 'utf-8');
   }
 
   writeFileSync(path.join(novelDir, 'config.json'), JSON.stringify({

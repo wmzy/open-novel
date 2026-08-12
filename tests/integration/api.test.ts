@@ -38,6 +38,41 @@ describe('API Integration', () => {
     expect(data.project.title).toBe('Test Novel');
   });
 
+  it('POST /api/projects with intent writes .novel/intent.md', async () => {
+    const testDir = `/tmp/open-novel-intent-${Date.now()}`;
+    const res = await app.request('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Intent Test',
+        path: testDir,
+        genre: 'wuxia',
+        intent: { pacing: '每章 4000 字，张弛有度' },
+      }),
+    });
+    expect(res.ok).toBe(true);
+    const intentPath = path.join(testDir, '.novel', 'intent.md');
+    expect(fs.existsSync(intentPath)).toBe(true);
+    const content = fs.readFileSync(intentPath, 'utf-8');
+    expect(content).toContain('## 节奏偏好');
+    expect(content).toContain('每章 4000 字，张弛有度');
+    // 未提供的维度保持「未设定」
+    expect(content).toContain('核心角色（弧线优先）：未设定');
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('POST /api/projects without intent does not create intent.md', async () => {
+    const testDir = `/tmp/open-novel-nointent-${Date.now()}`;
+    const res = await app.request('/api/projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'No Intent', path: testDir, genre: 'wuxia' }),
+    });
+    expect(res.ok).toBe(true);
+    expect(fs.existsSync(path.join(testDir, '.novel', 'intent.md'))).toBe(false);
+    fs.rmSync(testDir, { recursive: true, force: true });
+  });
+
   it('GET /api/agents returns detected agents', async () => {
     const res = await app.request('/api/agents');
     expect(res.ok).toBe(true);
