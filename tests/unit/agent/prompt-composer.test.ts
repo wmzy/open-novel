@@ -972,7 +972,7 @@ describe('composePrompt', () => {
           stage,
           projectDir: tempDir,
         });
-        expect(prompt).toContain('## 项目核心设定', `stage=${stage} 应注入核心设定`);
+        expect(prompt).toContain('## 项目核心设定');
       }
     });
 

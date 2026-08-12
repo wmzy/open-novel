@@ -110,6 +110,26 @@ const actionRow = css`margin-top:0.75rem;display:flex;gap:0.5rem;`;
 
 const importGrid = css`display:grid;gap:0.75rem;`;
 
+const prefsArea = css`
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+`;
+
+const prefsTextarea = css`
+  width: 100%;
+  min-height: 3.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  border: 1px solid var(--haze-color-border);
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  font-size: 0.875rem;
+  resize: vertical;
+  font-family: inherit;
+`;
+
 const pathMissingBadge = css`display:inline-block;background:#fef3c7;color:#92400e;padding:0.125rem 0.375rem;border-radius:4px;font-size:0.7rem;margin-left:0.5rem;`;
 
 const projectMeta = css`margin-top:0.5rem;color:var(--haze-color-text-secondary);font-size:0.875rem;`;
@@ -143,6 +163,10 @@ export default function HomePage() {
   const [page, setPage] = useState(1);
   const [showImport, setShowImport] = useState(false);
   const [importPath, setImportPath] = useState('');
+  const [intentPacing, setIntentPacing] = useState('');
+  const [intentCharacterWeight, setIntentCharacterWeight] = useState('');
+  const [intentForeshadowStyle, setIntentForeshadowStyle] = useState('');
+  const [intentStyleAnchor, setIntentStyleAnchor] = useState('');
 
   const filtered = useMemo(() => {
     if (!projects) return [];
@@ -158,17 +182,29 @@ export default function HomePage() {
 
   const handleCreate = () => {
     if (!title.trim() || !projectPath.trim()) return;
+    const intentEntries = [
+      ['pacing', intentPacing.trim()],
+      ['characterWeight', intentCharacterWeight.trim()],
+      ['foreshadowStyle', intentForeshadowStyle.trim()],
+      ['styleAnchor', intentStyleAnchor.trim()],
+    ].filter(([, value]) => value) as Array<[string, string]>;
+    const intent = intentEntries.length > 0 ? Object.fromEntries(intentEntries) : undefined;
     createProject.mutate({
       title: title.trim(),
       path: projectPath.trim(),
       genre,
       targetWords: parseInt(targetWords) || 100000,
       chapterCount: parseInt(chapterCount) || 20,
+      ...(intent ? { intent } : {}),
     }, {
       onSuccess: (data) => {
         setShowCreate(false);
         setTitle('');
         setProjectPath('');
+        setIntentPacing('');
+        setIntentCharacterWeight('');
+        setIntentForeshadowStyle('');
+        setIntentStyleAnchor('');
         navigate(`/projects/${data.project.id}`);
       },
     });
@@ -262,6 +298,39 @@ export default function HomePage() {
               />
             </div>
           </div>
+          <details className={prefsArea}>
+            <summary>创作偏好（可选，可跳过）</summary>
+            <div className={prefsArea}>
+              <textarea
+                className={prefsTextarea}
+                maxLength={500}
+                placeholder="节奏偏好：如「每章 4000 字，高潮后必留喘息章」"
+                value={intentPacing}
+                onChange={(e) => setIntentPacing(e.target.value)}
+              />
+              <textarea
+                className={prefsTextarea}
+                maxLength={500}
+                placeholder="角色权重：如「核心角色：林冲；不可死亡：鲁智深」"
+                value={intentCharacterWeight}
+                onChange={(e) => setIntentCharacterWeight(e.target.value)}
+              />
+              <textarea
+                className={prefsTextarea}
+                maxLength={500}
+                placeholder="伏笔风格：如「长线藏深、短线密集，每 3-5 章一个钩子」"
+                value={intentForeshadowStyle}
+                onChange={(e) => setIntentForeshadowStyle(e.target.value)}
+              />
+              <textarea
+                className={prefsTextarea}
+                maxLength={500}
+                placeholder="文风锚点：如「语言克制、对话多于描写」"
+                value={intentStyleAnchor}
+                onChange={(e) => setIntentStyleAnchor(e.target.value)}
+              />
+            </div>
+          </details>
           <div className={actionRow}>
             <button className={primaryBtn} onClick={handleCreate}>创建</button>
             <button onClick={() => setShowCreate(false)}>取消</button>

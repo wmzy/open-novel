@@ -23,6 +23,13 @@ export interface CreateProjectInput {
   targetWords?: number;
   chapterCount?: number;
   perspective?: string;
+  /** 创作偏好（可选）：节奏偏好 / 角色权重 / 伏笔风格 / 文风锚点 */
+  intent?: {
+    pacing?: string;
+    characterWeight?: string;
+    foreshadowStyle?: string;
+    styleAnchor?: string;
+  };
 }
 
 export function useCreateProject() {

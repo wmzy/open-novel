@@ -96,6 +96,7 @@ describe('MermaidDiagram 缩放', () => {
     const mermaid = (await import('mermaid')).default;
     vi.mocked(mermaid.render).mockResolvedValueOnce({
       svg: '<svg viewBox="0 0 2400 600"><rect /></svg>',
+      diagramType: 'graph',
     });
     const { container } = render(<MermaidDiagram chart={'graph LR; A-->B'} />);
     await screen.findByText('100%');
