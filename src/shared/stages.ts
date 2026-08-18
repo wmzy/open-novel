@@ -15,8 +15,19 @@ export const STAGES: StageDefinition[] = [
   { id: 'characters', label: '角色', viewId: 'characters', order: 2 },
   { id: 'outline', label: '大纲', viewId: 'outline', order: 3 },
   { id: 'scenes', label: '场景', viewId: 'scenes', order: 4 },
-  { id: 'writing', label: '写作', viewId: 'writing', order: 5 },
+  { id: 'sample', label: '样章', viewId: 'sample', order: 5 },
+  { id: 'writing', label: '写作', viewId: 'writing', order: 6 },
 ];
+
+/** 需要注入写作分层上下文（滚动摘要/状态/伏笔等）的阶段。
+ * sample（样章）要写真实章节正文，故与写作阶段共用分层上下文；
+ * drafting / revision / polish 为写作子模式，不在 STAGES 主线中。 */
+const WRITING_CONTEXT_STAGES = new Set(['sample', 'writing', 'drafting', 'revision', 'polish']);
+
+/** 判断某阶段是否为写作型阶段（需注入写作分层上下文）。 */
+export function isWritingStage(stageId: string): boolean {
+  return WRITING_CONTEXT_STAGES.has(stageId);
+}
 
 // Map from stage ID to view ID
 export const stageToView: Record<string, string> = Object.fromEntries(

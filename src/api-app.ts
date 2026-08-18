@@ -23,6 +23,8 @@ import namingRouter from './api/routes/naming';
 import renameRouter from './api/routes/rename';
 import reviewRouter from './api/routes/review';
 import backupRouter from './api/routes/backup';
+import foreshadowsRouter from './api/routes/foreshadows';
+import retroRouter from './api/routes/retro';
 
 const app = new Hono();
 
@@ -86,6 +88,8 @@ app.route('/api/projects/:projectId/rewrite', rewriteRouter);
 app.route('/api/projects/:projectId/naming', namingRouter);
 app.route('/api/projects/:projectId/rename', renameRouter);
 app.route('/api/projects/:projectId/review', reviewRouter);
+app.route('/api/projects/:projectId/foreshadows', foreshadowsRouter);
+app.route('/api/projects/:projectId', retroRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);
 app.route('/api/runs', runsRouter);

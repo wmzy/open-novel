@@ -24,20 +24,65 @@ describe('extractChapterOutline', () => {
     await writeChapter(1, '## 第 1 章：启程前夜\n- **POV**：武松\n- **核心事件**：备战');
     await writeChapter(2, '## 第 2 章：远行\n- **POV**：武松\n- **核心事件**：远行');
     const block = await extractChapterOutline(dir, 1);
-    expect(block).toContain('第 1 章');
-    expect(block).toContain('备战');
-    expect(block).not.toContain('远行');
+    expect(block.content).toContain('第 1 章');
+    expect(block.content).toContain('备战');
+    expect(block.content).not.toContain('远行');
   });
 
   it('returns placeholder when chapter file not found', async () => {
     await writeChapter(1, '## 第 1 章：a\n- **POV**：x');
     const block = await extractChapterOutline(dir, 99);
-    expect(block).toContain('未在 outline/chapters/ 中规划');
+    expect(block.content).toContain('未在 outline/chapters/ 中规划');
   });
 
   it('returns placeholder when outline directory missing', async () => {
     const block = await extractChapterOutline(dir, 1);
-    expect(block).toContain('未在 outline/chapters/ 中规划');
+    expect(block.content).toContain('未在 outline/chapters/ 中规划');
+  });
+
+  it('卡片含 commitment 引用行时解析出 committed', async () => {
+    await writeChapter(
+      3,
+      ['## 第 3 章：夜袭', '> commitment: committed', '', '- **主要场景**：粮仓夜袭'].join('\n'),
+    );
+    const block = await extractChapterOutline(dir, 3);
+    expect(block.commitment).toBe('committed');
+    expect(block.openQuestions).toEqual([]);
+  });
+
+  it('open 卡片解析出待决策问题列表', async () => {
+    await writeChapter(
+      4,
+      [
+        '## 第 4 章：分岔',
+        '> commitment: open',
+        '> open-questions:',
+        '>   - 结局走向选 A 还是 B',
+        '>   - 配角是否在此离队',
+        '',
+        '- **幕级骨架**：主角抵达分岔口。',
+      ].join('\n'),
+    );
+    const block = await extractChapterOutline(dir, 4);
+    expect(block.commitment).toBe('open');
+    expect(block.openQuestions).toEqual(['结局走向选 A 还是 B', '配角是否在此离队']);
+  });
+
+  it('无元数据或等级非法时回退 tentative（安全中间态）', async () => {
+    await writeChapter(5, '## 第 5 章：无元数据\n- **主要场景**：x');
+    const noMeta = await extractChapterOutline(dir, 5);
+    expect(noMeta.commitment).toBe('tentative');
+    expect(noMeta.openQuestions).toEqual([]);
+
+    await writeChapter(6, '## 第 6 章：非法等级\n> commitment: 已锁定');
+    const badLevel = await extractChapterOutline(dir, 6);
+    expect(badLevel.commitment).toBe('tentative');
+  });
+
+  it('卡片缺失时元数据为默认值（tentative / 空）', async () => {
+    const block = await extractChapterOutline(dir, 404);
+    expect(block.commitment).toBe('tentative');
+    expect(block.openQuestions).toEqual([]);
   });
 });
 

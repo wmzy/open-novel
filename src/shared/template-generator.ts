@@ -6,6 +6,8 @@
  * 三幕结构按章节数比例划分——第 1 幕（前约 25%）/第 2 幕（约 25–75%）/第 3 幕（后约 25%）。
  */
 
+import { COMMITMENT_LABELS, type CommitmentLevel } from './outline-meta';
+
 /** 模板生成所需的全部项目元数据。 */
 export interface TemplateGenOptions {
   /** 目标章节数。 */
@@ -42,8 +44,23 @@ export function generateOutlineMeta(options: TemplateGenOptions): string {
     chapters: Array.from({ length: n }, (_, i) => ({
       chapter: i + 1,
       pov: '',
+      commitment: gradientCommitment(i + 1, plan),
     })),
   }, null, 2);
+}
+
+/** 精排窗口宽度：近期 N 章保持 committed/beat 级。 */
+const COMMITTED_WINDOW = 10;
+
+/**
+ * 滚动式大纲粒度梯度：近细远粗。
+ * 第 1-10 章 committed（beat 级）；第一幕其余 tentative（arc 级）；第二/三幕 open（骨架级）。
+ * 远粗是设计而非未完成——写作推进到该章前先精化（见 prompt-composer 精排窗口）。
+ */
+function gradientCommitment(chapter: number, plan: ActPlan): CommitmentLevel {
+  if (chapter <= COMMITTED_WINDOW) return 'committed';
+  if (chapter <= plan.act1Count) return 'tentative';
+  return 'open';
 }
 
 /** 生成器名称 → 生成函数，供 API 路由统一调度。 */
@@ -178,15 +195,32 @@ export function generateOutlineDetailedSplit(options: TemplateGenOptions): Split
 
   const cards: SplitTemplateResult['cards'] = [];
   for (let i = 1; i <= n; i++) {
-    const lines: string[] = [
-      `## 第 ${i} 章：{章节标题} ｜ ${actName(i, plan)} ｜ 目标约 ${per} 字`,
-      `- **结构定位**：${chapterHint(i, n, plan)}`,
-      '- **主要场景**：{一句话概括本章核心场景与发生地点}',
-      '- **目标**：{主角在本章想要达成什么}',
-      '- **冲突**：{什么力量或角色阻碍了目标的实现}',
-      '- **结果**：{本章结局——灾难升级还是取得进展？}',
-      '- **伏笔/回调**：{埋下的伏笔，或回收的前文线索}',
-    ];
+    const level = gradientCommitment(i, plan);
+    const heading = `## 第 ${i} 章：{章节标题} ｜ ${actName(i, plan)} ｜ 目标约 ${per} 字`;
+    // 各等级均以引用行声明承诺等级；open 级附 openQuestions 示例占位
+    const meta = [`> commitment: ${level}`];
+    if (level === 'open') {
+      meta.push('> open-questions:', '>   - {待决策：本章的关键事件或抉择}', '>   - {待决策：与前文线索的衔接方式}');
+    }
+    // 粒度随等级递减：beat 级（场景/冲突/结果齐备）→ arc 级（走向）→ 骨架级（一两句话）
+    const body =
+      level === 'committed'
+        ? [
+            `- **结构定位**：${chapterHint(i, n, plan)}`,
+            '- **主要场景**：{一句话概括本章核心场景与发生地点}',
+            '- **目标**：{主角在本章想要达成什么}',
+            '- **冲突**：{什么力量或角色阻碍了目标的实现}',
+            '- **结果**：{本章结局——灾难升级还是取得进展？}',
+            '- **伏笔/回调**：{埋下的伏笔，或回收的前文线索}',
+          ]
+        : level === 'tentative'
+          ? [
+              `- **结构定位**：${chapterHint(i, n, plan)}`,
+              '- **走向（arc）**：{段落级走向：本章推进哪条线索、局势如何变化}',
+              '- **冲突方向**：{本章主要张力来源}',
+            ]
+          : [`- **幕级骨架**：${chapterHint(i, n, plan)}——{一两句话概述本段的作用与大致走向}`];
+    const lines = [heading, ...meta, '', ...body];
     cards.push({ relativePath: `chapters/第${i}章.md`, content: lines.join('\n') });
   }
 
@@ -197,6 +231,7 @@ export function generateOutlineDetailedSplit(options: TemplateGenOptions): Split
     '',
     `> 类型：${options.genre}${themePart}｜视角：${perspectiveLabel(options.perspective)}｜目标字数：约 ${options.targetWords} 字｜共 ${n} 章（每章约 ${per} 字）`,
     '> 每章独立文件位于 chapters/第N章.md，用 Read 工具按需读取单章大纲。',
+    '> 粒度说明：近章为 beat 级（已定）、本幕为 arc 级（倾向）、远期为骨架级（待决）。远期章节粒度粗是滚动大纲的设计意图（近细远粗），并非未完成；写作推进到该章前会先精化。',
     '',
     '## 三幕结构',
     '',
@@ -208,9 +243,17 @@ export function generateOutlineDetailedSplit(options: TemplateGenOptions): Split
     indexLines.push(`| 第二幕·对抗 | ${rangeStr(plan.act1Count + 1, plan.act3Start - 1)} |`);
   }
   indexLines.push(`| 第三幕·解决 | ${rangeStr(plan.act3Start, n)} |`);
-  indexLines.push('', '## 章节索引', '', '| 章 | 标题 | 文件 |', '|---|---|---|');
+  indexLines.push(
+    '',
+    '## 章节索引',
+    '',
+    '> 承诺等级：已定（committed，beat 级，写作依据）｜倾向（tentative，arc 级，可被正文推翻）｜待决（open，骨架级，待决策）',
+    '',
+    '| 章 | 标题 | 承诺等级 | 文件 |',
+    '|---|---|---|---|',
+  );
   for (let i = 1; i <= n; i++) {
-    indexLines.push(`| ${i} | {章节标题} | chapters/第${i}章.md |`);
+    indexLines.push(`| ${i} | {章节标题} | ${COMMITMENT_LABELS[gradientCommitment(i, plan)]} | chapters/第${i}章.md |`);
   }
 
   return { indexContent: `${indexLines.join('\n')}\n`, cards };

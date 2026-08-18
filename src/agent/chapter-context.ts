@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parseOutlineMeta } from '../shared/outline-meta';
+import { parseOutlineMeta, parseChapterCard, type CommitmentLevel } from '../shared/outline-meta';
 
 const NOVEL_DIR = '.novel';
 const OUTLINE_CHAPTERS_DIR = path.join('outline', 'chapters');
@@ -14,14 +14,31 @@ async function readNovelFile(projectDir: string, rel: string): Promise<string> {
   }
 }
 
-/** 从大纲目录读取第 N 章卡片文件。 */
+/** 章节大纲提取结果：卡片全文 + 引用行元数据（承诺等级 / 待决策问题）。 */
+export interface ChapterOutline {
+  /** 卡片全文（含元数据引用行）；卡片缺失时为占位说明。 */
+  content: string;
+  /** 承诺等级；元数据缺失或非法时按 tentative（安全中间态）。 */
+  commitment: CommitmentLevel;
+  /** 待决策问题列表（open 级应携带）；缺省为空。 */
+  openQuestions: string[];
+}
+
+/** 从大纲目录读取第 N 章卡片文件，并解析其承诺等级与待决策问题。 */
 export async function extractChapterOutline(
   projectDir: string,
   chapter: number,
-): Promise<string> {
+): Promise<ChapterOutline> {
   const content = await readNovelFile(projectDir, `${OUTLINE_CHAPTERS_DIR}/第${chapter}章.md`);
-  if (!content) return `> [第${chapter}章未在 outline/chapters/ 中规划]`;
-  return content;
+  if (!content) {
+    return {
+      content: `> [第${chapter}章未在 outline/chapters/ 中规划]`,
+      commitment: 'tentative',
+      openQuestions: [],
+    };
+  }
+  const { commitment, openQuestions } = parseChapterCard(content);
+  return { content, commitment, openQuestions };
 }
 
 export interface Cast {

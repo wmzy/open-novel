@@ -8,6 +8,8 @@ import {
   buildDeepenMessage,
   isCritiqueRound,
   detectNoImprovement,
+  critiqueSeverityCounts,
+  critiqueConverged,
   parseDeadlineInput,
   parseLatestScores,
   extractScoreTrajectory,
@@ -470,6 +472,126 @@ describe('deepen', () => {
     it('counts fullwidth punctuation as CJK', () => {
       const text = '：，。！';
       expect(estimateTokens(text)).toBe(Math.round(4 * 1.5)); // 6
+    });
+  });
+
+  describe('buildDeepenMessage - 严重度分级（Critique）', () => {
+    it('要求每条发现标注 [P0]/[P1]/[P2] 严重度前缀', () => {
+      const msg = buildDeepenMessage('characters', 1);
+      expect(msg).toContain('[P0] 结构性缺陷');
+      expect(msg).toContain('[P1] 重要问题');
+      expect(msg).toContain('[P2] 打磨建议');
+    });
+
+    it('要求按严重度从高到低排序', () => {
+      const msg = buildDeepenMessage('world', 1);
+      expect(msg).toContain('按严重度从高到低排序');
+    });
+
+    it('审查报告模板使用严重度前缀标题', () => {
+      const msg = buildDeepenMessage('outline', 3);
+      expect(msg).toContain('## [P0] <具体问题描述>');
+      expect(msg).toContain('## [P1] <具体问题描述>');
+      expect(msg).toContain('## [P2] <具体问题描述>');
+    });
+
+    it('无 P0/P1 时要求在报告末尾写明', () => {
+      const msg = buildDeepenMessage('scenes', 1);
+      expect(msg).toContain('本轮无 P0/P1 级问题');
+    });
+  });
+
+  describe('critiqueSeverityCounts', () => {
+    it('统计各级别条数（标题与列表前缀均计入）', () => {
+      const md = [
+        '# 审查报告（第7轮）',
+        '**维度评分**：动机清晰度 4',
+        '## [P0] 主线因果断裂',
+        '- 根因：中点转折缺乏铺垫',
+        '## [P1] 反派动机薄弱',
+        '- [P1] 次要问题：配角声口雷同',
+        '## [P2] 开篇节奏偏缓',
+        '- [P2] 建议压缩第一场景',
+      ].join('\n');
+      expect(critiqueSeverityCounts(md)).toEqual({ p0: 1, p1: 2, p2: 2 });
+    });
+
+    it('全部级别均有发现', () => {
+      const md = '## [P0] a\n## [P0] b\n## [P1] c\n## [P2] d\n## [P2] e\n## [P2] f';
+      expect(critiqueSeverityCounts(md)).toEqual({ p0: 2, p1: 1, p2: 3 });
+    });
+
+    it('仅 P2 建议', () => {
+      const md = '## [P2] 措辞打磨\n## [P2] 细节补充';
+      expect(critiqueSeverityCounts(md)).toEqual({ p0: 0, p1: 0, p2: 2 });
+    });
+
+    it('空报告计零', () => {
+      expect(critiqueSeverityCounts('')).toEqual({ p0: 0, p1: 0, p2: 0 });
+    });
+
+    it('行中部出现的严重度标记不计为发现（如引用说明文字）', () => {
+      const md = '本轮报告共 2 条发现，其中标记 [P0] 表示结构性缺陷。\n## [P1] 实际发现';
+      expect(critiqueSeverityCounts(md)).toEqual({ p0: 0, p1: 1, p2: 0 });
+    });
+  });
+
+  describe('critiqueConverged', () => {
+    it('有 P0 时不收敛', () => {
+      expect(critiqueConverged('## [P0] 结构断裂\n## [P2] 打磨')).toBe(false);
+    });
+
+    it('有 P1 时不收敛', () => {
+      expect(critiqueConverged('## [P1] 动机薄弱')).toBe(false);
+    });
+
+    it('P0 与 P1 并存时不收敛', () => {
+      expect(critiqueConverged('## [P0] a\n## [P1] b\n## [P2] c')).toBe(false);
+    });
+
+    it('仅 P2 时收敛', () => {
+      expect(critiqueConverged('## [P2] 措辞\n## [P2] 节奏')).toBe(true);
+    });
+
+    it('无任何发现时收敛', () => {
+      expect(critiqueConverged('# 审查报告（第9轮）\n本轮无 P0/P1 级问题')).toBe(true);
+    });
+
+    it('空内容收敛（无问题即无 P0/P1）', () => {
+      expect(critiqueConverged('')).toBe(true);
+    });
+  });
+
+  describe('buildDeepenMessage - 收敛冻结轮（Revise converged）', () => {
+    it('converged=true 时 revise 轮变为冻结轮：P2 记入 backlog', () => {
+      const msg = buildDeepenMessage('characters', 8, undefined, undefined, true);
+      expect(msg).toContain('冻结轮');
+      expect(msg).toContain('.novel/deepen-backlog.md');
+      expect(msg).toContain('逐条追加');
+    });
+
+    it('converged=true 时禁止修改产出文件', () => {
+      const msg = buildDeepenMessage('world', 6, undefined, undefined, true);
+      expect(msg).toContain('禁止修改任何产出文件');
+      expect(msg).not.toContain('修订轮');
+    });
+
+    it('converged=true 时要求输出冻结声明', () => {
+      const msg = buildDeepenMessage('outline', 4, undefined, undefined, true);
+      expect(msg).toContain('输出冻结声明');
+      expect(msg).toContain('深化循环到此结束');
+    });
+
+    it('converged 缺省时保持普通修订轮', () => {
+      const msg = buildDeepenMessage('characters', 2);
+      expect(msg).toContain('修订轮');
+      expect(msg).not.toContain('deepen-backlog.md');
+    });
+
+    it('converged=true 不影响 Critique 轮（奇数轮仍为审查轮）', () => {
+      const msg = buildDeepenMessage('characters', 7, undefined, undefined, true);
+      expect(msg).toContain('审查轮');
+      expect(msg).not.toContain('冻结轮');
     });
   });
 });

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { db, ensureDbReady } from '../../../src/db/drizzle';
-import { projects } from '../../../src/db/schema';
+import { projects, chapters } from '../../../src/db/schema';
 import { eq } from 'drizzle-orm';
 import apiApp from '../../../src/api-app';
 import { sanitizeStderr } from '../../../src/api/routes/runs';
@@ -99,5 +99,128 @@ describe('POST /api/runs — autonomous 透传', () => {
       body: JSON.stringify({ projectId, agentId: 'claude', stage: 'concept', message: 'seed' }),
     });
     expect(mockCompose).toHaveBeenCalledWith(expect.objectContaining({ autonomous: false }));
+  });
+});
+
+describe('POST /api/runs — 样章门禁（sample-gate）', () => {
+  let tempDir: string;
+  let projectId: string;
+
+  /** 插入 n 章正文（wordCount>0）；countZero 控制额外插入 0 字的空壳章节。 */
+  async function seedChapters(n: number, zeroWordCount = 0) {
+    for (let i = 1; i <= n; i++) {
+      await db.insert(chapters).values({
+        id: `sg_c${i}`,
+        projectId,
+        number: i,
+        title: `第${i}章`,
+        wordCount: 2000,
+        status: 'draft',
+      });
+    }
+    for (let i = 1; i <= zeroWordCount; i++) {
+      await db.insert(chapters).values({
+        id: `sg_z${i}`,
+        projectId,
+        number: 100 + i,
+        title: `空章${i}`,
+        wordCount: 0,
+        status: 'draft',
+      });
+    }
+  }
+
+  beforeEach(async () => {
+    await ensureDbReady();
+    mockCompose.mockReset();
+    mockCompose.mockRejectedValue(new Error('stop-before-launch'));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'runs-api-gate-'));
+    projectId = 'test_proj_sample_gate';
+    await db.delete(projects).where(eq(projects.id, projectId));
+    await db.insert(projects).values({ id: projectId, title: 't', path: tempDir, genre: 'wuxia' });
+  });
+
+  afterEach(async () => {
+    await db.delete(projects).where(eq(projects.id, projectId)).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('stage=writing 且正文 <3 章时返回 409 sample-gate（0 章）', async () => {
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第4章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toBe('sample-gate');
+    expect(data.completedSamples).toBe(0);
+    expect(data.required).toBe(3);
+    expect(data.message).toContain('样章');
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('stage=writing 且正文仅 2 章时 409，completedSamples 反映实际章数', async () => {
+    await seedChapters(2);
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '继续写' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toBe('sample-gate');
+    expect(data.completedSamples).toBe(2);
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('wordCount=0 的空壳章节不计入样章门计数', async () => {
+    await seedChapters(0, 3);
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第1章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.completedSamples).toBe(0);
+  });
+
+  it('已有 ≥3 章正文的存量项目直通（不拦截）', async () => {
+    await seedChapters(3);
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第4章' }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+
+  it('携带 force: true 时旁路门禁', async () => {
+    await seedChapters(1);
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第2章', force: true }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+
+  it('stage=sample 放行（样章阶段本身写正文，0 章也可开始）', async () => {
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'sample', message: '开始写样章' }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+
+  it('非 writing 阶段不受门禁影响', async () => {
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'scenes', message: '规划场景' }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
   });
 });

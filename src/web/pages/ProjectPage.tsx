@@ -244,6 +244,7 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: {
   if (activeView === 'story-arc') return <StoryArcView projectId={projectId} />;
   if (activeView === 'character-graph') return <CharacterGraphView projectId={projectId} />;
   if (activeView === 'wuxia') return <WuxiaView projectId={projectId} />;
+  if (activeView === 'sample') return <WritingView projectId={projectId} onViewChange={onViewChange} variant="sample" />;
   if (activeView === 'writing') return <WritingView projectId={projectId} onViewChange={onViewChange} />;
   if (activeView.startsWith('chapter-')) {
     const num = parseInt(activeView.replace('chapter-', ''), 10);

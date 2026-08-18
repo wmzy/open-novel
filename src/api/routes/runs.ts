@@ -19,13 +19,17 @@ import { resolveProjectDir } from '../../shared/project-dir';
 import { trimHistory, extractScoreTrajectory, estimateTokens } from '../../shared/deepen';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
-import { conversations, messages, projects, runs as runsTable } from '../../db/schema';
+import { conversations, messages, projects, runs as runsTable, chapters } from '../../db/schema';
 import { generateId } from '../../utils/id';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and, gt } from 'drizzle-orm';
 
 // ===== 流层 watchdog 配置 =====
 /** 滑动窗口大小（字符数）。窗口内统计 2-gram 重复率。 */
 const WATCHDOG_WINDOW_SIZE = 2000;
+
+// ===== 样章门禁 =====
+/** 进入 writing 阶段前，chapters 表中 wordCount>0 的最少章节数（样章要求）。 */
+const SAMPLE_GATE_REQUIRED = 3;
 
 // ===== 写后质检门禁阈值 =====
 const QUALITY_REJECT_SCORE = 60;
@@ -238,6 +242,23 @@ runsRouter.post('/', async (c) => {
 
   // 提前解析 projectDir：trimHistory 需要读取 deepen-log.md
   const projectDir = await resolveProjectDir(projectId);
+
+  // 样章门禁：进入 writing 阶段前须完成 3 章样章（chapters 表中 wordCount>0 的章节数）。
+  // - stage==='sample' 放行（样章阶段本身就是写正文）
+  // - 已有 ≥3 章正文的存量项目不受影响
+  // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作）
+  if (stage === 'writing' && body.force !== true) {
+    const written = await db.select({ id: chapters.id }).from(chapters)
+      .where(and(eq(chapters.projectId, projectId), gt(chapters.wordCount, 0)));
+    if (written.length < SAMPLE_GATE_REQUIRED) {
+      return c.json({
+        error: 'sample-gate',
+        message: `需先完成样章阶段：writing 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written.length} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
+        completedSamples: written.length,
+        required: SAMPLE_GATE_REQUIRED,
+      }, 409);
+    }
+  }
 
   let convId: string;
   let history: { role: string; content: string }[] = [];

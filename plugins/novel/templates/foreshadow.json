@@ -2,10 +2,36 @@
   "foreshadows": [
     {
       "id": 1,
-      "content": "伏笔内容",
+      "content": "示例：开篇出现的反常道具/细节（契诃夫之枪型，后文必须兑现）",
+      "type": "chekhov",
       "status": "pending",
-      "plantedIn": null,
-      "resolvedIn": null
+      "plantedIn": 1,
+      "resolveDeadline": 12,
+      "resolvedIn": null,
+      "dependsOn": [],
+      "weight": "major"
+    },
+    {
+      "id": 2,
+      "content": "示例：某角色的真实身份线索（身世揭示前逐步加码）",
+      "type": "identity",
+      "status": "pending",
+      "plantedIn": 3,
+      "resolveDeadline": 18,
+      "resolvedIn": null,
+      "dependsOn": [1],
+      "weight": "light"
+    },
+    {
+      "id": 3,
+      "content": "示例：世界观规则的一处反常（为后期设定揭示铺垫）",
+      "type": "world",
+      "status": "pending",
+      "plantedIn": 5,
+      "resolveDeadline": null,
+      "resolvedIn": null,
+      "dependsOn": [],
+      "weight": "light"
     }
   ]
 }

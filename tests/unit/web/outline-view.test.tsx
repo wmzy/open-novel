@@ -9,7 +9,7 @@
  * 直接追加到本文件的现有 describe 内。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import OutlineView from '../../../src/web/components/views/OutlineView';
 
@@ -32,6 +32,25 @@ const BRIEF = [
   '',
   '## 第三幕：解决（第 16–20 章，约 12500 字）',
   '- 最终对决：与反派正面交锋',
+].join('\n');
+
+/** 含承诺等级引用行元数据的滚动式大纲（三色徽标 / 待决策问题测试数据）。 */
+const ROLLING = [
+  '# 详细大纲',
+  '## 第 1 章：起程',
+  '> commitment: committed',
+  '- **主要场景**：主角踏出师门',
+  '',
+  '## 第 2 章：遇敌',
+  '> commitment: tentative',
+  '- **主要场景**：山道遇强敌',
+  '',
+  '## 第 3 章：分岔',
+  '> commitment: open',
+  '> open-questions:',
+  '>   - 敌人身份是否当场揭穿',
+  '>   - 配角是否在此离队',
+  '- **幕级骨架**：主角面临抉择',
 ].join('\n');
 
 /** 章节头 button 的 accessible name 正则（含「第 N 章」）。 */
@@ -134,5 +153,56 @@ describe('OutlineView 标签切换', () => {
     fireEvent.click(screen.getByText('概览'));
 
     expect(await screen.findByText('尚未创建概览大纲。')).toBeTruthy();
+  });
+
+  it('顶部说明条：近细远粗分级是设计意图', async () => {
+    mockFiles({
+      'outline-merged': DETAILED,
+      'outline-brief.md': BRIEF,
+      'outline-meta.json': 404,
+    });
+    renderView();
+
+    expect(await screen.findByText(/远粗是滚动大纲的设计意图而非未完成/)).toBeTruthy();
+  });
+
+  it('章节卡片按承诺等级显示三色徽标', async () => {
+    mockFiles({
+      'outline-merged': ROLLING,
+      'outline-brief.md': BRIEF,
+      'outline-meta.json': 404,
+    });
+    renderView();
+
+    await screen.findAllByRole('button', { name: CHAPTER_BTN });
+    expect(screen.getByText('已定 · beat')).toBeTruthy();
+    expect(screen.getByText('倾向 · arc')).toBeTruthy();
+    expect(screen.getByText('待决 · 骨架')).toBeTruthy();
+  });
+
+  it('open 卡片展开显示待决策问题列表', async () => {
+    mockFiles({
+      'outline-merged': ROLLING,
+      'outline-brief.md': BRIEF,
+      'outline-meta.json': 404,
+    });
+    renderView();
+
+    await screen.findAllByRole('button', { name: CHAPTER_BTN });
+    const box = screen.getByText('待决策问题（open）').parentElement!;
+    expect(within(box).getAllByText('敌人身份是否当场揭穿').length).toBeGreaterThanOrEqual(1);
+    expect(within(box).getAllByText('配角是否在此离队').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('无元数据的旧卡片不显示承诺徽标（缺省 tentative 不打扰旧数据）', async () => {
+    mockFiles({
+      'outline-merged': DETAILED,
+      'outline-brief.md': BRIEF,
+      'outline-meta.json': 404,
+    });
+    renderView();
+
+    await screen.findAllByRole('button', { name: CHAPTER_BTN });
+    expect(screen.queryByText('已定 · beat')).toBeNull();
   });
 });

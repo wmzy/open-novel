@@ -9,6 +9,7 @@ import { Hono } from 'hono';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveNovelDir } from '../../shared/project-dir';
+import { regenerateOutlineIndex } from '../../shared/outline-meta';
 import type { DocType } from '../../shared/split-document';
 
 const documentsRouter = new Hono();
@@ -38,6 +39,14 @@ documentsRouter.get('/:id/document/:type', async (c) => {
   const novelDir = await resolveNovelDir(c.req.param('id'));
   const docDir = path.join(novelDir, DIR_MAP[docType]);
   const indexPath = path.join(docDir, 'index.md');
+
+  // outline：合并读取前先自愈 index.md——从 chapters/ 卡片重建（章号取自文件名，
+  // 修复章号显示为 ? 的问题）。自愈失败不影响后续读取。
+  if (docType === 'outline') {
+    try {
+      await regenerateOutlineIndex(novelDir);
+    } catch { /* 容错：读取流程继续走既有路径 */ }
+  }
 
   // 优先读拆分格式（<docType>/index.md + 卡片）；不存在则回退旧单文件
   let indexContent: string;

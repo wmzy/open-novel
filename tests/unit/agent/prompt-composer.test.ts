@@ -31,6 +31,7 @@ const STAGE_FEATURES: Record<string, string> = {
   characters: '撰写详细的角色档案',
   outline: '创建详细的故事大纲',
   scenes: '将大纲拆解为详细场景',
+  sample: '写 3 章样章检验声口与节奏',
   writing: '本章大纲与出场角色档案已注入上方上下文',
   drafting: '为小说撰写真正的散文正文',
   revision: '审阅和改进已有内容',
@@ -116,6 +117,27 @@ describe('composePrompt', () => {
         expect(prompt).toContain('chapters/第N章.md');
         // 不应再指示存到旧的单文件格式
         expect(prompt).not.toContain('保存到 .novel/outline-detailed.md');
+      });
+
+      it('outline 落盘指令含承诺等级语法说明与粒度梯度要求', async () => {
+        const prompt = await composePrompt({
+          message: 'hi',
+          projectId: 'p',
+          stage: 'outline',
+          projectDir: tempDir,
+        });
+        // 卡片引用行语法
+        expect(prompt).toContain('> commitment: committed');
+        expect(prompt).toContain('> open-questions:');
+        // 三级语义
+        expect(prompt).toContain('committed（已定）');
+        expect(prompt).toContain('tentative（倾向）');
+        expect(prompt).toContain('open（待决策）');
+        // 近细远粗梯度 + 远粗是设计
+        expect(prompt).toContain('粒度梯度要求（近细远粗）');
+        expect(prompt).toContain('远期章节粗粒度是设计而非未完成');
+        // outline-meta.json 同步 commitment
+        expect(prompt).toContain('"commitment": "committed"');
       });
 
       it('keeps writing stage autonomous (no interview protocol)', async () => {
@@ -778,6 +800,83 @@ describe('composePrompt', () => {
       expect(prompt).toContain('下山遇强敌');
     });
 
+    it('本章大纲按承诺等级注入框架语：committed=写作依据必须遵循', async () => {
+      await seedWritingProject(tempDir);
+      await fs.mkdir(path.join(tempDir, '.novel', 'outline', 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'outline', 'chapters', '第2章.md'),
+        '## 第 2 章：夜巡\n> commitment: committed\n- **主要场景**：夜巡遇袭',
+      );
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('committed（已定）');
+      expect(prompt).toContain('写作依据');
+      expect(prompt).toContain('不得偏离');
+      expect(prompt).not.toContain('tentative（倾向）');
+    });
+
+    it('tentative 大纲注入可推翻但须回写的要求（缺省即 tentative）', async () => {
+      await seedWritingProject(tempDir);
+      await fs.mkdir(path.join(tempDir, '.novel', 'outline', 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'outline', 'chapters', '第2章.md'),
+        '## 第 2 章：变阵\n> commitment: tentative\n- **走向（arc）**：被迫变阵',
+      );
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('tentative（倾向）');
+      expect(prompt).toContain('可被正文推翻');
+      expect(prompt).toContain('回写 outline/chapters/第2章.md');
+    });
+
+    it('open 大纲附带待决策问题并要求写完回填', async () => {
+      await seedWritingProject(tempDir);
+      await fs.mkdir(path.join(tempDir, '.novel', 'outline', 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'outline', 'chapters', '第2章.md'),
+        [
+          '## 第 2 章：分岔',
+          '> commitment: open',
+          '> open-questions:',
+          '>   - 敌人身份是否当场揭穿',
+          '',
+          '- **幕级骨架**：主角在渡口遭遇伏兵。',
+        ].join('\n'),
+      );
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('open（待决策）');
+      expect(prompt).toContain('> - 敌人身份是否当场揭穿');
+      expect(prompt).toContain('回填 outline/chapters/第2章.md');
+      expect(prompt).toContain('决策结果');
+    });
+
+    it('注入精排窗口行：lastUpdatedChapter=1 → 第 2..11 章应达 beat 级', async () => {
+      await seedWritingProject(tempDir);
+      const prompt = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('精排窗口');
+      expect(prompt).toContain('第 2..11 章应达 beat 级');
+      expect(prompt).toContain('先精化');
+      expect(prompt).toContain('远期章节保持 arc/骨架级是设计意图');
+    });
+
     it('injects cast layer with POV profile in writing stage', async () => {
       const novel = path.join(tempDir, '.novel');
       await seedWritingProject(tempDir);
@@ -843,6 +942,95 @@ describe('composePrompt', () => {
       // 非标准 schema 不被解析——活跃伏笔层不注入
       expect(prompt).not.toContain('### 活跃伏笔层');
       expect(prompt).not.toContain('蝴蝶玉佩');
+    });
+
+    it('loadForeshadows 迁移旧格式 plantedIn 自由文本（"第64-66章"→64）', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 70, updatedAt: '' }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          foreshadows: [
+            // 旧格式：plantedIn 是自由文本——迁移后应提取首个数字 64
+            { id: 1, content: '旧格式伏笔', status: 'planted', plantedIn: '第64-66章', resolvedIn: null },
+          ],
+        }),
+      );
+      const prompt = await composePrompt({
+        message: '写第七十一章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('旧格式伏笔');
+      expect(prompt).toContain('埋于第64章');
+    });
+
+    it('注入层标注 [类型][权重]、期限逾期与前置依赖，并含密度预算行', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 10, updatedAt: '' }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          foreshadows: [
+            // #1 期限 8 < 当前章 11 → 逾期标记；依赖 #2；重磅身份伏笔
+            { id: 1, content: '身份伏笔', type: 'identity', status: 'planted', plantedIn: 3, resolveDeadline: 8, resolvedIn: null, dependsOn: [2], weight: 'major' },
+            // #2 期限 15 > 11 → 不逾期；轻量情感伏笔
+            { id: 2, content: '情感伏笔', type: 'emotional', status: 'planted', plantedIn: 2, resolveDeadline: 15, resolvedIn: null, dependsOn: [], weight: 'light' },
+          ],
+        }),
+      );
+      const prompt = await composePrompt({
+        message: '写第十一章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('[身份之谜][重磅]');
+      expect(prompt).toContain('期限：第8章前回收 ⚠已逾期');
+      expect(prompt).toContain('前置：#2');
+      expect(prompt).toContain('[情感线][轻量]');
+      expect(prompt).toContain('期限：第15章前回收');
+      // 密度预算行（每 3 章新埋不超过 2 条）
+      expect(prompt).toContain('密度预算');
+      expect(prompt).toContain('可新埋');
+    });
+
+    it('孤儿章号高亮警告：plantedIn 超出全书章数', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(path.join(novel, 'chapters', '第1章.md'), '第一章正文');
+      await fs.writeFile(path.join(novel, 'chapters', '第2章.md'), '第二章正文');
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 2, updatedAt: '' }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          foreshadows: [
+            // 全书只有 2 章，plannedIn=99 超范围——孤儿章号警告
+            { id: 9, content: '超范围伏笔', type: 'world', status: 'pending', plantedIn: 99, resolveDeadline: null, resolvedIn: null, dependsOn: [], weight: 'light' },
+          ],
+        }),
+      );
+      const prompt = await composePrompt({
+        message: '写第三章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('### 活跃伏笔层');
+      expect(prompt).toContain('孤儿章号警告');
+      expect(prompt).toContain('plantedIn=99');
     });
 
     it('核心设定层注入 concept/world 索引而非全文', async () => {
@@ -1403,6 +1591,100 @@ describe('composePrompt', () => {
         projectDir: tempDir,
       });
       expect(prompt).not.toContain('作者意图采集（仅大纲阶段）');
+    });
+  });
+
+  describe('sample 样章阶段', () => {
+    it('注入样章协议：3 章样章 + 复盘回灌大纲', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: '开始写样章',
+        projectId: 'p',
+        stage: 'sample',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain(STAGE_FEATURES.sample);
+      expect(prompt).toContain('.novel/sample-feedback.md');
+      expect(prompt).toContain('声口落地');
+      expect(prompt).toContain('节奏体感');
+      expect(prompt).toContain('世界观落地');
+      expect(prompt).toContain('大纲需修正点');
+    });
+
+    it('样章章节号即真实章节号（不设平行编号）', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: '开始写样章',
+        projectId: 'p',
+        stage: 'sample',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('章节号即真实章节号');
+    });
+
+    it('落盘清单含 3 个章节文件 + sample-feedback.md + 大纲修订，并 PATCH 到 writing', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: '开始写样章',
+        projectId: 'p',
+        stage: 'sample',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('样章完成核验（落盘清单）');
+      expect(prompt).toContain('3 个章节正文文件');
+      expect(prompt).toContain('大纲修订');
+      expect(prompt).toContain('"currentStage": "writing"');
+    });
+
+    it('样章阶段不注入采访式协议（自治写作）', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: '开始写样章',
+        projectId: 'p',
+        stage: 'sample',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('本阶段的协作方式：采访式');
+    });
+
+    it('样章阶段注入写作分层上下文（isWritingStage 含 sample）', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: '开始写样章',
+        projectId: 'p',
+        stage: 'sample',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('## Novel Context Layers');
+    });
+
+    it('scenes 尾部改为推进到 sample 阶段', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: 'hi',
+        projectId: 'p',
+        stage: 'scenes',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('"currentStage": "sample"');
+    });
+
+    it('样章阶段发送写作意图不触发阶段错配警告', async () => {
+      mockLimit.mockResolvedValue([makeProject()]);
+      await seedProjectFiles(tempDir);
+      const prompt = await composePrompt({
+        message: '请写第1章',
+        projectId: 'p',
+        stage: 'sample',
+        projectDir: tempDir,
+      });
+      expect(prompt).not.toContain('阶段不匹配提醒');
     });
   });
 });

@@ -16,6 +16,7 @@ import {
   isCritiqueRound,
   buildDeepenMessage,
   detectNoImprovement,
+  critiqueConverged,
   parseDeadlineInput,
   parseLatestScores,
   type DeepenToChatDetail,
@@ -138,6 +139,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     round: number;
     consecutiveFailures: number;
     consecutiveNoImprovement: number;
+    /** 收敛标记：最新 critique 无 P0/P1，随后的 revise 轮为冻结轮（P2 入 backlog，不改产出）。 */
+    converged?: boolean;
     userHint?: string;
     latestScores?: string | null;
     customDimensions?: Record<string, string[]>;
@@ -248,7 +251,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       if (data?.hash) toast.success(`已创建回滚点 deepen-${ds}-start`);
     }).catch(() => {});
 
-    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, consecutiveNoImprovement: 0, userHint: hint, customDimensions: pluginDimensions });
+    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, consecutiveNoImprovement: 0, converged: false, userHint: hint, customDimensions: pluginDimensions });
     setShowDeepenDialog(false);
     sendMessage({
       projectId,
@@ -290,10 +293,20 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         return;
       }
 
+      // 停止条件 2：收敛冻结轮完成——上一轮 critique 无 P0/P1（仅 P2），
+      // 随后的 revise 冻结轮（P2 入 backlog、不改产出）成功完成即结束循环
+      if (deepenMode.converged && !isCritiqueRound(deepenMode.round) && succeeded) {
+        exitDeepen('收敛：审查无 P0/P1 问题，产出已冻结（P2 已记入 backlog）');
+        prevIsRunningRef.current = isRunning;
+        return;
+      }
+
       // 饱和检测 + 时间检查是异步的（需 fetch deepen-critique.md）
       (async () => {
-        // 停止条件 2：改进验证饱和——仅在超过最低轮数后，且当前刚完成 Critique 轮时检查
+        // 停止条件 3：改进验证饱和——仅在超过最低轮数后，且当前刚完成 Critique 轮时检查
         let consecutiveNoImprovement = deepenMode.consecutiveNoImprovement;
+        // 并联收敛判定：审查无 P0/P1（仅 P2）→ 下一轮 revise 为冻结轮
+        let critiqueConvergedNow = false;
         if (deepenMode.round >= DEEPEN_MIN_ROUNDS && isCritiqueRound(deepenMode.round)) {
           try {
             const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-critique.md')}`);
@@ -310,6 +323,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
                 prevIsRunningRef.current = isRunning;
                 return;
               }
+              critiqueConvergedNow = critiqueConverged(data.content || '');
             }
           } catch { /* 读文件失败不阻断 */ }
         }
@@ -324,7 +338,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           }
         } catch { /* 读文件失败不阻断 */ }
 
-        // 停止条件 3：截止时间到
+        // 停止条件 4：截止时间到
         if (Date.now() >= deepenMode.deadline) {
           exitDeepen('截止时间到');
           prevIsRunningRef.current = isRunning;
@@ -333,19 +347,21 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
         // 继续下一轮（失败时重试当前轮，不跳过）
         const nextRound = succeeded ? deepenMode.round + 1 : deepenMode.round;
-        // 停止条件 4：达到最大轮数（兜底防止无限循环）
+        // 停止条件 5：达到最大轮数（兜底防止无限循环）
         if (nextRound > DEEPEN_MAX_ROUNDS) {
           exitDeepen(`达到最大轮数（${DEEPEN_MAX_ROUNDS}）`);
           prevIsRunningRef.current = isRunning;
           return;
         }
-        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures, consecutiveNoImprovement, latestScores });
+        // 收敛后（含冻结轮重试）的 revise 轮均按冻结轮发送：P2 入 backlog，禁止改产出
+        const converged = deepenMode.converged || critiqueConvergedNow;
+        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures, consecutiveNoImprovement, latestScores, converged });
         sendMessage({
           projectId,
           agentId,
           skillId,
           stage: deepenMode.stage,
-          message: buildDeepenMessage(deepenMode.stage, nextRound, deepenMode.userHint, deepenMode.customDimensions),
+          message: buildDeepenMessage(deepenMode.stage, nextRound, deepenMode.userHint, deepenMode.customDimensions, converged),
           autonomous: true,
           trimHistory: true,
           deepenRound: nextRound,

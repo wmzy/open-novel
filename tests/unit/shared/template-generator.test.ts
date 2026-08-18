@@ -5,6 +5,7 @@ import {
   generateOutlineBrief,
   generateScenes,
   generateCharacterProfiles,
+  generateOutlineMeta,
   TEMPLATE_GENERATORS,
   TEMPLATE_FILE_PATHS,
   type TemplateGenOptions,
@@ -151,6 +152,25 @@ describe('template-generator', () => {
       expect(out).toContain('**动机**');
       expect(out).toContain('**手段**');
       expect(out).toContain('**弱点**');
+    });
+  });
+
+  describe('generateOutlineMeta（承诺等级梯度）', () => {
+    it('chapters 数组逐章携带 commitment，与拆分卡片同一梯度', () => {
+      // 60 章：act1End=15 → 第 1-10 章 committed、第 11-15 章 tentative、第 16 章起 open
+      const meta = JSON.parse(generateOutlineMeta({ ...base, chapterCount: 60 }));
+      expect(meta.chapters).toHaveLength(60);
+      expect(meta.chapters[0]).toMatchObject({ chapter: 1, commitment: 'committed' });
+      expect(meta.chapters[9]).toMatchObject({ chapter: 10, commitment: 'committed' });
+      expect(meta.chapters[10]).toMatchObject({ chapter: 11, commitment: 'tentative' });
+      expect(meta.chapters[14]).toMatchObject({ chapter: 15, commitment: 'tentative' });
+      expect(meta.chapters[15]).toMatchObject({ chapter: 16, commitment: 'open' });
+      expect(meta.chapters[59]).toMatchObject({ chapter: 60, commitment: 'open' });
+    });
+
+    it('三幕比例计算不受梯度影响（actBreaks 保持原逻辑）', () => {
+      const meta = JSON.parse(generateOutlineMeta({ ...base, chapterCount: 20 }));
+      expect(meta.actBreaks).toEqual([5, 15]);
     });
   });
 

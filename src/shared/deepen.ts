@@ -169,7 +169,7 @@ function getCritiquePerspective(stage: string, round: number): string {
  * 核心设计（LLM Review 盲审）：
  * - 不读 deepen-log（信息隔离，形成独立判断）
  * - 以指定专家视角审查产出文件
- * - 产出结构化批评写入 .novel/deepen-critique.md
+ * - 产出结构化批评写入 .novel/deepen-critique.md，每条发现标注 [P0]/[P1]/[P2] 严重度
  * - 若与上次审查无实质改进，写 NO_IMPROVEMENT_SIGNAL
  */
 function buildCritiqueMessage(stage: string, round: number, userHint?: string, pluginDimensions?: Record<string, string[]>): string {
@@ -199,16 +199,27 @@ ${perspective}
 ${dimensions.map((d, i) => `   ${i + 1}. ${d}`).join('\n')}
 3. 对每个维度打 1-5 分（5=优秀，1=严重不足）
 4. 找出最薄弱的 2-3 个具体问题（不是泛泛的"可以更好"，而是"第X段的Y角色动机不明，因为Z"）
-5. 对每个问题给出具体的改进建议（"应该补充X背景，因为Y"）
-6. 将审查结果写入 .novel/deepen-critique.md（覆盖旧内容），格式：
+5. **每条发现必须标注严重度前缀，并按严重度从高到低排序**：
+   - [P0] 结构性缺陷——动摇故事根基的问题（设定自相矛盾 / 结构崩塌 / 因果链断裂）
+   - [P1] 重要问题——显著拉低质量但不动摇根基（动机薄弱 / 节奏失衡 / 伏笔断裂）
+   - [P2] 打磨建议——锦上添花的优化（措辞 / 细节 / 表现手法）
+   判级从严：只有真正动摇根基的才标 [P0]；拿不准时降一级。
+6. 对每个问题给出具体的改进建议（"应该补充X背景，因为Y"）
+7. 将审查结果写入 .novel/deepen-critique.md（覆盖旧内容），格式：
    # 审查报告（第${round}轮）
    **视角**：${perspective.split('：')[0]}
    **维度评分**：<维度名 分分, ...>
-   ## 问题1：<具体问题描述>
+   ## [P0] <具体问题描述>
    - 根因：<为什么这是问题>
    - 建议：<具体怎么改>
-   ## 问题2：...
-   ## 问题3：...
+   ## [P1] <具体问题描述>
+   - 根因：<为什么这是问题>
+   - 建议：<具体怎么改>
+   ## [P2] <具体问题描述>
+   - 根因：<为什么这是问题>
+   - 建议：<具体怎么改>
+   （按 P0→P1→P2 排序；某级没有问题时整级省略）
+   若本轮审查无 [P0] 与 [P1] 级问题（仅 [P2] 或无问题），在报告末尾另起一行写明：本轮无 P0/P1 级问题
 
 ## 改进验证（饱和检测）
 如果本轮审查发现：与你能预期的"高质量产出"相比，当前产出已经很好，
@@ -225,13 +236,36 @@ ${dimensions.map((d, i) => `   ${i + 1}. ${d}`).join('\n')}
  * - 读 deepen-log.md 了解历史改进（避免重复）
  * - 按批评逐条修订 + 扩展新内容
  * - 记录改进到 deepen-log.md
+ *
+ * 收敛冻结（converged=true）：本轮 critique 无 P0/P1（仅 P2）时，
+ * revise 轮退化为冻结轮——P2 逐条记入 backlog，禁止修改任何产出文件。
  */
-function buildReviseMessage(stage: string, round: number, userHint?: string): string {
+function buildReviseMessage(stage: string, round: number, userHint?: string, converged?: boolean): string {
   const label = STAGE_LABELS[stage] || stage;
 
   const hintBlock = userHint?.trim()
     ? `\n## 用户特别指导\n${userHint.trim()}\n`
     : '';
+
+  if (converged) {
+    return `⚠️ 这是「${label}」阶段深化循环的第 ${round} 轮——**冻结轮**。
+最新审查报告无 [P0] 结构性缺陷、无 [P1] 重要问题（仅 [P2] 打磨建议），深化循环已收敛。
+${hintBlock}
+## 铁律
+- **禁止修改任何产出文件**（如 profiles.md / world/ 目录下卡片）——产出已冻结，只允许写 backlog 与日志
+- **不要调用 PATCH /api/projects 更新阶段**——始终停留在「${label}」阶段
+- **不要用 question 工具提问**
+
+## 冻结流程
+1. 审查下方「最新审查报告」中已注入的 deepen-critique.md 内容（无需再读取）
+2. 将其中每条 [P2] 建议逐条追加到 .novel/deepen-backlog.md（文件不存在则创建），格式：
+   ## [P2] <建议内容>
+   - 来源：第 ${round - 1} 轮审查
+3. 在 .novel/deepen-log.md 追加本轮记录，格式：
+   ## 第${round}轮（冻结）
+   **结论**：审查无 P0/P1 级问题，产出冻结；P2 共 N 条已记入 deepen-backlog.md
+4. 输出冻结声明：写明收敛依据（P0=0、P1=0）、记入 backlog 的 P2 条数，并声明本阶段深化循环到此结束`;
+  }
 
   return `⚠️ 这是「${label}」阶段深化循环的第 ${round} 轮——**修订轮**。
 你的角色是作者，根据审查者的批评进行修订。
@@ -261,12 +295,19 @@ ${hintBlock}
 
 /**
  * 构造深化 message。根据轮次奇偶自动选择 Critique 或 Revise。
+ * converged=true 表示最新 critique 已收敛（无 P0/P1），随后的 Revise 轮为冻结轮。
  */
-export function buildDeepenMessage(stage: string, round: number, userHint?: string, pluginDimensions?: Record<string, string[]>): string {
+export function buildDeepenMessage(
+  stage: string,
+  round: number,
+  userHint?: string,
+  pluginDimensions?: Record<string, string[]>,
+  converged?: boolean,
+): string {
   if (isCritiqueRound(round)) {
     return buildCritiqueMessage(stage, round, userHint, pluginDimensions);
   }
-  return buildReviseMessage(stage, round, userHint);
+  return buildReviseMessage(stage, round, userHint, converged);
 }
 
 /**
@@ -275,6 +316,31 @@ export function buildDeepenMessage(stage: string, round: number, userHint?: stri
  */
 export function detectNoImprovement(critiqueContent: string): boolean {
   return critiqueContent.includes(NO_IMPROVEMENT_SIGNAL);
+}
+
+/**
+ * 统计审查报告中的严重度分布。
+ * 一条发现 = 一行以 [P0]/[P1]/[P2] 前缀开头的条目（允许行首有 Markdown
+ * 标题符号或列表符号，如 `## [P0] 问题` / `- [P1] 问题`）。
+ * 行中部的 [P0] 等普通文本不算发现，避免把引用/说明误计为问题。
+ */
+export function critiqueSeverityCounts(md: string): { p0: number; p1: number; p2: number } {
+  const counts = { p0: 0, p1: 0, p2: 0 };
+  const severityLine = /^\s*(?:#{1,6}\s+|[-*+]\s+)?\[(P0|P1|P2)\]/;
+  for (const line of md.split('\n')) {
+    const m = line.match(severityLine);
+    if (m) counts[m[1].toLowerCase() as 'p0' | 'p1' | 'p2'] += 1;
+  }
+  return counts;
+}
+
+/**
+ * 收敛判定：审查报告无 [P0] 结构性缺陷且无 [P1] 重要问题（仅剩 [P2] 打磨建议或无发现）。
+ * 收敛后深化循环进入冻结轮：P2 记入 backlog，禁止再修改产出文件。
+ */
+export function critiqueConverged(md: string): boolean {
+  const { p0, p1 } = critiqueSeverityCounts(md);
+  return p0 === 0 && p1 === 0;
 }
 
 /**

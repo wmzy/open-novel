@@ -88,6 +88,35 @@ const emptyHint = css`
   & h3 { margin-bottom: 0.5rem; color: var(--haze-color-text); }
 `;
 
+/** 样章门 / 样章阶段顶部提示条。 */
+const stageBanner = css`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem 1rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--haze-color-primary);
+  border-radius: 8px;
+  background: var(--haze-color-bg);
+  & strong { color: var(--haze-color-text); }
+  & p { margin: 0.25rem 0 0; font-size: 0.8rem; color: var(--haze-color-text-secondary); }
+`;
+
+/** 提示条主操作按钮（去写样章）。 */
+const stageBannerBtn = css`
+  flex-shrink: 0;
+  padding: 0.375rem 0.875rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--haze-color-primary);
+  color: #fff;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  cursor: pointer;
+  &:hover { opacity: 0.9; }
+`;
+
 /** 章节右侧操作栏。 */
 const chapterActions = css`
   display: flex;
@@ -105,9 +134,12 @@ const statusLabels: Record<string, string> = {
 export default function WritingView({
   projectId,
   onViewChange,
+  variant = 'writing',
 }: {
   projectId: string;
   onViewChange: (view: string) => void;
+  /** writing：正式写作视图；sample：样章阶段复用本视图展示样章章节。 */
+  variant?: 'writing' | 'sample';
 }) {
   const revision = useFileRevision({ projectId, targetFile: '', stage: 'writing' });
   const { data: chapters } = useQuery<ChapterRow[]>({
@@ -118,21 +150,60 @@ export default function WritingView({
       return data.chapters;
     },
   });
+  const { data: project } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}`);
+      const data = await res.json();
+      return data.project;
+    },
+  });
 
   const list = chapters || [];
   const totalWords = list.reduce((sum, c) => sum + (c.wordCount || 0), 0);
+  /** 有正文的章节数（样章门按 wordCount>0 计）。 */
+  const writtenCount = list.filter((c) => (c.wordCount || 0) > 0).length;
+  /** 样章门：writing 阶段但正文不足 3 章时，提示先去写样章。 */
+  const gateBlocked = variant === 'writing' && project?.currentStage === 'writing' && writtenCount < 3;
+
+  const banner = variant === 'sample' ? (
+    <div className={stageBanner}>
+      <div>
+        <strong>样章阶段（{writtenCount}/3 章）</strong>
+        <p>写第 1 章 + 自选 2 个关键章节共 3 章样章，检验声口与节奏；每章复盘回灌大纲后进入正式写作。</p>
+      </div>
+    </div>
+  ) : gateBlocked ? (
+    <div className={stageBanner}>
+      <div>
+        <strong>样章门：正文 {writtenCount}/3 章</strong>
+        <p>正式写作前需先完成 3 章样章检验声口与节奏，并把复盘反馈回灌大纲；否则写作请求会被拦截。</p>
+      </div>
+      <button className={stageBannerBtn} onClick={() => onViewChange('sample')}>去写样章</button>
+    </div>
+  ) : null;
 
   if (list.length === 0) {
     return (
-      <div className={emptyHint}>
-        <h3>还没有章节</h3>
-        <p>在右侧对话面板选择「写作」阶段，输入「开始写第 1 章」即可让 AI 根据大纲创作正文。</p>
+      <div>
+        {banner}
+        <div className={emptyHint}>
+          <h3>{variant === 'sample' ? '还没有样章' : '还没有章节'}</h3>
+          <p>
+            {variant === 'sample'
+              ? '在右侧对话面板选择「样章」阶段，输入「开始写样章」即可让 AI 根据大纲写第 1 章样章并自选关键章节。'
+              : gateBlocked
+                ? '正文尚不足 3 章——请先完成样章阶段，再回到这里开始正式写作。'
+                : '在右侧对话面板选择「写作」阶段，输入「开始写第 1 章」即可让 AI 根据大纲创作正文。'}
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
     <div>
+      {banner}
       <div className={statsRow}>
         <div className={statCard}>
           <div className={statValue}>{list.length}</div>

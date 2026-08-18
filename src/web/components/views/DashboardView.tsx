@@ -119,6 +119,70 @@ const snapshotDate = css`
   margin-left: auto;
 `;
 
+/** 首要卡片：有效正文（北极星指标，带进度条）。 */
+const heroCard = css`
+  background: var(--haze-color-bg);
+  border: 1px solid var(--haze-color-border);
+  border-left: 3px solid var(--haze-color-primary);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 2rem;
+`;
+
+/** 首要卡片头：标签 + 百分比。 */
+const heroHead = css`
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.8rem;
+  color: var(--haze-color-text-secondary);
+`;
+
+/** 首要卡片百分比。 */
+const heroPercent = css`
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--haze-color-primary);
+`;
+
+/** 首要卡片数值。 */
+const heroValue = css`
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--haze-color-primary);
+  margin: 0.25rem 0 0.75rem;
+`;
+
+/** 首要卡片数值单位。 */
+const heroUnit = css`
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--haze-color-text-secondary);
+`;
+
+/** 卡片内补充说明行。 */
+const statSub = css`
+  font-size: 0.7rem;
+  color: var(--haze-color-text-secondary);
+  margin-top: 0.5rem;
+`;
+
+/** 样章门警示文案。 */
+const gateWarn = css`
+  font-size: 0.7rem;
+  color: var(--haze-color-warning, #f59e0b);
+  margin-top: 0.5rem;
+`;
+
+/** 卫生警示卡：规划数据污染运行态时高亮。 */
+const warnCard = css`
+  background: color-mix(in srgb, var(--haze-color-warning, #f59e0b) 10%, var(--haze-color-bg));
+  border: 1px solid var(--haze-color-warning, #f59e0b);
+  border-radius: 8px;
+  padding: 1.25rem;
+  text-align: center;
+`;
+
 interface Props {
   projectId: string;
 }
@@ -151,15 +215,77 @@ export default function DashboardView({ projectId }: Props) {
     },
   });
 
+  // 伏笔债务摘要：端点由伏笔工作包提供，缺失/失败时整卡隐藏（defensive）
+  const { data: foreshadowStats } = useQuery({
+    queryKey: ['foreshadow-stats', projectId],
+    staleTime: 30_000,
+    queryFn: async (): Promise<{
+      debtScore?: number;
+      overdue?: unknown[];
+      byStatus?: { pending?: number };
+    } | null> => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/foreshadows`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        const stats = data?.stats;
+        if (!stats || typeof stats !== 'object') return null;
+        return stats;
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  // 状态卫生：规划数据污染运行态检测，端点缺失/失败时整卡隐藏
+  const { data: hygiene } = useQuery({
+    queryKey: ['state-hygiene', projectId],
+    staleTime: 30_000,
+    queryFn: async (): Promise<{
+      pollution?: Array<{ name: string; fields: string[] }>;
+      intentCount?: number;
+    } | null> => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/state-hygiene`);
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
+    },
+  });
+
   const totalWords = chapters?.reduce((sum: number, ch: { wordCount?: number }) => sum + (ch.wordCount || 0), 0) || 0;
   const targetWords = project?.targetWords || 100000;
   const progress = Math.min(100, Math.round((totalWords / targetWords) * 100));
   const currentStageIdx = STAGES.findIndex((s) => s.id === project?.currentStage);
   const stageLabel = currentStageIdx >= 0 ? STAGES[currentStageIdx].label : project?.currentStage || '-';
+  // 样章门：写作阶段需至少 3 个有效章节（wordCount > 0）
+  const effectiveChapters = (chapters || []).filter((ch: { wordCount?: number }) => (ch.wordCount || 0) > 0).length;
+  const sampleGateIncomplete = project?.currentStage === 'writing' && effectiveChapters < 3;
+  const overdueCount = Array.isArray(foreshadowStats?.overdue) ? foreshadowStats!.overdue!.length : 0;
+  const pendingCount = foreshadowStats?.byStatus?.pending ?? 0;
 
   return (
     <div>
       <h3>总览</h3>
+
+      <div className={heroCard}>
+        <div className={heroHead}>
+          <span>有效正文</span>
+          <span className={heroPercent}>{progress}%</span>
+        </div>
+        <div className={heroValue}>
+          {totalWords.toLocaleString()} <span className={heroUnit}>字</span>
+        </div>
+        <div className={progressBar}>
+          <div className={progressFill} style={{ width: `${progress}%` }} />
+        </div>
+        <div className={progressLabel}>
+          <span>已写 {totalWords.toLocaleString()} 字</span>
+          <span>目标 {targetWords.toLocaleString()} 字</span>
+        </div>
+      </div>
 
       <div className={grid}>
         <div className={statCard}>
@@ -173,11 +299,30 @@ export default function DashboardView({ projectId }: Props) {
         <div className={statCard}>
           <div className={statValue}>{stageLabel}</div>
           <div className={statLabel}>当前阶段</div>
+          {sampleGateIncomplete && (
+            <div className={gateWarn}>⚠ 样章未完成（有效章节 {effectiveChapters}/3）</div>
+          )}
         </div>
         <div className={statCard}>
           <div className={statValue}>{progress}%</div>
           <div className={statLabel}>完成度</div>
         </div>
+        {foreshadowStats && (
+          <div className={statCard}>
+            <div className={statValue}>{foreshadowStats.debtScore ?? 0}</div>
+            <div className={statLabel}>伏笔债务</div>
+            <div className={statSub}>
+              待回收 {pendingCount} · 逾期 {overdueCount}
+            </div>
+          </div>
+        )}
+        {hygiene && (hygiene.pollution?.length ?? 0) > 0 && (
+          <div className={warnCard}>
+            <div className={statValue}>{hygiene!.pollution!.length}</div>
+            <div className={statLabel}>角色待分离</div>
+            <div className={statSub}>规划数据污染运行态，{hygiene!.pollution!.length} 个角色待分离</div>
+          </div>
+        )}
       </div>
 
       <div className={section}>

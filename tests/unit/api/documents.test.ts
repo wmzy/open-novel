@@ -72,6 +72,29 @@ describe('GET /api/projects/:id/document/:type', () => {
     expect(data.sourceFile).toBe('outline/index.md');
   });
 
+  it('outline 索引自愈：index.md 缺失时从 chapters/ 卡片重建（章号无 ? 占位）', async () => {
+    const chaptersDir = path.join(projectDir, '.novel', 'outline', 'chapters');
+    await fs.mkdir(chaptersDir, { recursive: true });
+    await fs.writeFile(
+      path.join(chaptersDir, '第2章.md'),
+      '## 第 2 章：夜行\n> commitment: committed\n- **主要场景**：夜行',
+    );
+    await fs.writeFile(
+      path.join(chaptersDir, '第1章.md'),
+      '## 第 1 章：启程\n> commitment: open\n> open-questions:\n>   - 路线抉择',
+    );
+
+    const res = await apiApp.request(`/api/projects/${projectId}/document/outline`);
+    expect(res.ok).toBe(true);
+    const data = await res.json();
+    // index 由卡片自动重建：章号来自文件名、含承诺等级列，无 ? 占位
+    expect(data.content).toContain('# 详细大纲索引（自动生成）');
+    expect(data.content).toContain('| 1 | 启程 | 待决 | chapters/第1章.md |');
+    expect(data.content).toContain('| 2 | 夜行 | 已定 | chapters/第2章.md |');
+    expect(data.content).not.toContain('?');
+    expect(data.sourceFile).toBe('outline/index.md');
+  });
+
   it('旧格式回退：outline/index.md 不存在时读 outline-detailed.md', async () => {
     await fs.mkdir(path.join(projectDir, '.novel'), { recursive: true });
     await fs.writeFile(

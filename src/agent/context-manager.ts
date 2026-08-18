@@ -17,6 +17,7 @@ import { parseOutlineMeta, defaultOutlineMeta } from '../shared/outline-meta';
 const NOVEL_DIR = '.novel';
 const CHAPTERS_DIR = 'chapters';
 const STATE_FILE = 'state.json';
+const INTENT_FILE = 'state-intent.json';
 const PROFILES_FILE = path.join('characters', 'profiles.md');
 const PROGRESS_FILE = 'progress.md';
 const CHARACTER_STATES_FILE = 'character-states.md';
@@ -51,6 +52,23 @@ export interface NovelState {
   timeline: string; // 当前故事时间线描述
   activeForeshadows: number[]; // 活跃伏笔 ID 列表
   lastUpdatedChapter: number;
+  updatedAt: string;
+}
+
+/** 规划态角色条目（state-intent.json）：规划阶段产生的期望，与正文运行态分离。 */
+export interface CharacterIntent {
+  name: string;
+  /** 期望定位（如「主角」「反派」）。 */
+  expectedRole?: string;
+  /** 期望成长弧线描述。 */
+  expectedArc?: string;
+  /** 其余规划期期望（期望位置/情绪/已知/关系等），自由文本。 */
+  notes?: string;
+}
+
+/** 规划态表（.novel/state-intent.json）。 */
+export interface NovelIntent {
+  characters: CharacterIntent[];
   updatedAt: string;
 }
 
@@ -505,6 +523,154 @@ export async function initStateTable(projectDir: string): Promise<void> {
   await fs.writeFile(statePath, JSON.stringify(state, null, 2), 'utf-8');
 }
 
+// ===== 规划态/运行态分离 =====
+
+/** 校验并归一化单个规划态条目，数据不合法时返回 null。 */
+function normalizeIntentCharacter(input: unknown): CharacterIntent | null {
+  if (!input || typeof input !== 'object') return null;
+  const v = input as Record<string, unknown>;
+  if (typeof v.name !== 'string' || v.name === '') return null;
+  return {
+    name: v.name,
+    expectedRole: typeof v.expectedRole === 'string' ? v.expectedRole : undefined,
+    expectedArc: typeof v.expectedArc === 'string' ? v.expectedArc : undefined,
+    notes: typeof v.notes === 'string' ? v.notes : undefined,
+  };
+}
+
+/** 校验并归一化整份规划态数据，保证结构完整。 */
+function normalizeIntent(input: unknown): NovelIntent {
+  if (!input || typeof input !== 'object') return { characters: [], updatedAt: '' };
+  const v = input as Record<string, unknown>;
+  const characters = Array.isArray(v.characters)
+    ? v.characters
+        .map(normalizeIntentCharacter)
+        .filter((c): c is CharacterIntent => c !== null)
+    : [];
+  return {
+    characters,
+    updatedAt: typeof v.updatedAt === 'string' ? v.updatedAt : '',
+  };
+}
+
+/**
+ * 读取规划态表（`.novel/state-intent.json`）。文件不存在或损坏时返回空表。
+ * 与 getStateTable 对应：state.json 只存运行态（actual），本表只存规划期望（intent）。
+ */
+export async function readIntentTable(projectDir: string): Promise<NovelIntent> {
+  const raw = await readNovelFile(projectDir, INTENT_FILE);
+  if (!raw) return { characters: [], updatedAt: '' };
+  try {
+    return normalizeIntent(JSON.parse(raw));
+  } catch {
+    return { characters: [], updatedAt: '' };
+  }
+}
+
+/**
+ * 整体覆盖写入规划态表并刷新 `updatedAt` 时间戳。
+ */
+export async function writeIntentTable(
+  projectDir: string,
+  intent: NovelIntent,
+): Promise<void> {
+  const next: NovelIntent = {
+    characters: intent.characters.map(normalizeIntentCharacter).filter(
+      (c): c is CharacterIntent => c !== null,
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+  const novelDir = path.join(projectDir, NOVEL_DIR);
+  await fs.mkdir(novelDir, { recursive: true });
+  await fs.writeFile(
+    path.join(novelDir, INTENT_FILE),
+    JSON.stringify(next, null, 2),
+    'utf-8',
+  );
+}
+
+/**
+ * 规划期污染特征：角色从未在正文出现（lastAppearance===0），
+ * 却带有运行态字段（location/emotion 非空）。
+ * 规划阶段（characters/outline 等）的期望被 agent 误写进 state.json 时呈现此特征。
+ */
+export function isPlanningPolluted(c: CharacterState): boolean {
+  return c.lastAppearance === 0 && (c.emotion !== '' || c.location !== '');
+}
+
+/** 把被污染角色的期望字段打包成 notes 文本，保证分离时数据不丢失。 */
+function intentNotesFrom(c: CharacterState): string {
+  const parts: string[] = [];
+  if (c.location) parts.push(`期望位置：${c.location}`);
+  if (c.emotion) parts.push(`期望情绪：${c.emotion}`);
+  if (c.knows.length > 0) parts.push(`期望已知：${c.knows.join('、')}`);
+  const rels = Object.entries(c.relationships);
+  if (rels.length > 0) {
+    parts.push(`期望关系：${rels.map(([k, v]) => `${k}=${v}`).join('、')}`);
+  }
+  return parts.join('；');
+}
+
+/**
+ * 规划态/运行态分离：检测 state.json 中的规划期污染并把期望移入 state-intent.json。
+ *
+ * - 污染角色（isPlanningPolluted）在 state.json 中重置为骨架（仅保留名字）；
+ * - 期望字段（location/emotion/knows/relationships）归档为 intent 条目的 notes；
+ * - 同名角色已存在 intent 条目时合并 notes（累积），否则追加新条目；
+ * - state.json 无污染时返回 null，不产生任何写盘副作用。
+ *
+ * 由 ensureContextArtifacts 每次运行时调用，形成规划期污染的自我修复。
+ */
+export async function splitPlanningPollution(
+  projectDir: string,
+): Promise<{ moved: string[] } | null> {
+  const state = await getStateTable(projectDir);
+  const polluted = state.characters.filter(isPlanningPolluted);
+  if (polluted.length === 0) return null;
+
+  // 期望归档进 intent 表（同名合并，异名追加）
+  const intent = await readIntentTable(projectDir);
+  for (const c of polluted) {
+    const notes = intentNotesFrom(c);
+    if (!notes) continue;
+    const existing = intent.characters.find((i) => i.name === c.name);
+    if (existing) {
+      existing.notes = existing.notes ? `${existing.notes}；${notes}` : notes;
+    } else {
+      intent.characters.push({ name: c.name, notes });
+    }
+  }
+
+  // state.json 中污染角色重置为骨架，其余字段（timeline 等）原样保留
+  const cleaned: NovelState = {
+    ...state,
+    characters: state.characters.map((c) =>
+      isPlanningPolluted(c)
+        ? {
+            name: c.name,
+            location: '',
+            emotion: '',
+            knows: [],
+            relationships: {},
+            lastAppearance: 0,
+          }
+        : c,
+    ),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const novelDir = path.join(projectDir, NOVEL_DIR);
+  await fs.mkdir(novelDir, { recursive: true });
+  await fs.writeFile(
+    path.join(novelDir, STATE_FILE),
+    JSON.stringify(cleaned, null, 2),
+    'utf-8',
+  );
+  await writeIntentTable(projectDir, intent);
+
+  return { moved: polluted.map((c) => c.name) };
+}
+
 // ===== 兜底补全 =====
 
 /** 占位摘要：从正文截取的字数上限。 */
@@ -594,6 +760,9 @@ export async function ensureContextArtifacts(
 
   // 5. outline-meta.json 兜底：缺失或格式错误时按已知章节数初始化
   await ensureOutlineMeta(projectDir).catch(() => {});
+
+  // 6. 规划态/运行态分离：把规划期误写入 state.json 的期望移入 state-intent.json（自愈）
+  await splitPlanningPollution(projectDir).catch(() => {});
 }
 
 const OUTLINE_META_FILE = 'outline-meta.json';

@@ -16,6 +16,9 @@ import {
   getCharacterStatesMarkdown,
   getStyleRefs,
   parseStyleIndex,
+  readIntentTable,
+  writeIntentTable,
+  splitPlanningPollution,
 } from '../../../src/agent/context-manager';
 
 async function seedProfiles(dir: string, names: string[]) {
@@ -192,6 +195,28 @@ describe('context-manager', () => {
       s = await getStateTable(dir);
       expect(s.timeline).toBe('changed');
     });
+
+    it('readIntentTable 文件不存在或损坏时返回空表，writeIntentTable 覆盖写回', async () => {
+      // 不存在
+      expect(await readIntentTable(dir)).toEqual({ characters: [], updatedAt: '' });
+      // 损坏
+      await fs.mkdir(path.join(dir, '.novel'), { recursive: true });
+      await fs.writeFile(path.join(dir, '.novel', 'state-intent.json'), '{ broken');
+      expect((await readIntentTable(dir)).characters).toEqual([]);
+
+      await writeIntentTable(dir, {
+        characters: [
+          { name: '林青', expectedRole: '主角', notes: '期望位置：北境' },
+          { name: '', notes: '非法条目应被丢弃' },
+        ],
+        updatedAt: '',
+      });
+      const intent = await readIntentTable(dir);
+      expect(intent.characters).toHaveLength(1);
+      expect(intent.characters[0].name).toBe('林青');
+      expect(intent.characters[0].expectedRole).toBe('主角');
+      expect(intent.updatedAt).not.toBe('');
+    });
   });
 
   describe('ensureContextArtifacts (兜底补全)', () => {
@@ -362,6 +387,37 @@ describe('context-manager', () => {
       const content = await fs.readFile(path.join(chaptersDir, '第1章.md'), 'utf-8');
       expect(content).toBe('正常正文内容');
     });
+
+    it('规划期污染在末尾自动分离（自愈）', async () => {
+      // state.json 带污染角色：lastAppearance=0 但 emotion/location 非空
+      await updateStateTable(dir, {
+        timeline: '第三日',
+        lastUpdatedChapter: 0,
+        characters: [
+          {
+            name: '林青',
+            location: '北境',
+            emotion: '警惕',
+            knows: [],
+            relationships: {},
+            lastAppearance: 0,
+          },
+        ],
+      });
+
+      await ensureContextArtifacts(dir, new Set<string>());
+
+      // state.json 已重置为骨架
+      const s = await getStateTable(dir);
+      expect(s.characters[0].location).toBe('');
+      expect(s.characters[0].emotion).toBe('');
+      expect(s.timeline).toBe('第三日'); // 非角色字段保留
+      // 期望已移入 state-intent.json
+      const intent = await readIntentTable(dir);
+      expect(intent.characters.map((i) => i.name)).toEqual(['林青']);
+      expect(intent.characters[0].notes).toContain('期望位置：北境');
+      expect(intent.characters[0].notes).toContain('期望情绪：警惕');
+    });
   });
 
   describe('readCharacterNames (table index)', () => {
@@ -504,6 +560,151 @@ describe('context-manager', () => {
     it('getStyleRefs 目录不存在时返回空数组', async () => {
       const refs = await getStyleRefs(dir);
       expect(refs).toEqual([]);
+    });
+  });
+
+  describe('规划态/运行态分离 (splitPlanningPollution)', () => {
+    it('识别污染特征：lastAppearance=0 但 emotion/location 非空的角色被移动，其余不动', async () => {
+      await updateStateTable(dir, {
+        timeline: '第五日',
+        lastUpdatedChapter: 3,
+        characters: [
+          {
+            // 污染：从未出场却有运行态字段
+            name: '林青',
+            location: '北境关隘',
+            emotion: '警惕',
+            knows: ['密道位置'],
+            relationships: { 苏晚: '盟友' },
+            lastAppearance: 0,
+          },
+          {
+            // 正常运行态：已出场，字段保留
+            name: '苏晚',
+            location: '临安城',
+            emotion: '平静',
+            knows: [],
+            relationships: {},
+            lastAppearance: 3,
+          },
+          {
+            // 干净骨架：从未出场且无字段，不算污染
+            name: '赵歧',
+            location: '',
+            emotion: '',
+            knows: [],
+            relationships: {},
+            lastAppearance: 0,
+          },
+        ],
+      });
+
+      const result = await splitPlanningPollution(dir);
+
+      expect(result).toEqual({ moved: ['林青'] });
+      const s = await getStateTable(dir);
+      const lin = s.characters.find((c) => c.name === '林青')!;
+      expect(lin).toEqual({
+        name: '林青',
+        location: '',
+        emotion: '',
+        knows: [],
+        relationships: {},
+        lastAppearance: 0,
+      });
+      // 非污染角色不受影响
+      const su = s.characters.find((c) => c.name === '苏晚')!;
+      expect(su.location).toBe('临安城');
+      expect(su.lastAppearance).toBe(3);
+      expect(s.characters.find((c) => c.name === '赵歧')!.emotion).toBe('');
+      // 非角色字段保留
+      expect(s.timeline).toBe('第五日');
+      expect(s.lastUpdatedChapter).toBe(3);
+    });
+
+    it('期望归档进 intent：knows/relationships 一并入 notes，数据不丢失', async () => {
+      await updateStateTable(dir, {
+        characters: [
+          {
+            name: '林青',
+            location: '北境',
+            emotion: '',
+            knows: ['密道位置'],
+            relationships: { 苏晚: '盟友' },
+            lastAppearance: 0,
+          },
+        ],
+      });
+
+      await splitPlanningPollution(dir);
+
+      const intent = await readIntentTable(dir);
+      expect(intent.characters).toHaveLength(1);
+      const notes = intent.characters[0].notes ?? '';
+      expect(notes).toContain('期望位置：北境');
+      expect(notes).toContain('期望已知：密道位置');
+      expect(notes).toContain('期望关系：苏晚=盟友');
+      expect(intent.updatedAt).not.toBe('');
+    });
+
+    it('intent 累积：同名角色合并 notes，异名角色追加条目', async () => {
+      // 预置一条既有 intent
+      await writeIntentTable(dir, {
+        characters: [{ name: '林青', expectedRole: '主角', notes: '弧线：由疑到信' }],
+        updatedAt: '',
+      });
+
+      // 第一轮：林青 污染
+      await updateStateTable(dir, {
+        characters: [
+          { name: '林青', location: '北境', emotion: '', knows: [], relationships: {}, lastAppearance: 0 },
+        ],
+      });
+      await splitPlanningPollution(dir);
+
+      // 第二轮：苏晚 污染
+      await updateStateTable(dir, {
+        characters: [
+          { name: '林青', location: '', emotion: '', knows: [], relationships: {}, lastAppearance: 0 },
+          { name: '苏晚', location: '临安', emotion: '不安', knows: [], relationships: {}, lastAppearance: 0 },
+        ],
+      });
+      await splitPlanningPollution(dir);
+
+      const intent = await readIntentTable(dir);
+      expect(intent.characters.map((i) => i.name).sort()).toEqual(['林青', '苏晚']);
+      const lin = intent.characters.find((i) => i.name === '林青')!;
+      // 既有字段保留，notes 累积拼接
+      expect(lin.expectedRole).toBe('主角');
+      expect(lin.notes).toContain('弧线：由疑到信');
+      expect(lin.notes).toContain('期望位置：北境');
+      const su = intent.characters.find((i) => i.name === '苏晚')!;
+      expect(su.notes).toContain('期望情绪：不安');
+    });
+
+    it('干净的 state 返回 null 且不产生 state-intent.json', async () => {
+      await updateStateTable(dir, {
+        characters: [
+          // 已出场角色带字段：正常运行态，不是污染
+          { name: '林青', location: '北境', emotion: '警惕', knows: [], relationships: {}, lastAppearance: 2 },
+        ],
+      });
+
+      const result = await splitPlanningPollution(dir);
+
+      expect(result).toBeNull();
+      // 无写盘副作用
+      await expect(fs.access(path.join(dir, '.novel', 'state-intent.json'))).rejects.toThrow();
+      const s = await getStateTable(dir);
+      expect(s.characters[0].location).toBe('北境');
+
+      // state.json 不存在时同样返回 null
+      const dir2 = await fs.mkdtemp(path.join(os.tmpdir(), 'on-ctx-'));
+      try {
+        await expect(splitPlanningPollution(dir2)).resolves.toBeNull();
+      } finally {
+        await fs.rm(dir2, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -12,6 +12,8 @@ export interface ForeshadowItem {
   status: string;
   plantedIn: number;
   resolvedIn?: number;
+  /** 最晚回收章号（债务期限）；缺省视为未设定。 */
+  resolveDeadline?: number | null;
 }
 
 export interface CharRelState {
@@ -45,17 +47,22 @@ function foreshadowLabel(content: string): string {
 
 /**
  * 从 foreshadow.json 派生甘特图：横轴=章节号，每条=伏笔从埋设章到回收章。
- * 按 status 分 section（待埋/待回收/已回收），一眼看出哪条逾期、哪条扎堆。
+ * 按 status 分 section（待埋/待回收/已回收/已放弃），一眼看出哪条逾期、哪条扎堆。
+ * 设定了 resolveDeadline 的条目在期限章追加 ◆milestone 标记（期限里程碑）；
+ * 期限早于实际回收章的，标记名前加 ⚠ 提示回收晚了。
  */
 export function buildForeshadowGantt(items: ForeshadowItem[]): string | null {
   if (!items || items.length === 0) return null;
 
-  const maxChapter = Math.max(...items.map((f) => f.resolvedIn ?? f.plantedIn ?? 1));
+  const maxChapter = Math.max(
+    ...items.map((f) => f.resolvedIn ?? f.resolveDeadline ?? f.plantedIn ?? 1),
+  );
 
   const sections: Array<{ title: string; state: string; group: ForeshadowItem[] }> = [
     { title: '待埋', state: 'crit', group: items.filter((f) => f.status === 'pending') },
     { title: '待回收', state: 'active', group: items.filter((f) => f.status === 'planted') },
     { title: '已回收', state: 'done', group: items.filter((f) => f.status === 'resolved' && f.resolvedIn != null) },
+    { title: '已放弃', state: 'done', group: items.filter((f) => f.status === 'dropped') },
   ];
 
   const lines: string[] = [
@@ -70,14 +77,66 @@ export function buildForeshadowGantt(items: ForeshadowItem[]): string | null {
     lines.push(`    section ${title}`);
     for (const f of group) {
       const start = f.plantedIn || 1;
-      const end = f.resolvedIn ?? maxChapter;
+      const end = f.resolvedIn ?? f.resolveDeadline ?? maxChapter;
       const dur = Math.max(1, end - start);
       lines.push(`    ${sanitize(foreshadowLabel(f.content))} :${state}, f${f.id}, ${start}, ${dur}`);
+      // 期限里程碑：未回收条目止于期限章；已回收条目若晚于期限，标记回收迟到
+      if (f.resolveDeadline != null) {
+        const late = f.resolvedIn != null && f.resolvedIn > f.resolveDeadline;
+        const mark = late ? `⚠${foreshadowLabel(f.content)}期限` : `${foreshadowLabel(f.content)}期限`;
+        lines.push(`    ${sanitize(mark)} :milestone, fd${f.id}, ${f.resolveDeadline}, 0`);
+      }
     }
   }
 
   // 只有标题行 = 全部数据无效
   return lines.length <= 4 ? null : lines.join('\n');
+}
+
+// ── ①-b 伏笔密度图 ──
+
+/** 密度图输入：每章新埋/回收条数（来自 computeForeshadowStats.density）。 */
+export interface ForeshadowDensityPoint {
+  chapter: number;
+  planted: number;
+  resolved: number;
+}
+
+/**
+ * 伏笔密度图（xychart-beta 双柱：新埋 / 回收）。
+ * 章节数超过 30 时自动分桶聚合（桶内求和，横轴标桶起始章），保证横轴可读。
+ * 全部为 0（无任何埋设/回收活动）返回 null——调用方显示提示而非空图。
+ */
+export function buildForeshadowDensity(density: ForeshadowDensityPoint[]): string | null {
+  const points = (density ?? []).filter((p) => p && Number.isFinite(p.chapter));
+  if (points.length === 0) return null;
+  if (points.every((p) => (p.planted ?? 0) === 0 && (p.resolved ?? 0) === 0)) return null;
+
+  const bucketSize = Math.max(1, Math.ceil(points.length / 30));
+  let buckets: ForeshadowDensityPoint[];
+  if (bucketSize === 1) {
+    buckets = points.map((p) => ({ chapter: p.chapter, planted: p.planted ?? 0, resolved: p.resolved ?? 0 }));
+  } else {
+    buckets = [];
+    for (let i = 0; i < points.length; i += bucketSize) {
+      const slice = points.slice(i, i + bucketSize);
+      buckets.push({
+        chapter: slice[0].chapter,
+        planted: slice.reduce((s, p) => s + (p.planted ?? 0), 0),
+        resolved: slice.reduce((s, p) => s + (p.resolved ?? 0), 0),
+      });
+    }
+  }
+
+  const maxY = Math.max(2, ...buckets.map((p) => Math.max(p.planted, p.resolved)));
+  return [
+    'xychart-beta',
+    '    title 伏笔密度：每章新埋 / 回收',
+    `    x-axis [${buckets.map((p) => p.chapter).join(', ')}]`,
+    `    y-axis "条数" 0 --> ${maxY}`,
+    `    bar [${buckets.map((p) => p.planted).join(', ')}]`,
+    `    bar [${buckets.map((p) => p.resolved).join(', ')}]`,
+  ].join('\n');
 }
 
 // ── ② 人物关系图 ──

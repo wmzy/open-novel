@@ -5,10 +5,18 @@ import { projects } from '../db/schema';
 import { getPlugin } from '../plugins/registry';
 import { eq } from 'drizzle-orm';
 import { buildRollingSummaryContext, getStateTable, readCharacterNames, getProgressMarkdown, getCharacterStatesMarkdown, getStyleRefs } from './context-manager';
-import { extractChapterOutline, identifyCast, buildCastLayer } from './chapter-context';
+import { extractChapterOutline, identifyCast, buildCastLayer, type ChapterOutline } from './chapter-context';
 import { buildReverseDecomposePrompt } from './reverse-decomposer';
 import { buildEnrichPrompt } from './enricher';
 import { STAGE_OUTPUT_FILES, isCritiqueRound } from '../shared/deepen';
+import { isWritingStage } from '../shared/stages';
+import {
+  parseForeshadowFile,
+  computeDensityBudget,
+  FORESHADOW_TYPE_LABELS,
+  FORESHADOW_WEIGHT_LABELS,
+  type Foreshadow,
+} from '../shared/foreshadow';
 import { getSubagentGuidance } from './subagents';
 
 export interface ComposePromptOptions {
@@ -131,28 +139,51 @@ const STAGE_TAIL: Record<string, string> = {
 {
   "actBreaks": [5, 15],
   "chapters": [
-    { "chapter": 1, "pov": "林冲" },
-    { "chapter": 2, "pov": "林冲" }
+    { "chapter": 1, "pov": "林冲", "commitment": "committed" },
+    { "chapter": 2, "pov": "林冲", "commitment": "tentative" }
   ]
 }
 \`\`\`
-actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视点角色名。
+actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视点角色名；commitment 为该章的承诺等级（语义见下）。
+
+**承诺等级（滚动式大纲，每张章节卡片必填）**：章节卡片在标题行下用引用行声明承诺等级与待决策问题，格式：
+\`\`\`markdown
+## 第 N 章：标题 ｜ 所属幕 ｜ 目标约 X 字
+
+> commitment: committed
+> open-questions:
+>   - 待决策问题（open 级必填，其余等级可省略）
+\`\`\`
+三级语义与粒度：
+- committed（已定）：写作依据，正文不得偏离；粒度为 beat 级——场景、冲突、结果齐备（每章几百字）。
+- tentative（倾向）：可被正文推翻，推翻时须回写大纲卡片；粒度为 arc 级（段落级走向）。
+- open（待决策）：必须携带 open-questions 待决策问题列表；粒度为幕级骨架（一两句话）。
+未声明或等级写错时一律按 tentative 处理。
+
+**粒度梯度要求（近细远粗）**：第 1-10 章与即将写作的章节应达 committed/beat 级；第一幕其余章节 tentative/arc 级；第二、三幕 open/骨架级。**远期章节粗粒度是设计而非未完成**——写作推进到某章前，先把它精化为 beat 级（精排窗口：以已写完的章为起点向后 10 章）。outline-meta.json 的 chapters 数组须逐章同步填写 commitment 字段。
 
 **伏笔登记（必做）**：从大纲中识别贯穿全书的伏笔（每处埋设 + 对应回收），写入 .novel/foreshadow.json，**替换掉模板占位**（"伏笔内容" 那一条）。每条用**具体内容**描述该伏笔是什么，而非泛泛之词。标准 schema：
 \`\`\`json
 {
   "foreshadows": [
-    { "id": 1, "content": "具体伏笔描述", "status": "pending", "plantedIn": 预定埋设章号, "resolvedIn": 预定回收章号 }
+    { "id": 1, "content": "具体伏笔描述", "type": "chekhov", "status": "pending", "plantedIn": 预定埋设章号, "resolveDeadline": 最晚回收章号, "resolvedIn": null, "dependsOn": [], "weight": "major" }
   ]
 }
 \`\`\`
-顶层键为 foreshadows（**不是** items），内容字段为 content（**不是** description），status 取值 pending/planted/resolved；plantedIn/resolvedIn 为数字章号，无法确定时填 null。写章时 agent 会据此把 pending 翻成 planted，故此处务必把全书伏笔登记齐全。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
+顶层键为 foreshadows（**不是** items），内容字段为 content（**不是** description）。type 取值 chekhov（契诃夫之枪）/identity（身份揭示）/emotional（情感回响）/world（世界观）；status 取值 pending/planted/resolved/dropped；plantedIn/resolveDeadline/resolvedIn 为数字章号，无法确定时填 null；dependsOn 填前置伏笔的 id 列表（该伏笔回收前必须先回收的前置）；weight 取值 major（主线级）/light（点缀级）。密度预算：每 3 章新埋不超过 2 条，登记时据此控制总量。写章时 agent 会据此把 pending 翻成 planted，故此处务必把全书伏笔登记齐全。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
 
   scenes: `
 确保主动场景（目标→冲突→灾难/转折）与被动场景（反应→困境→新决定）交替，避免连续同型。
 
 **脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章场景脚手架（主动 Scene / 被动 Sequel 配对）。不落盘预览可用 GET /api/projects/{projectId}/templates/scenes。以生成的脚手架为起点并加以打磨。
-场景表完成后，保存到 .novel/scenes.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
+场景表完成后，保存到 .novel/scenes.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "sample" }）将项目阶段更新为 "sample"。`,
+
+  sample: `
+**样章完成核验（落盘清单）**——3 章样章全部写完后逐项核对：
+- 3 个章节正文文件（.novel/chapters/第N章.md；章节号即真实章节号，不另设样章编号）
+- .novel/sample-feedback.md（3 篇样章复盘 + 末尾的大纲修订汇总）
+- 大纲修订（.novel/outline/ 相关章节卡片与承诺等级已按复盘更新）
+全部就绪后，通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
 };
 
 /** 自治协议（替代采访式，用于无人值守的夜间探索等场景）。结构与 INTERVIEW_PROTOCOL 平行。 */
@@ -301,6 +332,27 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
 
 写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。
 ${WRITING_OUTPUT_PROTOCOL}`,
+  sample: `**本阶段为自治写作阶段**：写 3 章样章检验声口与节奏，把发现的问题反馈回灌大纲。本章大纲与出场角色档案已注入上方上下文，无需再 Read。
+
+**选章规则**：第 1 章（开篇定调）+ 从大纲 committed 章节中自选 2 个关键章节，建议挑声口差异最大的角色视角章，最大化检验叙事口吻的可区分度。
+
+**章节号即真实章节号**：样章正文直接写入真实章节文件（写第 1 章就是 .novel/chapters/第1章.md，选了大纲第 N 章就写 .novel/chapters/第N章.md），不另设平行的样章编号体系。
+
+**样章循环（每章执行一遍）**：
+1. 按注入的大纲与上下文撰写该章正文，保存到 .novel/chapters/第N章.md
+2. 正文落盘后，在 .novel/sample-feedback.md **追加**该章复盘（不覆盖前章），固定四节：
+   - **声口落地**：视点角色的口吻是否立得住？与其他已写样章的声口是否可区分？
+   - **节奏体感**：本章场景推进的松紧、断章钩子是否有效？
+   - **世界观落地**：设定在正文中是否自然融入，有无与卡片冲突之处？
+   - **大纲需修正点**：写作过程暴露出的大纲问题（节拍失效/动机牵强/信息顺序不当等）
+3. 委托 state-patcher SubAgent 更新章节摘要与状态文件（与写作阶段相同的职责分离；不支持 SubAgent 时自行完成）
+
+**3 章全部完成后（反馈回灌）**：
+1. 按三篇复盘中的「大纲需修正点」修订对应的大纲章节卡片与承诺等级
+2. 将修订汇总说明（改了哪些卡片、为什么）写入 .novel/sample-feedback.md 末尾
+${STAGE_TAIL.sample}
+${WRITING_OUTPUT_PROTOCOL}`,
+
   drafting: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。${WRITING_OUTPUT_PROTOCOL}`,
   revision: `审阅和改进已有内容。重点检查：(1) 剧情连贯性和逻辑漏洞；(2) 伏笔是否被遗忘（POST /api/projects/{projectId}/check/foreshadows）；(3) 人物行为是否偏离设定（POST /api/projects/{projectId}/check/ooc，body: {chapterNum: N}）；(4) 文笔AI味（POST /api/projects/{projectId}/check/ai-patterns，body: {chapterNum: N}）。根据检查报告逐章修订。`,
   polish: `最终润色。聚焦行文质量——用词精准度、句式节奏、对话自然度、描写具体化。删除抽象情绪标签和万能形容词，用具体细节替代。${WRITING_OUTPUT_PROTOCOL}`,
@@ -398,12 +450,8 @@ async function listProjectFiles(projectDir: string): Promise<string[]> {
   }
 }
 
-/** 需要注入分层上下文的写作阶段（concept→scenes 阶段不注入，因为还没有章节内容）。 */
-const WRITING_STAGES = new Set(['writing', 'drafting', 'revision', 'polish']);
-
-function isWritingStage(stage: string): boolean {
-  return WRITING_STAGES.has(stage);
-}
+/** 写作型阶段（含 sample 样章）统一使用 shared/stages 的 isWritingStage：
+ * 这些阶段需要注入写作分层上下文（滚动摘要/状态/伏笔等），concept→scenes 阶段不注入。 */
 
 /** 规划阶段：预注入 concept/world 核心设定文件，省去 agent 多轮 Read 往返。 */
 const PLANNING_STAGES = new Set(['concept', 'world', 'characters', 'outline', 'scenes']);
@@ -438,10 +486,10 @@ function detectStageMismatch(message: string, stage?: string): string {
   if (wantsWriting && !isWritingStage(stage)) {
     return `> ⚠️ **阶段不匹配提醒**
 > 用户消息包含写作意图（如“写第N章”），但当前项目阶段是「${stage}」。
-> writing 阶段的提示词和上下文层尚未注入——现在写章节会缺少必要的前期设定。
+> 写作阶段（sample 样章 / writing）的提示词和上下文层尚未注入——现在写章节会缺少必要的前期设定。
 >
-> **请在回复中明确告知用户**：当前阶段是「${stage}」，需要先完成当前阶段并切换到 writing 阶段。
-> 如果用户确实想跳过前期直接写章节，请告诉他们可通过 PATCH /api/projects/{id} 切换阶段。
+> **请在回复中明确告知用户**：当前阶段是「${stage}」，需要先完成当前阶段并切换到 sample（样章）阶段；写满 3 章样章后系统才放行 writing 阶段。
+> 如果用户确实想跳过样章直接进入正式写作，请告诉他们可通过 PATCH /api/projects/{id} 切换阶段（后端对未达 3 章正文的 writing 请求会返回样章门拦截）。
 > 不要在错误的阶段下直接写章节文件。\n`;
   }
 
@@ -613,39 +661,65 @@ async function buildCharacterStatesLayer(projectDir: string): Promise<string> {
 }
 
 /**
- * 解析 foreshadow.json，返回未回收伏笔列表。
- * 调用方据此做分区注入。
+ * 解析 foreshadow.json（宽容解析 + 旧格式迁移），返回伏笔清单。
+ * 调用方据此做分区注入；旧格式的 plantedIn 自由文本由 parseForeshadowFile
+ * 提取章号（"第64-66章"→64），提取失败降级为 null 并保留 rawPlantedIn。
  */
 export async function loadForeshadows(projectDir: string): Promise<{
-  foreshadows: Array<{ id: number; content: string; status: string; plantedIn: number | null; resolvedIn?: number | null }>;
+  foreshadows: Foreshadow[];
 }> {
   const raw = await readNovelFile(projectDir, 'foreshadow.json');
   if (!raw) return { foreshadows: [] };
+  return { foreshadows: parseForeshadowFile(raw).foreshadows };
+}
+
+/** 伏笔条目标注前缀：[类型][权重]。 */
+function foreshadowBadges(f: Foreshadow): string {
+  const type = FORESHADOW_TYPE_LABELS[f.type] ?? FORESHADOW_TYPE_LABELS.chekhov;
+  const weight = FORESHADOW_WEIGHT_LABELS[f.weight] ?? FORESHADOW_WEIGHT_LABELS.light;
+  return `[${type}][${weight}]`;
+}
+
+/** 未结清（待埋/已埋未收）才需要逾期报警；resolved/dropped 不再报警。 */
+function foreshadowUnsettled(f: Foreshadow): boolean {
+  return f.status === 'pending' || f.status === 'planted';
+}
+
+/**
+ * 伏笔条目括注：埋设章 / 期限章（含逾期标记）/ 前置依赖链。
+ * planned=true 时埋设章显示为「应埋于」（该条仍是 pending，尚未真正落笔）。
+ */
+function foreshadowMetaNote(f: Foreshadow, currentChapter: number, planned = false): string {
+  const segs: string[] = [];
+  if (f.plantedIn !== null) {
+    segs.push(planned ? `应埋于第${f.plantedIn}章` : `埋于第${f.plantedIn}章`);
+  }
+  if (f.resolveDeadline !== null) {
+    const overdue = foreshadowUnsettled(f) && f.resolveDeadline < currentChapter;
+    segs.push(`期限：第${f.resolveDeadline}章前回收${overdue ? ' ⚠已逾期' : ''}`);
+  }
+  if (f.dependsOn.length > 0) {
+    segs.push(`前置：${f.dependsOn.map((d) => `#${d}`).join('、')}`);
+  }
+  return segs.length > 0 ? `（${segs.join('｜')}）` : '';
+}
+
+/** 全书章数：统计 .novel/chapters/ 下的 第N章.md；0 表示未知（跳过孤儿判定）。 */
+async function readNovelChapterCount(projectDir: string): Promise<number> {
   try {
-    const data = JSON.parse(raw) as { foreshadows?: Array<Record<string, unknown>> };
-    // 严格只认标准 schema：{ foreshadows: [{ id, content, status, plantedIn, resolvedIn }] }
-    // status 必须是 pending/planted/resolved；content 必须是字符串。非标准条目跳过。
-    const VALID_STATUS = new Set(['pending', 'planted', 'resolved']);
-    const list = (Array.isArray(data.foreshadows) ? data.foreshadows : [])
-      .filter((f) => f && typeof f.content === 'string' && typeof f.status === 'string' && VALID_STATUS.has(f.status))
-      .map((f, idx) => ({
-        id: typeof f.id === 'number' ? f.id
-          : typeof f.id === 'string' ? (parseInt(f.id, 10) || idx + 1)
-            : idx + 1,
-        content: f.content as string,
-        status: f.status as string,
-        plantedIn: typeof f.plantedIn === 'number' ? f.plantedIn : null,
-        resolvedIn: typeof f.resolvedIn === 'number' ? f.resolvedIn : null,
-      }));
-    return { foreshadows: list };
+    const entries = await fs.readdir(path.join(projectDir, '.novel', 'chapters'));
+    const nums = entries
+      .map((f) => parseInt(f.match(/^第(\d+)章\.md$/)?.[1] ?? '', 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    return nums.length === 0 ? 0 : Math.max(...nums, nums.length);
   } catch {
-    return { foreshadows: [] };
+    return 0;
   }
 }
 
 /**
  * 本章须埋设的伏笔：plantedIn === currentChapter 且 status 仍为 pending 的条目。
- * 返回「置顶提醒」区块，空则返回空串。
+ * 返回「置顶提醒」区块（含 [类型][权重]、期限、前置依赖标注），空则返回空串。
  */
 async function buildCurrentChapterForeshadows(
   projectDir: string,
@@ -658,16 +732,18 @@ async function buildCurrentChapterForeshadows(
   if (toPlant.length === 0) return '';
   const lines: string[] = [`### ⚠ 本章须埋设的伏笔（plantedIn=${currentChapter}，切勿遗漏）`];
   for (const f of toPlant) {
-    lines.push(`- [#${f.id}] ${f.content}`);
+    lines.push(`- [#${f.id}] ${foreshadowBadges(f)} ${f.content}${foreshadowMetaNote(f, currentChapter, true)}`);
   }
   return lines.join('\n');
 }
 
 /**
- * 活跃伏笔层：
- * - 「待回收」区 = status === 'planted'（已埋进故事，等待回收）
+ * 活跃伏笔层（债务视角）：
+ * - 「待回收」区 = status === 'planted'（已埋进故事，等待兑现），标注期限与依赖
  * - 「逾期未埋」区 = status === 'pending' 且 plantedIn < currentChapter
  *   （规划埋在本章或更早但状态仍未推进——提醒 agent 补埋或放弃）
+ * - 「密度预算」行 = 每 3 章新埋不超过 2 条；超支报警并给出本章可新埋配额
+ * - 「孤儿章号警告」= plantedIn 超出全书章数（引用了不存在/超范围的章号）
  * status === 'pending' 且 plantedIn >= currentChapter 的伏笔不在此层显示
  * （未来伏笔，避免信息过载），由 buildCurrentChapterForeshadows 在写作时定向提醒。
  */
@@ -679,26 +755,66 @@ async function buildForeshadowLayer(
   if (foreshadows.length === 0) return '';
 
   const planted = foreshadows.filter((f) => f.status === 'planted');
-  const overdue = foreshadows.filter(
+  const overduePending = foreshadows.filter(
     (f) => f.status === 'pending' && f.plantedIn !== null && f.plantedIn < currentChapter,
   );
-  if (planted.length === 0 && overdue.length === 0) return '';
+  const chapterCount = await readNovelChapterCount(projectDir);
+  const orphaned = chapterCount > 0
+    ? foreshadows.filter((f) => f.plantedIn !== null && f.plantedIn > chapterCount)
+    : [];
+  if (planted.length === 0 && overduePending.length === 0 && orphaned.length === 0) return '';
 
   const lines: string[] = ['### 活跃伏笔层'];
   if (planted.length > 0) {
     lines.push('**待回收**（已埋进故事，等待兑现）：');
     for (const f of planted) {
-      const plantedNote = f.plantedIn ? `（埋于第${f.plantedIn}章）` : '';
-      lines.push(`- [#${f.id}] ${f.content}${plantedNote}`);
+      lines.push(`- [#${f.id}] ${foreshadowBadges(f)} ${f.content}${foreshadowMetaNote(f, currentChapter)}`);
     }
   }
-  if (overdue.length > 0) {
+  if (overduePending.length > 0) {
     lines.push('**逾期未埋**（规划章号已过但状态仍为 pending——补埋或标记放弃）：');
-    for (const f of overdue) {
-      lines.push(`- [#${f.id}] ${f.content}（应埋于第${f.plantedIn}章）`);
+    for (const f of overduePending) {
+      lines.push(`- [#${f.id}] ${foreshadowBadges(f)} ${f.content}${foreshadowMetaNote(f, currentChapter, true)}`);
     }
   }
+  if (orphaned.length > 0) {
+    lines.push(`**⚠ 孤儿章号警告**（plantedIn 超出全书 ${chapterCount} 章——章号疑似错误，请修正或标记放弃）：`);
+    for (const f of orphaned) {
+      lines.push(`- [#${f.id}] ${f.content}（plantedIn=${f.plantedIn}）`);
+    }
+  }
+
+  // 密度预算：默认「每 3 章新埋不超过 2 条」，按当前窗口实际新埋量判定是否超支。
+  const budget = computeDensityBudget(foreshadows, currentChapter);
+  lines.push(`**密度预算**（默认规则：每 ${budget.windowSize} 章新埋不超过 ${budget.limit} 条）：`);
+  lines.push(
+    `- 近 ${budget.windowSize} 章（第${budget.windowStart}~${currentChapter}章）新埋 ${budget.plantedInWindow}/${budget.limit} 条，`
+    + `${budget.overBudget ? '⚠已超支，本章暂停新埋' : '未超支'}；`
+    + `本章到期应回收 ${budget.dueForResolve} 条、可新埋 ${budget.canPlantNow} 条`,
+  );
   return lines.join('\n');
+}
+
+/**
+ * 按承诺等级生成本章大纲的框架语。
+ * - committed：写作依据，正文不得偏离；
+ * - tentative：可被正文推翻，推翻时须回写大纲；
+ * - open：本章可自行决定，写完回填大纲与 openQuestions 决策结果。
+ */
+function commitmentFraming(chapter: number, outline: ChapterOutline): string {
+  switch (outline.commitment) {
+    case 'committed':
+      return '> 本章大纲承诺等级：**committed（已定）**——写作依据，必须严格遵循；正文不得偏离其中的场景、冲突与结果。';
+    case 'open': {
+      const questions =
+        outline.openQuestions.length > 0
+          ? outline.openQuestions.map((q) => `> - ${q}`).join('\n')
+          : '> - （卡片未登记 open-questions，写作时可先补充待决策问题）';
+      return `> 本章大纲承诺等级：**open（待决策）**——本章走向可自行决定。写完后回填 outline/chapters/第${chapter}章.md：更新大纲内容、将承诺等级升级为 tentative/committed，并记录下列待决策问题的决策结果：\n${questions}`;
+    }
+    default:
+      return `> 本章大纲承诺等级：**tentative（倾向）**——可被正文推翻；若实际走向偏离大纲，须在章末摘要中记录偏离点，并回写 outline/chapters/第${chapter}章.md 大纲。`;
+  }
 }
 
 /**
@@ -727,15 +843,23 @@ async function buildWritingContextLayers(
   const charStatesLayer = await buildCharacterStatesLayer(projectDir);
   if (charStatesLayer) sections.push(charStatesLayer);
 
-  // 本章大纲块
-  const outlineBlock = await extractChapterOutline(projectDir, currentChapter);
-  if (outlineBlock) {
-    sections.push(`### 本章大纲（第${currentChapter}章）\n${outlineBlock}\n\n> 严格按大纲推进。若需偏离（增删事件、调整节奏），在回复里说明原因。`);
+  // 本章大纲块（按承诺等级注入不同框架语：committed=写作依据 / tentative=可推翻须回写 / open=自行决定须回填）
+  const outline = await extractChapterOutline(projectDir, currentChapter);
+  if (outline.content) {
+    sections.push(`### 本章大纲（第${currentChapter}章）\n${outline.content}\n\n${commitmentFraming(currentChapter, outline)}`);
   }
+
+  // 精排窗口（写作驱动精化：近章须达 beat 级，远粗是设计而非未完成）
+  const state = await getStateTable(projectDir);
+  const refineFrom = state.lastUpdatedChapter + 1;
+  const refineTo = state.lastUpdatedChapter + 10;
+  sections.push(
+    `### 精排窗口\n精排窗口：第 ${refineFrom}..${refineTo} 章应达 beat 级（场景/冲突/结果齐备）；其中仍为 tentative/open 的章节，先精化对应大纲卡片再写。远期章节保持 arc/骨架级是设计意图，无需提前补全。`,
+  );
 
   // 本章出场角色层（渐进式：内容过长时退化为索引模式）
   const knownNames = await readCharacterNames(projectDir);
-  const cast = await identifyCast(projectDir, currentChapter, outlineBlock, knownNames);
+  const cast = await identifyCast(projectDir, currentChapter, outline.content, knownNames);
   const castLayer = await buildCastLayer(projectDir, cast);
   if (castLayer) {
     // 如果角色档案内容过长，改为索引模式——只注入角色名 + 按需读取提示

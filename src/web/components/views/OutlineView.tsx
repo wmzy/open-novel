@@ -7,7 +7,7 @@ import type { MdSection } from './parseSections';
 import { useQuery } from '@tanstack/react-query';
 import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildArcDiagram, buildPovTimeline } from '../../../shared/diagram-builders';
-import { parseOutlineMeta } from '../../../shared/outline-meta';
+import { parseOutlineMeta, parseChapterCard, type CommitmentLevel } from '../../../shared/outline-meta';
 import { DEEPEN_TO_CHAT_EVENT } from '@/shared/deepen';
 import { useNovelDocument } from '@/web/hooks/useNovelDocument';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
@@ -95,6 +95,82 @@ const chapterTitle = css`
   flex: 1;
 `;
 
+/** 承诺等级徽标基础样式（三色区分见下方三个等级样式）。 */
+const commitmentBadge = css`
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+`;
+
+/** committed（已定，beat 级）：绿色。 */
+const commitmentCommitted = css`
+  color: #35a06b;
+  border-color: rgba(53, 160, 107, 0.45);
+  background: rgba(53, 160, 107, 0.12);
+`;
+
+/** tentative（倾向，arc 级）：琥珀色。 */
+const commitmentTentative = css`
+  color: #c98a12;
+  border-color: rgba(201, 138, 18, 0.45);
+  background: rgba(201, 138, 18, 0.12);
+`;
+
+/** open（待决，骨架级）：蓝紫色。 */
+const commitmentOpen = css`
+  color: #7c6cd9;
+  border-color: rgba(124, 108, 217, 0.45);
+  background: rgba(124, 108, 217, 0.14);
+`;
+
+/** 承诺等级 → 徽标文案与样式。 */
+const COMMITMENT_BADGE: Record<CommitmentLevel, { label: string; cls: string }> = {
+  committed: { label: '已定 · beat', cls: commitmentCommitted },
+  tentative: { label: '倾向 · arc', cls: commitmentTentative },
+  open: { label: '待决 · 骨架', cls: commitmentOpen },
+};
+
+/** open 卡片的待决策问题列表容器。 */
+const openQuestionsBox = css`
+  border: 1px dashed var(--haze-color-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  background: var(--haze-color-bg-secondary);
+`;
+
+/** 待决策问题标题。 */
+const openQuestionsTitle = css`
+  color: var(--haze-color-text-secondary);
+  font-size: 0.78rem;
+  margin-bottom: 0.25rem;
+`;
+
+/** 待决策问题列表。 */
+const openQuestionsList = css`
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--haze-color-text);
+  font-size: 0.85rem;
+`;
+
+/** 顶部粒度说明条：近细远粗是设计意图。 */
+const granularityNote = css`
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--haze-color-border);
+  border-left: 3px solid var(--haze-color-primary);
+  border-radius: 8px;
+  background: var(--haze-color-bg-secondary);
+  color: var(--haze-color-text-secondary);
+  font-size: 0.83rem;
+  line-height: 1.5;
+`;
+
 /** 概览/详细标签栏。 */
 const tabBar = css`
   display: flex;
@@ -179,6 +255,9 @@ export default function OutlineView({ projectId }: Props) {
     const num = chapterNumber(s.title);
     const titleField = s.fields.find((f) => f.key === '标题')?.value;
     const isOpen = !collapsed.has(i);
+    // 从卡片引用行元数据解析承诺等级与待决策问题（缺省 tentative）
+    const card = parseChapterCard(s.fullRawMd);
+    const badge = COMMITMENT_BADGE[card.commitment];
     return (
       <div key={i} className={chapterCard}>
         <div
@@ -191,6 +270,7 @@ export default function OutlineView({ projectId }: Props) {
         >
           <span className={chevron}>{isOpen ? '▾' : '▸'}</span>
           {num !== null && <span className={chapterBadge}>第 {num} 章</span>}
+          {num !== null && <span className={cx(commitmentBadge, badge.cls)}>{badge.label}</span>}
           <span className={chapterTitle}>{titleField || s.title}</span>
           <button
             className={cardReviseBtn}
@@ -200,6 +280,14 @@ export default function OutlineView({ projectId }: Props) {
         </div>
         {isOpen && (
           <div className={chapterBody}>
+            {card.commitment === 'open' && card.openQuestions.length > 0 && (
+              <div className={openQuestionsBox}>
+                <div className={openQuestionsTitle}>待决策问题（open）</div>
+                <ul className={openQuestionsList}>
+                  {card.openQuestions.map((q, qi) => <li key={qi}>{q}</li>)}
+                </ul>
+              </div>
+            )}
             <CardContent rawMd={s.fullRawMd} mode={viewMode} projectId={projectId} />
           </div>
         )}
@@ -247,6 +335,9 @@ export default function OutlineView({ projectId }: Props) {
       </div>
       {tab === 'detail' ? (
         <>
+          <div className={granularityNote}>
+            大纲粒度按远近分级：近章 beat 级（已定）｜本幕 arc 级（倾向）｜远期骨架级（待决）。远粗是滚动大纲的设计意图而非未完成——写作推进到该章前会先精化。
+          </div>
           <CollapsibleDiagram chart={arcDiagram} title="三幕节奏" />
           {povChunks?.map((chunk, i) => (
             <CollapsibleDiagram key={i} chart={chunk.chart} title={chunk.title} defaultShow={i === 0} />

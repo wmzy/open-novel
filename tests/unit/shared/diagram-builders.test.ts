@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   buildForeshadowGantt,
+  buildForeshadowDensity,
   buildRelationshipGraph,
   buildArcDiagram,
   buildPovTimeline,
@@ -52,6 +53,77 @@ describe('buildForeshadowGantt', () => {
     const taskLine = gantt.split('\n').find((l) => l.includes(':crit'))!;
     const label = taskLine.split(' :crit')[0].trim();
     expect(label.length).toBeLessThanOrEqual(15);
+  });
+
+  it('设定 resolveDeadline 的条目生成期限里程碑标记', () => {
+    const items: ForeshadowItem[] = [
+      { id: 1, content: '带期限的伏笔', status: 'planted', plantedIn: 2, resolveDeadline: 9 },
+    ];
+    const gantt = buildForeshadowGantt(items)!;
+    // 里程碑任务：fd1 起点为期限章 9、时长 0
+    expect(gantt).toContain(':milestone, fd1, 9, 0');
+    // 无 resolvedIn 时条形止于期限章：start=2 dur=7
+    expect(gantt).toContain('f1, 2, 7');
+  });
+
+  it('晚于期限回收的条目里程碑带 ⚠ 迟到标记', () => {
+    const items: ForeshadowItem[] = [
+      { id: 1, content: '迟到回收', status: 'resolved', plantedIn: 1, resolvedIn: 10, resolveDeadline: 5 },
+    ];
+    const gantt = buildForeshadowGantt(items)!;
+    expect(gantt).toContain(':milestone, fd1, 5, 0');
+    expect(gantt).toContain('⚠');
+  });
+
+  it('dropped 状态进入「已放弃」分区', () => {
+    const items: ForeshadowItem[] = [
+      { id: 1, content: '放弃的伏笔', status: 'dropped', plantedIn: 2 },
+    ];
+    const gantt = buildForeshadowGantt(items)!;
+    expect(gantt).toContain('section 已放弃');
+  });
+
+  it('期限参与最大章计算（无回收章的条形止于期限）', () => {
+    const items: ForeshadowItem[] = [
+      { id: 1, content: '甲', status: 'planted', plantedIn: 2, resolveDeadline: 30 },
+      { id: 2, content: '乙', status: 'pending', plantedIn: 3 }, // 无期限无回收 → 延伸到最大章 30
+    ];
+    const gantt = buildForeshadowGantt(items)!;
+    expect(gantt).toContain('f2, 3, 27'); // 30-3=27
+  });
+});
+
+describe('buildForeshadowDensity', () => {
+  it('空数组 / 全零密度返回 null', () => {
+    expect(buildForeshadowDensity([])).toBeNull();
+    expect(buildForeshadowDensity([
+      { chapter: 1, planted: 0, resolved: 0 },
+      { chapter: 2, planted: 0, resolved: 0 },
+    ])).toBeNull();
+  });
+
+  it('正常密度生成 xychart-beta 双柱源码', () => {
+    const density = [
+      { chapter: 1, planted: 2, resolved: 0 },
+      { chapter: 2, planted: 0, resolved: 1 },
+    ];
+    const chart = buildForeshadowDensity(density)!;
+    expect(chart).toContain('xychart-beta');
+    expect(chart).toContain('x-axis [1, 2]');
+    expect(chart).toContain('bar [2, 0]');
+    expect(chart).toContain('bar [0, 1]');
+  });
+
+  it('超过 30 章时自动分桶聚合，横轴标桶起始章', () => {
+    const density = Array.from({ length: 60 }, (_, i) => ({
+      chapter: i + 1,
+      planted: i % 2, // 每两章 1 条，共 30 条
+      resolved: 0,
+    }));
+    const chart = buildForeshadowDensity(density)!;
+    // 60 章 / 桶宽 2 → 30 个桶，首桶从第 1 章开始，每桶聚合 1 条新埋
+    expect(chart).toContain('x-axis [1, 3, 5');
+    expect(chart).toContain('bar [1, 1, 1');
   });
 });
 
@@ -223,6 +295,49 @@ describe('parseOutlineMeta', () => {
     expect(parseOutlineMeta('nope')).toBeNull();
     expect(parseOutlineMeta(null)).toBeNull();
   });
+
+  it('旧格式（无 commitment/openQuestions）补默认值 tentative / []，不报错', () => {
+    const raw = { actBreaks: [5, 15], chapters: [{ chapter: 1, pov: '甲' }] };
+    const meta = parseOutlineMeta(raw);
+    expect(meta).not.toBeNull();
+    expect(meta!.chapters[0].commitment).toBe('tentative');
+    expect(meta!.chapters[0].openQuestions).toEqual([]);
+  });
+
+  it('新格式保留 commitment 与 openQuestions', () => {
+    const raw = {
+      actBreaks: [5, 15],
+      chapters: [
+        { chapter: 1, pov: '甲', commitment: 'committed', openQuestions: [] },
+        { chapter: 2, pov: '乙', commitment: 'open', openQuestions: ['结局走 A 还是 B'] },
+      ],
+    };
+    const meta = parseOutlineMeta(raw);
+    expect(meta!.chapters[0].commitment).toBe('committed');
+    expect(meta!.chapters[1].commitment).toBe('open');
+    expect(meta!.chapters[1].openQuestions).toEqual(['结局走 A 还是 B']);
+  });
+
+  it('非法 commitment 值回退 tentative，openQuestions 只保留字符串项', () => {
+    const raw = {
+      actBreaks: [5, 15],
+      chapters: [
+        { chapter: 1, pov: '甲', commitment: '已锁定', openQuestions: ['有效问题', 42, ''] },
+      ],
+    };
+    const meta = parseOutlineMeta(raw);
+    expect(meta!.chapters[0].commitment).toBe('tentative');
+    expect(meta!.chapters[0].openQuestions).toEqual(['有效问题']);
+  });
+
+  it('defaultOutlineMeta 生成的骨架含 tentative / [] 默认承诺', () => {
+    const meta = defaultOutlineMeta(3);
+    expect(meta.chapters).toHaveLength(3);
+    for (const ch of meta.chapters) {
+      expect(ch.commitment).toBe('tentative');
+      expect(ch.openQuestions).toEqual([]);
+    }
+  });
 });
 
 describe('defaultOutlineMeta', () => {
@@ -231,7 +346,8 @@ describe('defaultOutlineMeta', () => {
     expect(meta.actBreaks[0]).toBe(5); // round(20*0.25)=5
     expect(meta.actBreaks[1]).toBe(15); // act3Start=16, act2End=15
     expect(meta.chapters.length).toBe(20);
-    expect(meta.chapters[0]).toEqual({ chapter: 1, pov: '' });
+    // 滚动式大纲扩展：默认骨架携带承诺默认值（tentative / 空待决策）
+    expect(meta.chapters[0]).toEqual({ chapter: 1, pov: '', commitment: 'tentative', openQuestions: [] });
   });
 
   it('小章节数每幕至少 1 章', () => {
