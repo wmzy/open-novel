@@ -8,13 +8,19 @@ import { getPglite, isPglite } from './drizzle';
  *
  * PGlite stores all data in a single directory (./data/pglite by default).
  * If the WASM process crashes without graceful shutdown, the WAL may not be
- * flushed, leaving the data directory in an unrecoverable state. These
- * utilities provide two safety nets:
+ * flushed, leaving the data directory in an unrecoverable state — a known
+ * upstream failure class:
+ *   - SIGTERM/shutdown-checkpoint race tears the WAL: electric-sql/pglite#994
+ *   - stale postmaster.pid aborts startup: electric-sql/pglite#884
+ *   - two processes sharing the dir corrupt it: electric-sql/pglite#892
+ * These utilities provide the safety nets:
  *
  * 1. `backupDataDir()` — dumps the entire data directory to a compressed
  *    tarball using PGlite's native `dumpDataDir()` API. This is the most
  *    reliable backup because it coordinates with the running Postgres
- *    instance (ensuring WAL consistency).
+ *    instance (ensuring WAL consistency). drizzle.ts restores the newest
+ *    compatible tarball automatically when startup fails (see
+ *    src/db/recovery.ts).
  *
  * 2. `startPeriodicBackup()` — runs the dump on an interval, so even an
  *    ungraceful crash loses at most `intervalMs` of data.
@@ -47,6 +53,23 @@ export type BackupResult =
 
 /** WAL insert LSN and file of the last successful dump. */
 let lastBackup: { lsn: string; filepath: string } | null = null;
+
+/**
+ * Absolute path of the backup directory (env-overridable via BACKUP_DIR).
+ * Exported for the auto-restore path in drizzle.ts.
+ */
+export function getBackupDir(): string {
+  return BACKUP_DIR;
+}
+
+/**
+ * Forget the change-detection state. Called after the data directory is
+ * restored from a backup: the LSN recorded against the old instance must
+ * never be compared with the restored one (their WAL histories diverge).
+ */
+export function resetBackupChangeTracking(): void {
+  lastBackup = null;
+}
 
 /** In-flight dump — concurrent triggers (periodic + manual) share one run. */
 let inflight: Promise<BackupResult> | null = null;

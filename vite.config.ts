@@ -67,13 +67,19 @@ function honoApiPlugin() {
 
       // Graceful shutdown: flush PGlite WAL.
       // Without this, Ctrl-C kills Vite before PGlite can close, leaving
-      // the data directory corrupted.
+      // the data directory corrupted (upstream #884 / #994). Startup now
+      // self-heals from the newest backup (see src/db/drizzle.ts), but a
+      // clean close is still the first line of defence.
       //
       // IMPORTANT: We do NOT run backupOnShutdown here. dumpDataDir() is a
       // heavy operation that coordinates with the running Postgres WAL,
       // and during Vite teardown the wasm runtime can hang indefinitely.
       // Backup is handled by the periodic timer + a manual API endpoint.
       // The critical action on shutdown is closeDb() which flushes WAL.
+      //
+      // TODO(upstream): the 5s race below exists because PGlite close() can
+      // wedge forever when racing an in-flight statement
+      // (electric-sql/pglite#1084). Remove the timeout once that is fixed.
       //
       // Functions are cached at startup (_closeDb) to avoid dynamic
       // imports during teardown, which race with Vite's module graph.
