@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { backupDataDir, listBackups } from '../../db/backup';
 
 const backupRouter = new Hono();
@@ -6,21 +8,22 @@ const backupRouter = new Hono();
 /**
  * POST /api/backup
  * Trigger an immediate database backup.
- * Returns the backup filename and size.
+ * When nothing changed since the last backup, no new copy is created and
+ * the response reports the existing backup with `skipped: true`.
  */
 backupRouter.post('/', async (c) => {
   try {
-    const filepath = await backupDataDir();
-    if (!filepath) {
+    const result = await backupDataDir();
+    if (result.filepath === null) {
       return c.json({ ok: false, error: 'Backup is only available when using PGlite' }, 400);
     }
-    const filename = filepath.split('/').pop();
-    const stat = await import('node:fs/promises').then((fs) => fs.stat(filepath));
+    const st = await stat(result.filepath);
     return c.json({
       ok: true,
-      filename,
-      size: stat.size,
-      createdAt: stat.mtime.toISOString(),
+      skipped: !result.created,
+      filename: basename(result.filepath),
+      size: st.size,
+      createdAt: st.mtime.toISOString(),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

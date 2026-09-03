@@ -95,6 +95,22 @@ describe('API Integration', () => {
     expect(res.status).toBe(404);
   });
 
+  it('POST /api/backup 无变更时跳过并返回已有备份', async () => {
+    const first = await app.request('/api/backup', { method: 'POST' });
+    expect(first.ok).toBe(true);
+    const firstData = await first.json();
+    expect(firstData.ok).toBe(true);
+    expect(firstData.skipped).toBe(false);
+    expect(firstData.filename).toMatch(/^pglite-.*\.tar\.gz$/);
+
+    const second = await app.request('/api/backup', { method: 'POST' });
+    expect(second.ok).toBe(true);
+    const secondData = await second.json();
+    expect(secondData.ok).toBe(true);
+    expect(secondData.skipped).toBe(true);
+    expect(secondData.filename).toBe(firstData.filename);
+  });
+
   describe('template generation endpoints', () => {
     let projectId: string;
     let novelDir: string;

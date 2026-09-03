@@ -11,4 +11,11 @@ process.env.PGLITE_DATA_DIR = path.join(
   `open-novel-test-${process.pid}-${Date.now()}`,
 );
 
+// Same isolation for backup output: tests must never write into the
+// development ./data/backups directory.
+process.env.BACKUP_DIR = path.join(
+  os.tmpdir(),
+  `open-novel-backup-test-${process.pid}-${Date.now()}`,
+);
+
 import '@testing-library/jest-dom';
