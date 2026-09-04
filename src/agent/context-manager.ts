@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseOutlineMeta, defaultOutlineMeta } from '../shared/outline-meta';
+import { parseChapterNumber } from '../shared/chapter-names';
 
 /**
  * 章节滚动摘要 + 状态追踪表管理。
@@ -675,10 +676,6 @@ export async function splitPlanningPollution(
 
 /** 占位摘要：从正文截取的字数上限。 */
 const PLACEHOLDER_SUMMARY_MAX_CHARS = 200;
-/** 章节正文文件名（英文命名）：chapter-N.md。 */
-const CHAPTER_BODY_NUM_RE = /chapter-(\d+)\.md$/;
-/** 章节正文文件名（中文命名）：第N章.md。 */
-const CHAPTER_BODY_CN_RE = /第(\d+)章\.md$/;
 /** 摘要文件后缀，用于在提取章节号时排除摘要文件。 */
 const SUMMARY_MD_SUFFIX_RE = /\.summary\.md$/;
 
@@ -725,10 +722,9 @@ export async function ensureContextArtifacts(
   for (const p of writtenPaths) {
     if (!p.endsWith('.md')) continue;
     if (SUMMARY_MD_SUFFIX_RE.test(p)) continue; // 跳过摘要文件
-    const basename = path.basename(p);
-    const match = basename.match(CHAPTER_BODY_NUM_RE) || basename.match(CHAPTER_BODY_CN_RE);
-    if (!match) continue;
-    chapterBodies.set(parseInt(match[1], 10), resolveWrittenPath(projectDir, p));
+    const num = parseChapterNumber(path.basename(p));
+    if (num === null) continue;
+    chapterBodies.set(num, resolveWrittenPath(projectDir, p));
   }
 
   // 2. 为缺失摘要的章节生成占位摘要（只补不覆盖）

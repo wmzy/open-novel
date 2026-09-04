@@ -17,6 +17,7 @@ import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
 import { trimHistory, extractScoreTrajectory, estimateTokens } from '../../shared/deepen';
+import { parseChapterNumber } from '../../shared/chapter-names';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, projects, runs as runsTable, chapters } from '../../db/schema';
@@ -46,20 +47,21 @@ const QUALITY_WARN_SCORE = 30;
 const DEFAULT_TARGET_WORDS = 3500; // 项目元数据不可用时的兜底
 const WORD_DEVIATION_THRESHOLD = 0.3; // 从 0.5 收紧到 0.3
 
-/** 章节正文文件名（中英文命名，排除摘要/退化文件）。返回章节号或 null。 */
+/** 章节正文文件名（中英文命名、全角数字、带标题后缀，排除摘要/退化文件）。
+ * 返回章节号或 null。宽松识别防止 agent 用「第3章 风雪夜.md」等近似命名时整章隐形。 */
 function isChapterBody(p: string): number | null {
-  const basename = path.basename(p);
-  if (basename.includes('.summary.') || basename.includes('.degraded.')) return null;
-  const cn = basename.match(/^第(\d+)章\.md$/);
-  if (cn) return parseInt(cn[1], 10);
-  const en = basename.match(/^chapter-(\d+)\.md$/i);
-  if (en) return parseInt(en[1], 10);
-  return null;
+  return parseChapterNumber(path.basename(p));
 }
 
-/** 将 writtenPath 解析为绝对路径。 */
-function resolveWrittenPath(projectDir: string, p: string): string {
-  return path.isAbsolute(p) ? p : path.join(projectDir, p);
+/** 将 writtenPath 解析为绝对路径并校验项目目录越界。
+ * agent 上报的绝对路径不校验会允许质检环节 rename 任意系统路径。
+ * 越界返回 null，调用方跳过并告警。 */
+function resolveWrittenPath(projectDir: string, p: string): string | null {
+  const full = path.isAbsolute(p) ? p : path.join(projectDir, p);
+  const root = path.resolve(projectDir);
+  const resolved = path.resolve(full);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null;
+  return resolved;
 }
 
 /** 项目级串行锁冲突（launchAndTrack 二次检查命中）。 */
@@ -88,10 +90,18 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-/** 统计 sample-feedback.md 中的复盘篇数。每篇复盘含固定四节，以「声口落地」节标题计数。 */
+/**
+ * 统计 sample-feedback.md 中的复盘篇数（结构化计数）。
+ * 每篇复盘固定四节，其中「声口落地」为节标题：
+ * - 结构化格式（当前 prompt 约定）：行首 `- **声口落地**：` 或 `### 声口落地` 等标题行
+ * - 旧格式回退：正文中裸出现的「声口落地」子串（历史项目兼容）
+ */
 async function countSampleFeedback(projectDir: string): Promise<number> {
   try {
     const content = await readFile(path.join(projectDir, '.novel', 'sample-feedback.md'), 'utf-8');
+    // 结构化节标题：行首为列表标记/标题标记 + 可选加粗 + 「声口落地」+ 可选冒号
+    const structured = (content.match(/^\s*(?:[-*]\s+|#{1,4}\s+)?\**声口落地\**\s*[：:]?/gm) || []).length;
+    if (structured > 0) return structured;
     return (content.match(/声口落地/g) || []).length;
   } catch {
     return 0;
@@ -107,27 +117,69 @@ async function recordSampleGateBypass(projectDir: string): Promise<void> {
   } catch { /* 记录失败不阻断写作 */ }
 }
 
-/** 统计磁盘上有有效正文的章节数（CJK 字数 ≥ SAMPLE_GATE_MIN_CJK）。 */
-async function countWrittenChaptersFromDisk(projectDir: string): Promise<number> {
-  const chaptersDir = path.join(projectDir, '.novel', 'chapters');
-  let files: string[];
+/** 样章门已满足时清除旁路警示标记：惩罚可逆，门槛达标即撤销徽标。 */
+async function clearSampleGateBypass(projectDir: string): Promise<void> {
   try {
-    files = await readdir(chaptersDir);
-  } catch {
-    return 0;
-  }
+    const existing = await readNovelConfig(projectDir);
+    if (existing.sampleGateBypassed !== true) return;
+    delete existing.sampleGateBypassed;
+    await writeFile(path.join(projectDir, '.novel', 'config.json'), JSON.stringify(existing, null, 2), 'utf-8');
+  } catch { /* 清除失败不阻断写作 */ }
+}
+
+/** 记录「经历过样章阶段」标记：复盘门以该标记为判据（而非文件是否存在）。 */
+async function recordSampleStageCompleted(projectDir: string): Promise<void> {
+  try {
+    const existing = await readNovelConfig(projectDir);
+    if (existing.sampleStageCompleted === true) return;
+    existing.sampleStageCompleted = true;
+    await writeFile(path.join(projectDir, '.novel', 'config.json'), JSON.stringify(existing, null, 2), 'utf-8');
+  } catch { /* 记录失败不阻断写作 */ }
+}
+
+/** 统计磁盘上有有效正文的章节数（CJK 字数 ≥ SAMPLE_GATE_MIN_CJK）。
+ * 归档章节（.novel/degraded/ 隔离目录）同样计入——质检归档不等于未完成样章，
+ * 归档可一键恢复，不应重新卡住样章门。 */
+async function countWrittenChaptersFromDisk(projectDir: string): Promise<number> {
+  const novelDir = path.join(projectDir, '.novel');
   let count = 0;
-  for (const f of files) {
-    const num = isChapterBody(f);
-    if (num === null) continue;
+  for (const sub of ['chapters', 'degraded']) {
+    const dir = path.join(novelDir, sub);
+    let files: string[];
     try {
-      const content = await readFile(path.join(chaptersDir, f), 'utf-8');
-      const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
-      const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
-      if (cjk >= SAMPLE_GATE_MIN_CJK) count++;
-    } catch { /* skip unreadable */ }
+      files = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const num = isChapterBody(f);
+      if (num === null) continue;
+      try {
+        const content = await readFile(path.join(dir, f), 'utf-8');
+        const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
+        const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+        if (cjk >= SAMPLE_GATE_MIN_CJK) count++;
+      } catch { /* skip unreadable */ }
+    }
   }
   return count;
+}
+
+/** 返回 .novel/degraded/ 中归档章节的章号列表（门禁错误信息中提示可恢复）。 */
+async function listDegradedChapterNumbers(projectDir: string): Promise<number[]> {
+  const dir = path.join(projectDir, '.novel', 'degraded');
+  let files: string[];
+  try {
+    files = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const nums: number[] = [];
+  for (const f of files) {
+    const num = isChapterBody(f);
+    if (num !== null) nums.push(num);
+  }
+  return nums.sort((a, b) => a - b);
 }
 
 /** 检测正文中是否出现章节编号引用（如「第15章」），排除首行标题。 */
@@ -150,6 +202,38 @@ async function archiveDegradedChapter(projectDir: string, fullPath: string): Pro
   }
 }
 
+/** 归档章节后清理残留引用：
+ * 1. 该章摘要文件同步移入 degraded/（否则滚动摘要会注入已归档章节的摘要）；
+ * 2. state.json 的 lastUpdatedChapter 若指向归档章节，回退到剩余章节的最大章号。
+ * 恢复端点把摘要一并移回，引用即可无损恢复。 */
+async function cleanupArchivedChapterRefs(projectDir: string, chapterNum: number): Promise<void> {
+  const novelDir = path.join(projectDir, '.novel');
+  // 1. 摘要随正文归档（旧版英文摘要名同样处理）
+  const degradedDir = path.join(novelDir, 'degraded');
+  for (const name of [`第${chapterNum}章.summary.md`, `chapter-${chapterNum}.summary.md`]) {
+    try {
+      await rename(path.join(novelDir, 'chapters', name), path.join(degradedDir, name));
+    } catch { /* 无摘要文件，忽略 */ }
+  }
+  // 2. state.json 章号回退
+  try {
+    const statePath = path.join(novelDir, 'state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf-8')) as { lastUpdatedChapter?: number };
+    if (typeof state.lastUpdatedChapter === 'number' && state.lastUpdatedChapter === chapterNum) {
+      let maxChapter = 0;
+      try {
+        const files = await readdir(path.join(novelDir, 'chapters'));
+        for (const f of files) {
+          const num = isChapterBody(f);
+          if (num !== null && num > maxChapter) maxChapter = num;
+        }
+      } catch { /* 目录不可读，保持 0 */ }
+      state.lastUpdatedChapter = maxChapter;
+      await writeFile(statePath, JSON.stringify(state, null, 2), 'utf-8');
+    }
+  } catch { /* state.json 缺失/损坏：ensureContextArtifacts 会兜底重建 */ }
+}
+
 /** 写后质检门禁：对新章节正文跑全文退化终检 + detectAiPatterns + 元叙事泄漏检测。
  * canArchive 控制「退化归档为 .novel/degraded/ 隔离文件」是否允许——仅成功且写作产出阶段允许，
  * 失败 run 与 revision/polish/decompose 等改写已有内容只告警不归档，
@@ -166,6 +250,16 @@ async function qualityGateCheck(
     if (chapterNum === null) continue;
 
     const fullPath = resolveWrittenPath(projectDir, p);
+    if (fullPath === null) {
+      // 越界路径：agent 上报了项目目录之外的文件——不读、不归档、不删，仅告警
+      emitEvent(run, 'agent', {
+        type: 'quality-warning',
+        reason: 'path-out-of-scope',
+        path: p,
+        message: 'agent 报告了项目目录之外的文件路径，已忽略（不会归档或删除该文件）',
+      });
+      continue;
+    }
     let content: string;
     try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
 
@@ -180,6 +274,8 @@ async function qualityGateCheck(
           await db.delete(chapters)
             .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
             .catch(() => {});
+          // 清理摘要文件与 state.json 引用，避免滚动摘要注入已归档章节
+          await cleanupArchivedChapterRefs(projectDir, chapterNum).catch(() => {});
         }
         emitEvent(run, 'agent', {
           type: 'quality-rejected',
@@ -212,6 +308,8 @@ async function qualityGateCheck(
           await db.delete(chapters)
             .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
             .catch(() => {});
+          // 清理摘要文件与 state.json 引用，避免滚动摘要注入已归档章节
+          await cleanupArchivedChapterRefs(projectDir, chapterNum).catch(() => {});
         }
         emitEvent(run, 'agent', {
           type: 'quality-rejected',
@@ -261,6 +359,7 @@ async function wordCountCheck(
     if (chapterNum === null) continue;
 
     const fullPath = resolveWrittenPath(projectDir, p);
+    if (fullPath === null) continue;
     let content: string;
     try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
 
@@ -394,9 +493,13 @@ runsRouter.post('/', async (c) => {
   // 会被「/revision 写第2章」旁路。
   // 以磁盘为事实源（import-source 写盘不入库、退化归档改名、回滚都会让 DB 行失真）。
   // - stage==='sample' 放行（样章阶段本身就是写正文）
-  // - 已有 ≥3 章正文的存量项目不受影响
-  // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作），并落盘记录
-  // - 复盘门：sample-feedback.md 存在时需 ≥3 篇复盘（存量项目无此文件不受影响）；
+  // - 已有 ≥3 章正文的存量项目不受影响（质检归档到 degraded/ 的章节同样计入，
+  //   归档可一键恢复，不应重新卡住样章门）
+  // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作），并落盘记录；
+  //   门槛后续达标时自动清除警示标记（惩罚可逆）
+  // - 复盘门：以「经历过样章阶段」标记（config.json sampleStageCompleted）为判据——
+  //   经历过样章阶段就要求 ≥3 篇结构化复盘，文件不存在/不足均拦截；
+  //   存量项目无标记时回退旧判据（sample-feedback.md 存在则要求 ≥3 篇）；
   //   import-source 逆向拆书项目（sourceImported）豁免复盘要求
   const gateStages = new Set(['writing', 'drafting', 'revision', 'polish']);
   if (gateStages.has(stage)) {
@@ -405,27 +508,35 @@ runsRouter.post('/', async (c) => {
     } else {
       const written = await countWrittenChaptersFromDisk(projectDir);
       if (written < SAMPLE_GATE_REQUIRED) {
+        const degradedChapters = await listDegradedChapterNumbers(projectDir);
         return c.json({
           error: 'sample-gate',
-          message: `需先完成样章阶段：writing/drafting/revision/polish 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
+          message: `需先完成样章阶段：writing/drafting/revision/polish 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）${degradedChapters.length > 0 ? `。另有 ${degradedChapters.length} 章样章被质检归档（第 ${degradedChapters.join('、')} 章），可在写作视图「已归档」分组一键恢复后计入` : ''}。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
           completedSamples: written,
+          degradedChapters,
           required: SAMPLE_GATE_REQUIRED,
         }, 409);
       }
-      // 复盘门：sample-feedback.md 已存在但复盘不足 3 篇 → 样章流程未走完
+      // 复盘门：经历过样章阶段的项目必须提交 ≥3 篇结构化复盘
       const novelCfg = await readNovelConfig(projectDir);
-      if (novelCfg.sourceImported !== true && await fileExists(path.join(projectDir, '.novel', 'sample-feedback.md'))) {
-        const feedbackCount = await countSampleFeedback(projectDir);
-        if (feedbackCount < SAMPLE_GATE_REQUIRED) {
-          return c.json({
-            error: 'sample-gate',
-            message: `样章复盘不足：sample-feedback.md 中需至少 ${SAMPLE_GATE_REQUIRED} 篇复盘（当前 ${feedbackCount} 篇）。请回到样章阶段完成复盘并修订大纲后再开始正式写作，或携带 force: true 强制开始。`,
-            completedSamples: written,
-            feedbackCount,
-            required: SAMPLE_GATE_REQUIRED,
-          }, 409);
+      if (novelCfg.sourceImported !== true) {
+        const feedbackFileExists = await fileExists(path.join(projectDir, '.novel', 'sample-feedback.md'));
+        const feedbackRequired = novelCfg.sampleStageCompleted === true || feedbackFileExists;
+        if (feedbackRequired) {
+          const feedbackCount = await countSampleFeedback(projectDir);
+          if (feedbackCount < SAMPLE_GATE_REQUIRED) {
+            return c.json({
+              error: 'sample-gate',
+              message: `样章复盘不足：需在 sample-feedback.md 中完成至少 ${SAMPLE_GATE_REQUIRED} 篇复盘（当前 ${feedbackCount} 篇${feedbackFileExists ? '' : '，复盘文件缺失'}）。请回到样章阶段完成复盘并修订大纲后再开始正式写作，或携带 force: true 强制开始。`,
+              completedSamples: written,
+              feedbackCount,
+              required: SAMPLE_GATE_REQUIRED,
+            }, 409);
+          }
         }
       }
+      // 门槛全部满足：撤销历史 force 旁路警示（惩罚可逆）
+      await clearSampleGateBypass(projectDir);
     }
   }
 
@@ -777,6 +888,16 @@ runsRouter.post('/', async (c) => {
       await ensureContextArtifacts(projectDir, writtenPaths).catch(() => {});
     }
 
+    // 样章阶段完成标记：sample run 成功后磁盘正文 ≥3 章 → 复盘门正式生效。
+    // 复盘门以该标记为判据（而非 sample-feedback.md 是否存在），
+    // 避免「没写复盘文件反而放行」的逻辑倒挂。
+    if (code === 0 && stage === 'sample') {
+      const writtenCount = await countWrittenChaptersFromDisk(projectDir).catch(() => 0);
+      if (writtenCount >= SAMPLE_GATE_REQUIRED) {
+        await recordSampleStageCompleted(projectDir).catch(() => {});
+      }
+    }
+
     // Create git snapshot
     await createSnapshot(projectDir, `Run ${run.id.slice(0, 8)}: ${writtenPaths.size} files modified`).catch(() => {});
 
@@ -949,12 +1070,15 @@ runsRouter.post('/:id/tool-result', async (c) => {
 runsRouter.delete('/:id', async (c) => {
   const run = getRun(c.req.param('id'));
   if (!run) return c.json({ error: 'Not found' }, 404);
+  run.cancelReason = 'user-cancel';
   cancelRun(run);
   return c.json({ ok: true });
 });
 
 // 回答 agent 的 elicitation（ask 选择框）提问。
 // 前端渲染选择框后，用户选完答案 POST 到此 endpoint，唤醒挂起的 elicitation handler。
+// 提问已过期时答案暂存到 run._lateAnswers，返回 late 标记（不报错），
+// retry 端点会把暂存答案并入中断现场回传。
 runsRouter.post('/:id/ask/:askId', async (c) => {
   const run = getRun(c.req.param('id'));
   if (!run) return c.json({ error: 'Not found' }, 404);
@@ -962,8 +1086,14 @@ runsRouter.post('/:id/ask/:askId', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const action = body.action === 'accept' ? 'accept' : 'cancel';
   const content = action === 'accept' ? { value: body.value } : undefined;
-  const ok = resolveAsk(run, askId, { action, content });
-  if (!ok) return c.json({ error: 'Ask not found or expired' }, 404);
+  const result = resolveAsk(run, askId, { action, content });
+  if (result === 'late') {
+    return c.json({
+      ok: true,
+      late: true,
+      message: '该提问已超时，本次任务已结束；答案已暂存，重试任务时会一并使用',
+    });
+  }
   return c.json({ ok: true });
 });
 
@@ -1072,7 +1202,7 @@ runsRouter.post('/:id/retry', async (c) => {
   const runId = c.req.param('id');
   const run = getRun(runId);
   if (!run) return c.json({ error: 'Run not found' }, 404);
-  if (run.status !== 'failed') return c.json({ error: 'Only failed runs can be retried' }, 400);
+  if (run.status !== 'failed' && run.status !== 'canceled') return c.json({ error: 'Only failed/canceled runs can be retried' }, 400);
 
   // Get the conversation and original message
   const [runRecord] = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
@@ -1085,18 +1215,30 @@ runsRouter.post('/:id/retry', async (c) => {
   const userMessage = lastUserMsg.filter((m) => m.role === 'user').pop();
   if (!userMessage) return c.json({ error: 'No user message to retry' }, 400);
 
-  // 异常中断恢复：上一轮 run 状态为 failed，视为异常中断。
+  // 异常中断恢复：上一轮 run 状态为 failed/canceled，视为异常中断。
   // 从 history 中提取上一轮的 user message 和 assistant content，构造 interruptedResume。
   // 前端收到后，在用户"继续"时将该对象回传给 POST /，注入中断现场。
   let interruptedResume: { userMessage: string; assistantContent: string; reason: string } | undefined;
-  if (run.status === 'failed') {
+  if (run.status === 'failed' || run.status === 'canceled') {
     const assistantMsg = lastUserMsg.filter((m) => m.role === 'assistant').pop();
+    const reason =
+      run.cancelReason === 'ask-timeout'
+        ? '提问长时间无人回答，任务自动结束（已写入的文件保留）'
+        : 'agent 进程异常退出（exit code != 0，可能因 timeout、watchdog 或 crash 中断）';
     interruptedResume = {
       userMessage: userMessage.content,
       assistantContent: assistantMsg?.content ?? '',
-      reason: 'agent 进程异常退出（exit code != 0，可能因 timeout、watchdog 或 crash 中断）',
+      reason,
     };
   }
+
+  // 过期提问的暂存答案：用户回答时任务已结束，答案保留在 run 会话中，
+  // 随 retry 响应回传，前端"继续"时可注入中断现场。
+  const lateAnswers = [...run._lateAnswers.entries()].map(([askId, ans]) => ({
+    askId,
+    action: ans.action,
+    content: ans.content,
+  }));
 
   // Return info needed to retry
   return c.json({
@@ -1105,6 +1247,7 @@ runsRouter.post('/:id/retry', async (c) => {
     stage: run.stage,
     message: userMessage.content,
     interruptedResume,
+    lateAnswers,
   });
 });
 

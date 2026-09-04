@@ -41,7 +41,10 @@ export function useReview(projectId: string) {
   const mergeMut = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/projects/${projectId}/review/merge`, { method: 'POST' });
-      if (!res.ok) throw new Error('合并失败');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || '合并失败');
+      }
       return res.json();
     },
     onSuccess: () => {
@@ -62,6 +65,26 @@ export function useReview(projectId: string) {
     },
   });
 
+  /** 逐文件接受/拒绝：单文件操作，成功后刷新审阅列表。 */
+  const fileMut = useMutation({
+    mutationFn: async ({ op, path }: { op: 'accept' | 'reject'; path: string }) => {
+      const res = await fetch(`/api/projects/${projectId}/review/files/${op}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || (op === 'accept' ? '接受失败' : '拒绝失败'));
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['review', projectId] });
+      qc.invalidateQueries({ queryKey: ['snapshots', projectId] });
+    },
+  });
+
   return {
     review: query.data,
     isLoading: query.isLoading,
@@ -70,5 +93,8 @@ export function useReview(projectId: string) {
     discard: discardMut.mutateAsync,
     merging: mergeMut.isPending,
     discarding: discardMut.isPending,
+    acceptFile: (path: string) => fileMut.mutateAsync({ op: 'accept', path }),
+    rejectFile: (path: string) => fileMut.mutateAsync({ op: 'reject', path }),
+    fileBusy: fileMut.isPending,
   };
 }

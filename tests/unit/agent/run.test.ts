@@ -208,7 +208,7 @@ describe('registerAsk / resolveAsk', () => {
     expect(run._pendingAsks.has('ask_1')).toBe(true);
 
     const ok = resolveAsk(run, 'ask_1', { action: 'accept', content: { value: '是的' } });
-    expect(ok).toBe(true);
+    expect(ok).toBe('resolved');
     expect(run._pendingAsks.has('ask_1')).toBe(false);
 
     const response = await promise;
@@ -216,10 +216,18 @@ describe('registerAsk / resolveAsk', () => {
     expect(response.content).toEqual({ value: '是的' });
   });
 
-  it('resolveAsk 对不存在的 askId 返回 false', () => {
+  it('resolveAsk 对不存在的 askId 返回 late 并暂存答案', () => {
+    const run = createRun(META);
+    const ok = resolveAsk(run, 'nope', { action: 'accept', content: { value: 'v' } });
+    expect(ok).toBe('late');
+    expect(run._lateAnswers.has('nope')).toBe(true);
+  });
+
+  it('resolveAsk 对过期 cancel 不暂存', () => {
     const run = createRun(META);
     const ok = resolveAsk(run, 'nope', { action: 'cancel' });
-    expect(ok).toBe(false);
+    expect(ok).toBe('late');
+    expect(run._lateAnswers.size).toBe(0);
   });
 
   it('cancel action 也应唤醒 promise', async () => {

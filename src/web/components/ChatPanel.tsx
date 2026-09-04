@@ -601,12 +601,24 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         const res = await fetch(`/api/runs/${lastAssistantMsg.runId}/retry`, { method: 'POST' });
         if (res.ok) {
           const data = await res.json();
+          // 过期提问的暂存答案：回答时任务已超时，此处补回请求，让 agent 用上用户答案
+          const lateAnswers = (data.lateAnswers ?? []) as Array<{ action: string; content?: { value?: unknown } }>;
+          const lateText = lateAnswers
+            .filter((a) => a.action === 'accept')
+            .map((a) => {
+              const v = a.content?.value;
+              return Array.isArray(v) ? v.join('、') : String(v ?? '');
+            })
+            .filter((s) => s.length > 0)
+            .join('；');
           sendMessage({
             projectId,
             agentId,
             skillId,
             stage: data.stage || effectiveStage,
-            message: data.message,
+            message: lateText
+              ? `${data.message}\n\n[补充：此前提问的答案（回答时任务已结束，现补回）]\n${lateText}`
+              : data.message,
             interruptedResume: data.interruptedResume,
             model: selectedModel !== 'default' ? selectedModel : undefined,
           });

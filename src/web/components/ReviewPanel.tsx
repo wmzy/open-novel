@@ -10,6 +10,12 @@ interface Props {
   merging: boolean;
   discarding: boolean;
   onClose: () => void;
+  /** 逐文件接受（draft → main）。 */
+  onAcceptFile: (path: string) => void;
+  /** 逐文件拒绝（draft 还原为 main 版本）。 */
+  onRejectFile: (path: string) => void;
+  /** 逐文件操作进行中（禁用按钮防止并发 git 操作）。 */
+  fileBusy: boolean;
 }
 
 const overlay = css`
@@ -153,18 +159,51 @@ const confirmText = css`
   color: var(--haze-color-text-secondary, #888);
 `;
 
+const fileActionRow = css`
+  display: flex;
+  gap: 0.375rem;
+  margin-left: 0.5rem;
+  flex-shrink: 0;
+`;
+
+const acceptBtn = css`
+  border: 1px solid var(--haze-color-success, #16a34a);
+  color: var(--haze-color-success, #16a34a);
+  background: transparent;
+  border-radius: 4px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  &:hover { background: color-mix(in srgb, var(--haze-color-success, #16a34a) 12%, transparent); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+`;
+
+const rejectBtn = css`
+  border: 1px solid var(--haze-color-error, #dc2626);
+  color: var(--haze-color-error, #dc2626);
+  background: transparent;
+  border-radius: 4px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  &:hover { background: color-mix(in srgb, var(--haze-color-error, #dc2626) 12%, transparent); }
+  &:disabled { opacity: 0.5; cursor: not-allowed; }
+`;
+
 const statusLabel = (s: string): string =>
   ({ added: '新增', modified: '修改', deleted: '删除' } as Record<string, string>)[s] || s;
 
 /**
  * 审阅面板：列出 draft 相对 main 的待审阅改动，复用 RevisionDiffPanel 展示逐文件 diff。
- * 合并 = ff main 到 draft；丢弃 = reset draft 到 main（需二次确认）。
+ * 合并 = ff main 到 draft；丢弃 = reset draft 到 main（需二次确认）；
+ * 逐文件接受/拒绝 = 只处理单个文件的改动，其余保持待审阅。
  */
-export default function ReviewPanel({ review, onMerge, onDiscard, merging, discarding, onClose }: Props) {
+export default function ReviewPanel({ review, onMerge, onDiscard, merging, discarding, onClose, onAcceptFile, onRejectFile, fileBusy }: Props) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const empty = !review || review.commits.length === 0;
+  const busy = merging || discarding || fileBusy;
 
   return (
     <div className={overlay} onClick={onClose}>
@@ -195,6 +234,24 @@ export default function ReviewPanel({ review, onMerge, onDiscard, merging, disca
                     <span className={addedCount}>+{f.addedLines}</span>
                     <span className={removedCount}>-{f.removedLines}</span>
                   </span>
+                  <span className={fileActionRow} onClick={(e) => e.stopPropagation()}>
+                    <button
+                      className={acceptBtn}
+                      onClick={() => onAcceptFile(f.path)}
+                      disabled={busy}
+                      title="接受此文件的改动（写入 main）"
+                    >
+                      ✓ 接受
+                    </button>
+                    <button
+                      className={rejectBtn}
+                      onClick={() => onRejectFile(f.path)}
+                      disabled={busy}
+                      title="拒绝此文件的改动（还原为 main 版本）"
+                    >
+                      ✗ 拒绝
+                    </button>
+                  </span>
                 </div>
                 {expanded === f.path && (
                   <RevisionDiffPanel
@@ -220,8 +277,8 @@ export default function ReviewPanel({ review, onMerge, onDiscard, merging, disca
               </>
             ) : (
               <>
-                <button className={discardBtn} onClick={() => setConfirmDiscard(true)} disabled={discarding || merging}>丢弃</button>
-                <button className={mergeBtn} onClick={onMerge} disabled={merging || discarding}>
+                <button className={discardBtn} onClick={() => setConfirmDiscard(true)} disabled={busy}>丢弃</button>
+                <button className={mergeBtn} onClick={onMerge} disabled={busy}>
                   {merging ? '合并中...' : '合并'}
                 </button>
               </>

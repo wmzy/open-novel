@@ -10,6 +10,7 @@ import { buildReverseDecomposePrompt } from './reverse-decomposer';
 import { buildEnrichPrompt } from './enricher';
 import { STAGE_OUTPUT_FILES, isCritiqueRound } from '../shared/deepen';
 import { isWritingStage } from '../shared/stages';
+import { parseChapterNumber } from '../shared/chapter-names';
 import {
   parseForeshadowFile,
   computeDensityBudget,
@@ -568,11 +569,8 @@ export async function findNextUnwrittenChapter(projectDir: string): Promise<numb
   }
   const nums = new Set<number>();
   for (const f of files) {
-    const cn = f.match(/^第(\d+)章\.md$/);
-    const en = f.match(/^chapter-(\d+)\.md$/i);
-    const m = cn ?? en;
-    if (!m) continue;
-    const num = parseInt(m[1], 10);
+    const num = parseChapterNumber(f);
+    if (num === null) continue;
     try {
       const content = await fs.readFile(path.join(chaptersDir, f), 'utf-8');
       const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();

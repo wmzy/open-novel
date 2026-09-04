@@ -164,6 +164,18 @@ const chapterActions = css`
   gap: 0.75rem;
 `;
 
+/** 删除章节按钮（危险操作，hover 高亮错误色）。 */
+const deleteBtn = css`
+  background: none;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--haze-color-text-secondary);
+  cursor: pointer;
+  &:hover { background: var(--haze-color-bg-secondary); color: var(--haze-color-error, #dc2626); border-color: var(--haze-color-error, #dc2626); }
+`;
+
 /** 双审阅体系说明（章节状态 vs 顶部审阅按钮）。 */
 const reviewHint = css`
   font-size: 0.7rem;
@@ -244,10 +256,45 @@ export default function WritingView({
     }
   };
 
+  /** 删除章节：确认时提供重编号选项——重编号避免留下章号空洞
+   * （否则「写下一章」会永远回到被删章号）。 */
+  const handleDeleteChapter = async (num: number) => {
+    if (!window.confirm(`删除第 ${num} 章？正文与摘要文件将一并删除（可从快照回滚找回）。`)) return;
+    const renumber = window.confirm(
+      `是否将后续章节自动重编号（章号前移一位）？\n\n确定 = 重编号（大纲卡片与伏笔引用同步平移，推荐）\n取消 = 保留章号空洞（继续写作会回到第 ${num} 章）`,
+    );
+    try {
+      const res = await fetch(`/api/projects/${projectId}/chapters/${num}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ renumber }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        toast.error((data as { error?: string }).error || '删除失败');
+        return;
+      }
+      const data = await res.json();
+      if (data.holeAt != null) {
+        toast.warning(`已删除第 ${num} 章。章号保留空洞：「写下一章」会回到第 ${num} 章，可用「修订」重写或让 AI 跳过指定章号。`);
+      } else if (data.renumbered > 0) {
+        toast.success(`已删除第 ${num} 章，后续 ${data.renumbered} 章已重编号。`);
+      } else {
+        toast.success(`已删除第 ${num} 章。`);
+      }
+      queryClient.invalidateQueries({ queryKey: ['chapters', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['degraded-chapters', projectId] });
+    } catch {
+      toast.error('删除失败');
+    }
+  };
+
   const list = chapters || [];
   const totalWords = list.reduce((sum, c) => sum + (c.wordCount || 0), 0);
-  /** 有正文的章节数。与服务端 countWrittenChaptersFromDisk 口径一致（CJK ≥ 100）。 */
-  const writtenCount = list.filter((c) => (c.wordCount || 0) >= 100).length;
+  /** 有正文的章节数。与服务端 countWrittenChaptersFromDisk 口径一致
+   * （CJK ≥ 100；质检归档章节同样计入——归档不重新卡样章门）。 */
+  const writtenCount =
+    list.filter((c) => (c.wordCount || 0) >= 100).length + (degradedChapters?.length ?? 0);
   /** 样章门：writing 阶段但正文不足 3 章时，提示先去写样章。 */
   const gateBlocked = variant === 'writing' && project?.currentStage === 'writing' && writtenCount < 3;
 
@@ -331,6 +378,16 @@ export default function WritingView({
                 }}
               >
                 ✎ 修订
+              </button>
+              <button
+                className={deleteBtn}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleDeleteChapter(c.number);
+                }}
+                title="删除本章（可选自动重编号后续章节）"
+              >
+                ✕
               </button>
             </span>
           </div>

@@ -165,6 +165,16 @@ describe('restoreSnapshot', () => {
     const { stdout: safetyHash } = await execFileAsync('git', ['log', '--format=%H', '--grep=pre-rollback safety', '-1'], { cwd: dir });
     expect(safetyHash.trim()).toBeTruthy();
   });
+
+  it('#7: 回滚结果落为显式 commit（工作区干净，不再被 discard 静默吞掉）', async () => {
+    const ok = await restoreSnapshot(dir, baseHash);
+    expect(ok).toBe(true);
+    const { stdout } = await execFileAsync('git', ['log', '--format=%s', '-1'], { cwd: dir });
+    expect(stdout).toContain('rollback to');
+    // 工作区干净：回滚已提交
+    const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: dir });
+    expect(statusOut.trim()).toBe('');
+  });
 });
 
 describe('mergeDraft', () => {

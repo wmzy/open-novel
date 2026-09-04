@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { toast } from 'sonner';
 import type { AgentEvent, AgentCommand, AskPrompt } from '@/agent/types';
 import { consumeSseStream, MAX_RECONNECT_ATTEMPTS } from './sse-stream';
 
@@ -630,11 +631,18 @@ export function useRun(conversationId?: string) {
           }),
         });
       } else {
-        await fetch(`/api/runs/${runId}/ask/${ask.askId}`, {
+        const res = await fetch(`/api/runs/${runId}/ask/${ask.askId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, value }),
         });
+        // 提问已超时：答案被服务端暂存（重试时可使用），提示用户而非静默丢弃
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if ((data as { late?: boolean }).late) {
+            toast.warning((data as { message?: string }).message || '该提问已超时，答案已暂存，重试任务时会一并使用');
+          }
+        }
       }
     } catch { /* ignore */ }
   }, [pendingAsk]);

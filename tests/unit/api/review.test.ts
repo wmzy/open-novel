@@ -82,6 +82,66 @@ describe('review API', () => {
     await expect(fs.access(path.join(tempDir, 'ch1.md'))).rejects.toThrow();
   });
 
+  it('POST /review/files/accept 接受单个文件（main 拿到 draft 内容）', async () => {
+    await fs.writeFile(path.join(tempDir, 'ch1.md'), '第一章\n');
+    await fs.writeFile(path.join(tempDir, 'ch2.md'), '第二章\n');
+    await createSnapshot(tempDir, '写两章');
+
+    const res = await apiApp.request(`/api/projects/${projectId}/review/files/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'ch1.md' }),
+    });
+    expect(res.status).toBe(200);
+
+    // main 上已有 ch1 内容，draft 与 main 在 ch1 上无差异 → review 只剩 ch2
+    const { stdout } = await execFileAsync('git', ['show', 'main:ch1.md'], { cwd: tempDir });
+    expect(stdout).toBe('第一章\n');
+    const after = await apiApp.request(`/api/projects/${projectId}/review`);
+    const afterData = await after.json();
+    const paths = (afterData.files as Array<{ path: string }>).map((f) => f.path);
+    expect(paths).toContain('ch2.md');
+    expect(paths).not.toContain('ch1.md');
+  });
+
+  it('POST /review/files/reject 拒绝单个文件（draft 还原为 main 版本）', async () => {
+    await fs.writeFile(path.join(tempDir, 'ch1.md'), '第一章\n');
+    await createSnapshot(tempDir, '写第一章');
+
+    const res = await apiApp.request(`/api/projects/${projectId}/review/files/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'ch1.md' }),
+    });
+    expect(res.status).toBe(200);
+
+    // draft 的 ch1 已还原为 main 版本（main 中不存在 → 文件被移除）→ review 为空
+    await expect(fs.access(path.join(tempDir, 'ch1.md'))).rejects.toThrow();
+    const after = await apiApp.request(`/api/projects/${projectId}/review`);
+    const afterData = await after.json();
+    expect(afterData.files.length).toBe(0);
+  });
+
+  it('POST /review/files/accept 路径穿越被拒绝', async () => {
+    const res = await apiApp.request(`/api/projects/${projectId}/review/files/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '../../etc/passwd' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toContain('非法文件路径');
+  });
+
+  it('POST /review/files/accept 缺 path 返回 400', async () => {
+    const res = await apiApp.request(`/api/projects/${projectId}/review/files/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('项目不存在时返回 404', async () => {
     const res = await apiApp.request('/api/projects/nonexistent/review');
     expect(res.status).toBe(404);

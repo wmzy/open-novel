@@ -32,6 +32,12 @@ export interface RunSession {
   _pendingAsks: Map<string, (response: { action: 'accept' | 'cancel'; content?: unknown }) => void>;
   /** 每个挂起提问的自动取消定时器（askTimeoutMs 到期自动 cancel，防死锁）。 */
   _askTimers: Map<string, NodeJS.Timeout>;
+  /** 每个挂起提问的超时提醒定时器（到期前 1 小时推送提醒）。 */
+  _askReminderTimers: Map<string, NodeJS.Timeout>;
+  /** 提问过期后用户仍提交的答案（ask 已不存在时保留，重试端点回传）。 */
+  _lateAnswers: Map<string, { action: 'accept' | 'cancel'; content?: unknown }>;
+  /** run 被取消的原因（ask-timeout / user-cancel），供 retry 端点生成准确的中断说明。 */
+  cancelReason: string | null;
   /**
    * ask 挂起/清空时的超时计时钩子（由 runs.ts launchAndTrack 注入）。
    * 提问挂起期间 run 处于暂停等待状态（agent 子进程阻塞在 stdin/协议上），
@@ -65,6 +71,9 @@ export function createRun(meta: { projectId: string; agentId: string; skillId: s
     _finishResolve: finishResolve!,
     _pendingAsks: new Map(),
     _askTimers: new Map(),
+    _askReminderTimers: new Map(),
+    _lateAnswers: new Map(),
+    cancelReason: null,
   };
   runs.set(id, run);
   return run;
@@ -125,6 +134,8 @@ export function finishRun(run: RunSession, status: RunStatus) {
   // 清理挂起提问的自动取消定时器：run 已终结，不再需要死锁保护
   for (const t of run._askTimers.values()) clearTimeout(t);
   run._askTimers.clear();
+  for (const t of run._askReminderTimers.values()) clearTimeout(t);
+  run._askReminderTimers.clear();
   emitEvent(run, 'end', { status });
   run._finishResolve();
   // RunStream 落盘由调用方在 close() 时完成；这里只清理 RunSession 注册。
@@ -155,13 +166,27 @@ export function registerAsk(
     run._pendingAsks.set(askId, resolve);
     // 提问挂起：暂停 run 超时计时，等待用户回答（用户思考时间不计入超时）
     if (first) run._pauseTimeout?.();
+    // 超时提醒：到期前 1 小时推送一次，避免用户无预警丢 run（仅当时限 > 1h）
+    const remindLead = 60 * 60 * 1000;
+    if (config.agent.askTimeoutMs > remindLead) {
+      const remindTimer = setTimeout(() => {
+        if (!run._pendingAsks.has(askId)) return;
+        emitEvent(run, 'agent', {
+          type: 'status',
+          label: `提问已挂起 ${Math.round((config.agent.askTimeoutMs - remindLead) / 3600000)} 小时，剩余约 1 小时将自动结束本次任务（请尽快回答，或稍后通过重试继续）`,
+        });
+      }, config.agent.askTimeoutMs - remindLead);
+      remindTimer.unref?.();
+      run._askReminderTimers.set(askId, remindTimer);
+    }
     // 提问最长挂起：askTimeoutMs 到期自动取消，防止无人回答的提问让 run 与
     // 项目串行锁被永久占用（用户关闭浏览器后无人回传答案的死锁场景）。
     const timer = setTimeout(() => {
       if (!run._pendingAsks.has(askId)) return;
+      run.cancelReason = 'ask-timeout';
       emitEvent(run, 'agent', {
         type: 'status',
-        label: `提问超过 ${Math.round(config.agent.askTimeoutMs / 3600000)} 小时无人回答，已自动取消本次任务（不再继续执行）`,
+        label: `提问超过 ${Math.round(config.agent.askTimeoutMs / 3600000)} 小时无人回答，已自动结束本次任务（已写入的文件保留，可重试继续）`,
       });
       // 先唤醒挂起的 elicitation handler（否则 acp-bridge await 永远不返回），
       // 再取消整个 run：无人回答的提问不应让 agent 带着缺省的答案继续写盘。
@@ -176,25 +201,38 @@ export function registerAsk(
 /**
  * 前端回传用户答案时调用，唤醒挂起的 elicitation handler。
  *
- * 返回 true 表示找到并唤醒了对应的 ask，false 表示 ask 已过期/不存在。
+ * 返回 'resolved' 表示找到并唤醒了对应的 ask；'late' 表示 ask 已过期/不存在，
+ * 答案已暂存到 run._lateAnswers（retry 端点可回传）；'absent' 表示 run 已不存在。
  */
 export function resolveAsk(
   run: RunSession,
   askId: string,
   response: { action: 'accept' | 'cancel'; content?: unknown },
-): boolean {
+): 'resolved' | 'late' | 'absent' {
   const resolver = run._pendingAsks.get(askId);
-  if (!resolver) return false;
+  if (!resolver) {
+    // 提问已过期：答案仍有价值（用户刚打完字），暂存供重试端点回传。
+    // 过期提问的 accept 才有保留意义；cancel 无需保留。
+    if (response.action === 'accept') {
+      run._lateAnswers.set(askId, response);
+    }
+    return 'late';
+  }
   run._pendingAsks.delete(askId);
   const timer = run._askTimers.get(askId);
   if (timer) {
     clearTimeout(timer);
     run._askTimers.delete(askId);
   }
+  const remindTimer = run._askReminderTimers.get(askId);
+  if (remindTimer) {
+    clearTimeout(remindTimer);
+    run._askReminderTimers.delete(askId);
+  }
   resolver(response);
   // 全部提问已答：恢复超时计时
   if (run._pendingAsks.size === 0) run._resumeTimeout?.();
-  return true;
+  return 'resolved';
 }
 
 /**

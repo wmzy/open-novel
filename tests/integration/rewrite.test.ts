@@ -85,6 +85,75 @@ describe('Rewrite & Chapter content API', () => {
     expect(raw.foreshadows[1].plantedIn).toBeNull(); // 无关条目不受影响
   });
 
+  it('#9: DELETE /chapters/:num 重编号后续章节（正文/摘要/DB/伏笔引用同步平移）', async () => {
+    // 建立第 3、4 章 + 大纲卡片 + 伏笔引用
+    for (const n of [3, 4]) {
+      const r = await app.request(`/api/projects/${projectId}/chapters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: n, title: `第${n}章` }),
+      });
+      expect(r.ok).toBe(true);
+      await fs.writeFile(
+        path.join(projectDir, '.novel', 'chapters', `第${n}章.md`),
+        `# 第${n}章\n\n正文内容。`,
+        'utf-8',
+      );
+      await fs.writeFile(
+        path.join(projectDir, '.novel', 'chapters', `第${n}章.summary.md`),
+        `第${n}章摘要`,
+        'utf-8',
+      );
+    }
+    await fs.mkdir(path.join(projectDir, '.novel', 'outline', 'chapters'), { recursive: true });
+    await fs.writeFile(path.join(projectDir, '.novel', 'outline', 'chapters', '第4章.md'), '大纲第4章', 'utf-8');
+    await fs.writeFile(
+      path.join(projectDir, '.novel', 'foreshadow.json'),
+      JSON.stringify({
+        foreshadows: [
+          { id: 9, content: '伏笔A', type: 'chekhov', status: 'planted', plantedIn: 4, resolveDeadline: 8, resolvedIn: null, dependsOn: [], weight: 'major' },
+        ],
+      }),
+      'utf-8',
+    );
+
+    // 删除第 3 章 + 重编号
+    const delRes = await app.request(`/api/projects/${projectId}/chapters/3`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ renumber: true }),
+    });
+    expect(delRes.ok).toBe(true);
+    const data = await delRes.json();
+    expect(data.renumbered).toBe(1);
+    expect(data.holeAt).toBeNull();
+
+    // 磁盘：第4章 → 第3章
+    await expect(fs.access(path.join(projectDir, '.novel', 'chapters', '第3章.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectDir, '.novel', 'chapters', '第4章.md'))).rejects.toThrow();
+    // 摘要与大纲卡片同步平移
+    await expect(fs.access(path.join(projectDir, '.novel', 'chapters', '第3章.summary.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectDir, '.novel', 'outline', 'chapters', '第3章.md'))).resolves.toBeUndefined();
+    // 伏笔引用前移：plantedIn 4 → 3，resolveDeadline 8 → 7
+    const raw = JSON.parse(await fs.readFile(path.join(projectDir, '.novel', 'foreshadow.json'), 'utf-8'));
+    expect(raw.foreshadows[0].plantedIn).toBe(3);
+    expect(raw.foreshadows[0].resolveDeadline).toBe(7);
+  });
+
+  it('#9: DELETE 不重编号时返回 holeAt 提示', async () => {
+    const r = await app.request(`/api/projects/${projectId}/chapters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number: 5, title: '第五章' }),
+    });
+    expect(r.ok).toBe(true);
+    const delRes = await app.request(`/api/projects/${projectId}/chapters/5`, { method: 'DELETE' });
+    expect(delRes.ok).toBe(true);
+    const data = await delRes.json();
+    expect(data.holeAt).toBe(5);
+    expect(data.renumbered).toBe(0);
+  });
+
   it('PATCH /chapters/:num 写入正文后落盘，GET 能读回', async () => {
     const content = '# 第 1 章\n\n夜色如墨，山道上只有一盏孤灯。';
     const patchRes = await app.request(`/api/projects/${projectId}/chapters/1`, {

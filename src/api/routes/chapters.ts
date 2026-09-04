@@ -6,6 +6,7 @@ import { db } from '../../db/drizzle';
 import { chapters } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { resolveNovelDir } from '../../shared/project-dir';
+import { parseChapterNumber } from '../../shared/chapter-names';
 import { getActiveRunForProject } from '../../agent/run';
 import { parseForeshadowFile, serializeForeshadows } from '../../shared/foreshadow';
 import { createSnapshot } from '../../agent/snapshot';
@@ -97,12 +98,10 @@ export async function resyncChaptersFromDisk(projectId: string, opts?: { force?:
   const diskChapters = new Map<number, { title: string; wordCount: number }>();
   for (const file of files) {
     if (!file.endsWith('.md') || file.endsWith('.summary.md')) continue;
-    // 只认正文章节命名；.degraded.md 归档文件不算正文
-    const cn = file.match(/^第(\d+)章\.md$/);
-    const en = file.match(/^chapter-(\d+)\.md$/i);
-    const match = cn ?? en;
-    if (!match) continue;
-    const num = parseInt(match[1], 10);
+    // 只认正文章节命名；.degraded.md 归档文件不算正文。
+    // 共享解析器：宽松识别「第3章 风雪夜.md」/全角数字等近似命名，避免整章隐形。
+    const num = parseChapterNumber(file);
+    if (num === null) continue;
     try {
       const content = await fs.readFile(path.join(chaptersDir, file), 'utf-8');
       const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
@@ -267,6 +266,18 @@ chaptersRouter.post('/degraded/:num/restore', async (c) => {
   } catch {
     return c.json({ error: '恢复失败' }, 500);
   }
+  // 归档时摘要随正文移入 degraded/，恢复时一并移回（不存在则忽略）
+  const degradedDir = path.join(novelDir, 'degraded');
+  for (const name of [`第${num}章.summary.md`, `chapter-${num}.summary.md`]) {
+    try {
+      await fs.access(path.join(novelDir, 'chapters', name));
+      // 目标已存在：不覆盖（新写的章节可能有新摘要）
+    } catch {
+      try {
+        await fs.rename(path.join(degradedDir, name), path.join(novelDir, 'chapters', name));
+      } catch { /* 无摘要归档，忽略 */ }
+    }
+  }
   await resyncChaptersFromDisk(projectId, { force: true }).catch(() => {});
   return c.json({ ok: true, number: num });
 });
@@ -400,6 +411,16 @@ chaptersRouter.delete('/:num', async (c) => {
   const num = parseInt(c.req.param('num'), 10);
   if (Number.isNaN(num)) return c.json({ error: 'Invalid chapter number' }, 400);
 
+  // 重编号选项：body { renumber: true }（或 ?renumber=true）——删除后把后续章节
+  // 章号前移一位（正文/摘要/大纲卡片/DB/伏笔引用），避免留下永久空洞导致
+  // 「写下一章」永远重写被删章节。默认 false：保留章号，响应返回 holeAt 提示。
+  const qs = c.req.query('renumber');
+  let renumber = qs === 'true';
+  try {
+    const body = await c.req.json();
+    if (body && typeof body.renumber === 'boolean') renumber = body.renumber;
+  } catch { /* 无 body，仅用 query */ }
+
   // 项目串行锁：run 写入途中删文件会让 agent 后续写入与上下文状态错位
   const activeRun = getActiveRunForProject(projectId);
   if (activeRun) {
@@ -418,8 +439,11 @@ chaptersRouter.delete('/:num', async (c) => {
 
   // 磁盘是事实来源：删除 DB 行后同步删除正文与摘要文件，避免 resync 把它加回来
   let foreshadowRefsCleared = 0;
+  let foreshadowRefsShifted = 0;
   let summaryRemoved = false;
   let outlineCardExists = false;
+  let renumbered = 0;
+  let renumberError = false;
   try {
     const novelDir = await resolveNovelDir(projectId);
     await fs.unlink(chapterFilePath(novelDir, num)).catch(() => {});
@@ -436,22 +460,94 @@ chaptersRouter.delete('/:num', async (c) => {
       outlineCardExists = true;
     } catch { /* 无大纲卡片 */ }
 
-    // 清理伏笔悬挂引用：plantedIn/resolvedIn 指向被删章节的置空，避免债务视图误报
+    // 清理伏笔悬挂引用：plantedIn/resolvedIn 指向被删章节的置空，避免债务视图误报；
+    // renumber 时 > num 的引用前移一位。
     try {
       const fp = path.join(novelDir, 'foreshadow.json');
       const raw = await fs.readFile(fp, 'utf-8');
       const parsed = parseForeshadowFile(raw);
+      const shift = (v: number | null): number | null => {
+        if (v === null) return null;
+        if (v === num) return null;
+        if (renumber && v > num) return v - 1;
+        return v;
+      };
       for (const f of parsed.foreshadows) {
-        if (f.plantedIn === num) { f.plantedIn = null; foreshadowRefsCleared++; }
-        if (f.resolvedIn === num) { f.resolvedIn = null; foreshadowRefsCleared++; }
+        const oldP = f.plantedIn;
+        const oldR = f.resolvedIn;
+        f.plantedIn = shift(f.plantedIn);
+        f.resolvedIn = shift(f.resolvedIn);
+        // resolveDeadline 是严格章号，同样随重编号平移
+        if (renumber && f.resolveDeadline !== null && f.resolveDeadline !== num && f.resolveDeadline > num) {
+          f.resolveDeadline -= 1;
+        }
+        if (oldP === num) foreshadowRefsCleared++;
+        if (oldR === num) foreshadowRefsCleared++;
+        if (oldP !== f.plantedIn || oldR !== f.resolvedIn) foreshadowRefsShifted++;
       }
-      if (foreshadowRefsCleared > 0) {
+      if (foreshadowRefsCleared > 0 || foreshadowRefsShifted > 0) {
         await fs.writeFile(fp, serializeForeshadows(parsed.foreshadows), 'utf-8');
       }
     } catch { /* 无伏笔文件或解析失败，忽略 */ }
+
+    // 重编号：后续章节（正文/摘要/大纲卡片）章号前移一位，降序处理避免覆盖冲突
+    if (renumber) {
+      const chaptersDir = path.join(novelDir, 'chapters');
+      let entries: string[];
+      try {
+        entries = await fs.readdir(chaptersDir);
+      } catch {
+        entries = [];
+      }
+      const nums = entries
+        .map((f) => parseChapterNumber(f))
+        .filter((n): n is number => n !== null && n > num)
+        .sort((a, b) => b - a);
+      for (const m of nums) {
+        try {
+          await fs.rename(
+            path.join(chaptersDir, `第${m}章.md`),
+            path.join(chaptersDir, `第${m - 1}章.md`),
+          );
+          await fs.rename(
+            path.join(chaptersDir, `第${m}章.summary.md`),
+            path.join(chaptersDir, `第${m - 1}章.summary.md`),
+          ).catch(() => {});
+          await fs.rename(
+            path.join(chaptersDir, `chapter-${m}.md`),
+            path.join(chaptersDir, `chapter-${m - 1}.md`),
+          ).catch(() => {});
+          // 大纲卡片同步前移，保持卡牌与正文章号一致
+          await fs.rename(
+            path.join(novelDir, 'outline', 'chapters', `第${m}章.md`),
+            path.join(novelDir, 'outline', 'chapters', `第${m - 1}章.md`),
+          ).catch(() => {});
+          // DB 行前移（降序处理避免唯一索引冲突）
+          await db.update(chapters)
+            .set({ number: m - 1, updatedAt: new Date() })
+            .where(and(eq(chapters.projectId, projectId), eq(chapters.number, m)))
+            .catch(() => {});
+          renumbered++;
+        } catch {
+          renumberError = true;
+        }
+      }
+    }
   } catch { /* 目录不可用时忽略 */ }
 
-  return c.json({ ok: true, foreshadowRefsCleared, summaryRemoved, outlineCardExists });
+  // 章节已删除：删除后的「写下一章」目标 = 最小未写章号（renumber 后自动补位）
+  const holeAt = renumber ? null : num;
+
+  return c.json({
+    ok: true,
+    foreshadowRefsCleared,
+    foreshadowRefsShifted,
+    summaryRemoved,
+    outlineCardExists,
+    renumbered,
+    renumberError,
+    holeAt,
+  });
 });
 
 export default chaptersRouter;

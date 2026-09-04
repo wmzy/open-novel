@@ -202,6 +202,138 @@ describe('POST /api/runs — 样章门禁（sample-gate）', () => {
     expect(mockCompose).toHaveBeenCalled();
   });
 
+  it('#4: force 旁路后补满门槛，警示标记自动清除', async () => {
+    await seedChapters(1);
+    // 第一次：force 旁路（未达标），落盘 sampleGateBypassed
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第2章', force: true }),
+    });
+    const cfgAfterForce = JSON.parse(
+      await fs.readFile(path.join(tempDir, '.novel', 'config.json'), 'utf-8'),
+    );
+    expect(cfgAfterForce.sampleGateBypassed).toBe(true);
+    // 第二次：磁盘已补满 3 章（force 前 seed 的 1 章 + 再写 2 章），不 force → 标记清除
+    await fs.writeFile(
+      path.join(tempDir, '.novel', 'chapters', '第2章.md'),
+      `# 第2章\n\n${'正文'.repeat(100)}`,
+      'utf-8',
+    );
+    await fs.writeFile(
+      path.join(tempDir, '.novel', 'chapters', '第3章.md'),
+      `# 第3章\n\n${'正文'.repeat(100)}`,
+      'utf-8',
+    );
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第4章' }),
+    });
+    const cfgCleared = JSON.parse(
+      await fs.readFile(path.join(tempDir, '.novel', 'config.json'), 'utf-8'),
+    );
+    expect(cfgCleared.sampleGateBypassed).toBeUndefined();
+  });
+
+  it('#5: sampleStageCompleted 标记存在但复盘文件缺失 → 409（不再因文件缺失放行）', async () => {
+    await seedChapters(3);
+    await fs.writeFile(
+      path.join(tempDir, '.novel', 'config.json'),
+      JSON.stringify({ sampleStageCompleted: true }),
+      'utf-8',
+    );
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第4章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toBe('sample-gate');
+    expect(data.feedbackCount).toBe(0);
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('#5: sampleStageCompleted + 3 篇结构化复盘 → 放行', async () => {
+    await seedChapters(3);
+    await fs.writeFile(
+      path.join(tempDir, '.novel', 'config.json'),
+      JSON.stringify({ sampleStageCompleted: true }),
+      'utf-8',
+    );
+    const feedback = [
+      '- **声口落地**：口吻立得住',
+      '- **声口落地**：口吻可区分',
+      '- **声口落地**：口吻一致',
+    ].join('\n');
+    await fs.writeFile(path.join(tempDir, '.novel', 'sample-feedback.md'), feedback, 'utf-8');
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第4章' }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+
+  it('#5: 无结构化节标题的旧格式复盘按子串计数（2 次 → 409）', async () => {
+    await seedChapters(3);
+    await fs.writeFile(
+      path.join(tempDir, '.novel', 'config.json'),
+      JSON.stringify({ sampleStageCompleted: true }),
+      'utf-8',
+    );
+    // 无「- **声口落地**：」结构化标题 → 回退旧格式子串计数 = 2 < 3 → 409
+    const feedback = '第一段提到声口落地。\n第二段也提到声口落地。\n（只有两篇复盘）';
+    await fs.writeFile(path.join(tempDir, '.novel', 'sample-feedback.md'), feedback, 'utf-8');
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第4章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.feedbackCount).toBe(2);
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('#6: 质检归档到 degraded/ 的章节计入样章门计数（归档不重新卡门）', async () => {
+    // chapters/ 2 章 + degraded/ 1 章 = 3 章 → 放行
+    await seedChapters(2);
+    await fs.mkdir(path.join(tempDir, '.novel', 'degraded'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, '.novel', 'degraded', '第3章.md'),
+      `# 第3章\n\n${'这是被质检归档的样章正文。'.repeat(30)}`,
+      'utf-8',
+    );
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第4章' }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+
+  it('#6: 正文不足且存在归档章节时，409 响应携带 degradedChapters 提示', async () => {
+    await seedChapters(1);
+    await fs.mkdir(path.join(tempDir, '.novel', 'degraded'), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, '.novel', 'degraded', '第2章.md'),
+      `# 第2章\n\n${'这是被质检归档的样章正文。'.repeat(30)}`,
+      'utf-8',
+    );
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writing', message: '写第3章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.completedSamples).toBe(2);
+    expect(data.degradedChapters).toEqual([2]);
+    expect(data.message).toContain('已归档');
+  });
+
   it('stage=sample 放行（样章阶段本身写正文，0 章也可开始）', async () => {
     await apiApp.request('/api/runs', {
       method: 'POST',

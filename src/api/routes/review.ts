@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { resolveProjectDir } from '../../shared/project-dir';
-import { reviewDiff, mergeDraft, discardDraft } from '../../agent/snapshot';
+import { reviewDiff, mergeDraft, discardDraft, acceptFileInReview, rejectFileInReview } from '../../agent/snapshot';
 import { getActiveRunForProject } from '../../agent/run';
 
 const reviewRouter = new Hono();
@@ -51,12 +51,58 @@ reviewRouter.post('/merge', async (c) => {
   }
   try {
     const result = await mergeDraft(projectDir);
-    if (!result.success) return c.json({ error: '合并失败' }, 500);
+    if (!result.success) {
+      return c.json({ error: result.error ?? '合并失败' }, 409);
+    }
     return c.json(result);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return c.json({ error: msg }, 500);
   }
+});
+
+/**
+ * POST /files/accept — 接受单个文件的改动（draft → main）。
+ * body: { path: string }，path 为 reviewDiff 返回的仓库相对路径。
+ */
+reviewRouter.post('/files/accept', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  const locked = rejectIfRunActive(c, projectId);
+  if (locked) return locked;
+  let projectDir: string;
+  try {
+    projectDir = await resolveProjectDir(projectId);
+  } catch {
+    return c.json({ error: '项目不存在' }, 404);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const filePath = typeof body?.path === 'string' ? body.path : '';
+  if (!filePath) return c.json({ error: 'path is required' }, 400);
+  const result = await acceptFileInReview(projectDir, filePath);
+  if (!result.success) return c.json({ error: result.error ?? '接受失败' }, 409);
+  return c.json(result);
+});
+
+/**
+ * POST /files/reject — 拒绝单个文件的改动（draft 中还原为 main 版本）。
+ * body: { path: string }。
+ */
+reviewRouter.post('/files/reject', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  const locked = rejectIfRunActive(c, projectId);
+  if (locked) return locked;
+  let projectDir: string;
+  try {
+    projectDir = await resolveProjectDir(projectId);
+  } catch {
+    return c.json({ error: '项目不存在' }, 404);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const filePath = typeof body?.path === 'string' ? body.path : '';
+  if (!filePath) return c.json({ error: 'path is required' }, 400);
+  const result = await rejectFileInReview(projectDir, filePath);
+  if (!result.success) return c.json({ error: result.error ?? '拒绝失败' }, 409);
+  return c.json(result);
 });
 
 /** POST /discard — 丢弃整批未审阅 */

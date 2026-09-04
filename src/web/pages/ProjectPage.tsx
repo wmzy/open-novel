@@ -550,9 +550,34 @@ export default function ProjectPage() {
     }
   }, [handleViewChange, id, project?.currentStage, queryClient]);
 
-  const handleExport = (format: 'markdown' | 'text', scope?: 'full' | 'manuscript') => {
+  const handleExport = async (format: 'markdown' | 'text', scope?: 'full' | 'manuscript') => {
     const qs = format === 'markdown' && scope === 'manuscript' ? '?scope=manuscript' : '';
-    window.open(`/api/projects/${id}/export/${format}${qs}`, '_blank');
+    try {
+      const res = await fetch(`/api/projects/${id}/export/${format}${qs}`);
+      if (!res.ok) {
+        toast.error('导出失败');
+        return;
+      }
+      // 缺章/归档警告：响应头 x-export-warnings，读取后提示（window.open 无法读头，改用 fetch + 手动下载）
+      const warnHeader = res.headers.get('x-export-warnings');
+      if (warnHeader) {
+        toast.warning(decodeURIComponent(warnHeader));
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const disposition = res.headers.get('content-disposition') ?? '';
+      const m = disposition.match(/filename="?([^";]+)"?/);
+      a.href = url;
+      a.download = m ? decodeURIComponent(m[1]) : `${project?.title ?? 'novel'}.${format === 'markdown' ? 'md' : 'txt'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success('导出完成');
+    } catch {
+      toast.error('导出失败');
+    }
   };
 
   const handleSync = async () => {
@@ -690,22 +715,39 @@ export default function ProjectPage() {
             try {
               await review.merge();
               toast.success('已合并到 main');
-            } catch {
-              toast.error('合并失败');
+              setShowReview(false);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : '合并失败');
             }
-            setShowReview(false);
           }}
           onDiscard={async () => {
             try {
               await review.discard();
               toast.success('已丢弃未审阅改动');
+              setShowReview(false);
             } catch {
               toast.error('丢弃失败');
             }
-            setShowReview(false);
           }}
           merging={review.merging}
           discarding={review.discarding}
+          fileBusy={review.fileBusy}
+          onAcceptFile={async (path) => {
+            try {
+              await review.acceptFile(path);
+              toast.success(`已接受 ${path}`);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : '接受失败');
+            }
+          }}
+          onRejectFile={async (path) => {
+            try {
+              await review.rejectFile(path);
+              toast.success(`已拒绝 ${path}`);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : '拒绝失败');
+            }
+          }}
           onClose={() => setShowReview(false)}
         />
       )}

@@ -400,6 +400,31 @@ export function parseDeadlineInput(input: string): number | null {
 }
 
 /**
+ * 从被折叠的 assistant 消息中提炼决策要点（本地规则，无额外 API 调用）。
+ * 折叠会丢失 assistant 的中间决策记录；把含决策动词的要点行保留到占位行，
+ * 让 agent 仍能看到「采用了什么设定/拒绝了什么方案」的脉络。
+ * 只取短行（≤120 字）、去重、限量，避免占位行膨胀。
+ */
+function extractDecisionPoints(messages: Array<{ role: string; content: string }>): string[] {
+  const KEYWORDS = /决定|采用|选定|改为|调整为|拒绝|放弃|保留|删除|确认|偏好|风格|修改为|移除了/;
+  const points: string[] = [];
+  const seen = new Set<string>();
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue;
+    for (const rawLine of m.content.split('\n')) {
+      const line = rawLine.trim().replace(/^[-*#>\s]+/, '').trim();
+      if (!line || line.length > 120) continue;
+      if (!KEYWORDS.test(line)) continue;
+      if (seen.has(line)) continue;
+      seen.add(line);
+      points.push(line);
+      if (points.length >= 5) return points;
+    }
+  }
+  return points;
+}
+
+/**
  * 对话历史滑动窗口：保留首轮 + 最近 N 条，中间折叠为摘要占位。
  *
  * 设计依据：Deepen 循环中，文件（.novel/*.md、deepen-critique.md、deepen-log.md）
@@ -410,7 +435,7 @@ export function parseDeadlineInput(input: string): number | null {
  * - 首批消息（首轮 Critique 的完整上下文）——定义本轮深化的核心问题域
  * - 全部中间 user 消息——用户指令是创作决策的持久输入，折叠后无法恢复
  * - 最近 keepTail 条消息——当前工作记忆（上几轮的反馈与修改）
- * - 仅中间 assistant 消息折叠为单行摘要占位（中间无 assistant 消息时不折叠）
+ * - 中间 assistant 消息折叠为占位行，并附提炼的决策要点（extractDecisionPoints）
  *
  * @param history 完整对话历史（role + content）
  * @param keepHead 保留头部消息数（默认 2 = 首轮 user + assistant）
@@ -433,12 +458,19 @@ export function trimHistory(
 
   // 保全部 user 消息：用户指令不可折叠，否则第 7 条长指令会无声消失。
   const keptUserMessages = middle.filter((m) => m.role === 'user');
-  const omittedCount = middle.length - keptUserMessages.length;
+  const omittedAssistant = middle.filter((m) => m.role === 'assistant');
+  const omittedCount = omittedAssistant.length;
   if (omittedCount === 0) {
     return history; // 中间只有 user 消息，无需折叠
   }
 
-  const base = `[对话历史已折叠：省略了 ${omittedCount} 条中间 assistant 消息（用户指令已全部保留）。完整改进记录见 .novel/deepen-log.md，最新审查见 .novel/deepen-critique.md]`;
+  // 提炼被折叠 assistant 消息的决策要点（有则附入占位行）
+  const decisionPoints = extractDecisionPoints(omittedAssistant);
+  const pointsText = decisionPoints.length > 0
+    ? `\n折叠消息中的决策要点：\n${decisionPoints.map((p) => `- ${p}`).join('\n')}`
+    : '';
+
+  const base = `[对话历史已折叠：省略了 ${omittedCount} 条中间 assistant 消息（用户指令已全部保留）。${pointsText}\n完整改进记录见 .novel/deepen-log.md，最新审查见 .novel/deepen-critique.md]`;
   const placeholder = contextNote ? `${base}\n${contextNote}` : base;
 
   return [

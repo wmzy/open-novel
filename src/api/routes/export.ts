@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { projects, chapters } from '../../db/schema';
 import { resolveNovelDir } from '../../shared/project-dir';
+import { parseChapterNumber } from '../../shared/chapter-names';
 import { resyncChaptersFromDisk } from './chapters';
 
 /** 读取拆分文档目录（index.md + 全部卡片），合并为单个 markdown。目录不存在返回 null。 */
@@ -32,14 +33,48 @@ async function readSplitDoc(docDir: string): Promise<string | null> {
   return parts.join('\n\n');
 }
 
-/** 读取章节正文，优先中文命名（agent 写），fallback 英文命名（旧约定）。 */
+/** 读取章节正文：扫描目录按章号匹配（兼容中文/英文/带标题后缀/全角数字命名）。 */
 async function readChapterFile(novelDir: string, num: number): Promise<string> {
-  for (const name of [`第${num}章.md`, `chapter-${num}.md`]) {
-    try {
-      return await fs.readFile(path.join(novelDir, 'chapters', name), 'utf-8');
-    } catch { /* try next */ }
+  const dir = path.join(novelDir, 'chapters');
+  let entries: string[];
+  try {
+    entries = await fs.readdir(dir);
+  } catch {
+    throw new Error(`chapter ${num} not found`);
+  }
+  for (const name of entries) {
+    if (parseChapterNumber(name) === num) {
+      return fs.readFile(path.join(dir, name), 'utf-8');
+    }
   }
   throw new Error(`chapter ${num} not found`);
+}
+
+/** 收集质检归档章节号（导出时排除并返回警告）。 */
+async function collectDegradedChapterNumbers(novelDir: string): Promise<number[]> {
+  const nums: number[] = [];
+  const dirs: Array<[string, (name: string) => number | null]> = [
+    [path.join(novelDir, 'degraded'), (name) => parseChapterNumber(name)],
+    [path.join(novelDir, 'chapters'), (name) => {
+      // 旧版就地命名：第N章.degraded.md / chapter-N.degraded.md
+      if (!name.includes('.degraded.')) return null;
+      const base = name.replace('.degraded.md', '.md');
+      return parseChapterNumber(base);
+    }],
+  ];
+  for (const [dir, parse] of dirs) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const num = parse(name);
+      if (num !== null) nums.push(num);
+    }
+  }
+  return [...new Set(nums)].sort((a, b) => a - b);
 }
 
 const exportRouter = new Hono();
@@ -113,17 +148,28 @@ exportRouter.get('/markdown', async (c) => {
   }
 
   // Chapters
+  const missingChapters: number[] = [];
   for (const ch of allChapters) {
     try {
       const content = await readChapterFile(projectDir, ch.number);
       parts.push(`## 第 ${ch.number} 章 ${ch.title || ''}\n\n${content}\n`);
-    } catch { /* skip empty chapters */ }
+    } catch { missingChapters.push(ch.number); }
   }
+
+  // 质检归档章节不参与导出；收集后经响应头告知（前端 toast 提示缺章）。
+  const degradedChapters = await collectDegradedChapterNumbers(projectDir).catch(() => [] as number[]);
+  const warnings = [
+    ...missingChapters.map((n) => `第${n}章文件缺失，已跳过`),
+    ...degradedChapters.map((n) => `第${n}章处于质检归档状态，未包含在导出中（可在写作视图恢复）`),
+  ];
 
   const markdown = parts.join('\n');
 
   c.header('Content-Type', 'text/markdown; charset=utf-8');
   c.header('Content-Disposition', `attachment; filename="${encodeURIComponent(project.title)}.md"`);
+  if (warnings.length > 0) {
+    c.header('x-export-warnings', encodeURIComponent(warnings.join('；')));
+  }
   return c.body(markdown);
 });
 
@@ -152,6 +198,7 @@ exportRouter.get('/text', async (c) => {
   parts.push('='.repeat(project.title.length * 2));
   parts.push('');
 
+  const missingChapters: number[] = [];
   for (const ch of allChapters) {
     try {
       const content = await readChapterFile(projectDir, ch.number);
@@ -159,13 +206,22 @@ exportRouter.get('/text', async (c) => {
       parts.push('-'.repeat(20));
       parts.push(content);
       parts.push('');
-    } catch { /* skip */ }
+    } catch { missingChapters.push(ch.number); }
   }
+
+  const degradedChapters = await collectDegradedChapterNumbers(projectDir).catch(() => [] as number[]);
+  const warnings = [
+    ...missingChapters.map((n) => `第${n}章文件缺失，已跳过`),
+    ...degradedChapters.map((n) => `第${n}章处于质检归档状态，未包含在导出中（可在写作视图恢复）`),
+  ];
 
   const text = parts.join('\n');
 
   c.header('Content-Type', 'text/plain; charset=utf-8');
   c.header('Content-Disposition', `attachment; filename="${encodeURIComponent(project.title)}.txt"`);
+  if (warnings.length > 0) {
+    c.header('x-export-warnings', encodeURIComponent(warnings.join('；')));
+  }
   return c.body(text);
 });
 

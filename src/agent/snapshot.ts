@@ -189,6 +189,19 @@ export async function restoreSnapshot(projectDir: string, commitHash: string): P
       await rm(full, { recursive: true, force: true }).catch(() => {});
     }
 
+    // 5. 回滚结果落为显式 commit（当前分支，通常为 draft）。
+    //    之前只改工作区不动 HEAD：审阅面板的 review checkpoint 会把它裹进
+    //    「待审阅批次」，而「丢弃」会 reset 掉整个工作区——回滚被静默吞没。
+    //    显式提交让回滚成为版本链上的可见节点，merge/discard 语义随之正确。
+    try {
+      await execFileAsync('git', ['add', '-A'], { cwd: projectDir });
+      try {
+        await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd: projectDir });
+      } catch {
+        await execFileAsync('git', ['commit', '-m', `[auto] rollback to ${commitHash.slice(0, 8)}`], { cwd: projectDir });
+      }
+    } catch { /* 回滚内容已在工作区，提交失败不阻断回滚本身 */ }
+
     return true;
   } catch {
     return false;
@@ -209,6 +222,8 @@ export async function hasRemote(projectDir: string): Promise<boolean> {
 
 /**
  * Sync with remote: pull then push.
+ * 双分支模型下同步推 draft + main：远程 main 只靠 merge 后同步会长期滞后，
+ * 用户在其他机器 clone main 会拿到陈旧内容。draft 推送失败则整体失败。
  */
 export async function gitSync(projectDir: string): Promise<{ success: boolean; message: string }> {
   try {
@@ -232,7 +247,17 @@ export async function gitSync(projectDir: string): Promise<{ success: boolean; m
       return { success: false, message: `推送失败: ${message}` };
     }
 
-    return { success: true, message: '同步完成' };
+    // 额外推 main（镜像分支）：失败不影响整体成功，但如实报告。
+    let mainMessage = '';
+    try {
+      await execFileAsync('git', ['push', 'origin', 'main'], { cwd: projectDir, timeout: 30000 });
+      mainMessage = 'main 已同步';
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      mainMessage = `main 同步失败: ${message}`;
+    }
+
+    return { success: true, message: `同步完成（draft 已推送；${mainMessage}）` };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return { success: false, message: `同步失败: ${message}` };
@@ -411,18 +436,22 @@ export interface MergeResult {
   success: boolean;
   fastForward: boolean;
   hash: string | null;
+  /** 失败原因（如 non-fast-forward），供前端展示可操作的错误信息。 */
+  error?: string;
 }
 
 /**
  * 审阅合并：ff main 到 draft，然后 checkout 回 draft。
  * main 只读镜像约束下必然 fast-forward。
+ * 非 ff（历史分叉）不再静默普通合并——普通合并会在 main 上产生 merge commit，
+ * 破坏镜像不变量且用户无感知；改为显式失败，由用户选择逐文件接受/丢弃。
  */
 export async function mergeDraft(projectDir: string): Promise<MergeResult> {
   try {
     await ensureDraftBranch(projectDir);
     await execFileAsync('git', ['checkout', 'main'], { cwd: projectDir });
 
-    // 检测能否 ff
+    // 检测能否 ff（工作区未提交改动已由 reviewDiff checkpoint，理论干净）
     let fastForward = true;
     try {
       await execFileAsync('git', ['merge', '--ff-only', 'draft'], { cwd: projectDir });
@@ -430,18 +459,24 @@ export async function mergeDraft(projectDir: string): Promise<MergeResult> {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Not possible to fast-forward') || msg.includes('non-fast-forward')) {
         fastForward = false;
-        // 兜底：尝试普通合并（破坏 ff 约束，但避免卡死）
-        await execFileAsync('git', ['merge', '--no-edit', 'draft'], { cwd: projectDir });
-      } else {
-        throw err;
+        // 放弃合并状态，回到 draft，返回可操作错误
+        await execFileAsync('git', ['merge', '--abort'], { cwd: projectDir }).catch(() => {});
+        await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir }).catch(() => {});
+        return {
+          success: false,
+          fastForward: false,
+          hash: null,
+          error: 'main 与 draft 历史分叉，无法安全合并。请先逐文件接受/丢弃待审阅改动，或先执行「丢弃」重置 draft 到 main。',
+        };
       }
+      throw err;
     }
 
     const { stdout } = await execFileAsync('git', ['rev-parse', 'main'], { cwd: projectDir });
     await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
     return { success: true, fastForward, hash: stdout.trim() };
   } catch {
-    return { success: false, fastForward: false, hash: null };
+    return { success: false, fastForward: false, hash: null, error: '合并失败：git 操作异常，请稍后重试' };
   }
 }
 
@@ -467,5 +502,86 @@ export async function discardDraft(projectDir: string): Promise<DiscardResult> {
     return { success: true };
   } catch {
     return { success: false };
+  }
+}
+
+export interface FileReviewResult {
+  success: boolean;
+  error?: string;
+}
+
+/** 校验待审阅文件路径：必须是仓库内相对路径（防路径穿越）。 */
+function isSafeRepoPath(filePath: string): boolean {
+  if (!filePath || filePath.startsWith('/') || filePath.includes('..')) return false;
+  return !path.isAbsolute(filePath);
+}
+
+/**
+ * 接受单个文件的改动：把 draft 中该文件的最新内容写入 main 并提交，
+ * 然后回到 draft。该文件不再出现在待审阅列表（net diff 归零），
+ * 其余文件保持待审阅状态。
+ */
+export async function acceptFileInReview(projectDir: string, filePath: string): Promise<FileReviewResult> {
+  if (!isSafeRepoPath(filePath)) return { success: false, error: '非法文件路径' };
+  try {
+    await ensureDraftBranch(projectDir);
+    await execFileAsync('git', ['checkout', 'main'], { cwd: projectDir });
+    // 判断 draft 中该文件是否存在：不存在 = draft 删除了该文件，接受=从 main 同步删除
+    let existsInDraft = false;
+    try {
+      await execFileAsync('git', ['cat-file', '-e', `draft:${filePath}`], { cwd: projectDir });
+      existsInDraft = true;
+    } catch { /* 不存在于 draft */ }
+    if (existsInDraft) {
+      try {
+        await execFileAsync('git', ['checkout', 'draft', '--', filePath], { cwd: projectDir });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir }).catch(() => {});
+        return { success: false, error: `文件不存在于 draft：${msg}` };
+      }
+    } else {
+      // 接受删除：从 main 移除该文件
+      await execFileAsync('git', ['rm', '--ignore-unmatch', '--', filePath], { cwd: projectDir }).catch(() => {});
+    }
+    try {
+      await execFileAsync('git', ['commit', '-m', `[review] accept ${filePath}`, '--', filePath], { cwd: projectDir });
+    } catch {
+      // 无变化（内容相同）也视为接受成功：无需提交
+    }
+    await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
+    return { success: true };
+  } catch (err: unknown) {
+    await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir }).catch(() => {});
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * 拒绝单个文件的改动：把该文件在 draft 上的内容还原为 main 版本并提交，
+ * 其余文件保持待审阅状态。
+ */
+export async function rejectFileInReview(projectDir: string, filePath: string): Promise<FileReviewResult> {
+  if (!isSafeRepoPath(filePath)) return { success: false, error: '非法文件路径' };
+  try {
+    await ensureDraftBranch(projectDir);
+    // 确保在 draft 分支
+    await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
+    try {
+      await execFileAsync('git', ['checkout', 'main', '--', filePath], { cwd: projectDir });
+    } catch {
+      // main 中没有该文件 → 从 draft 删除（新增文件的拒绝语义）
+      await execFileAsync('git', ['rm', '--ignore-unmatch', '--', filePath], { cwd: projectDir }).catch(() => {});
+    }
+    try {
+      await execFileAsync('git', ['commit', '-m', `[review] reject ${filePath}`, '--', filePath], { cwd: projectDir });
+    } catch {
+      // 无变化也视为拒绝成功
+    }
+    return { success: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: msg };
   }
 }
