@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { css } from '@linaria/core';
+import { toast } from 'sonner';
 import { reviseBtn } from './viewShared';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
 
@@ -49,6 +50,36 @@ const chapterList = css`
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+`;
+
+/** 质检归档章节分组标题。 */
+const degradedHeading = css`
+  font-size: 0.85rem;
+  color: var(--haze-color-text-secondary);
+  margin: 1rem 0 0.5rem;
+`;
+
+/** 归档章节行：灰色降级样式，仅提供恢复操作。 */
+const degradedCard = css`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.625rem 1rem;
+  background: var(--haze-color-bg-secondary);
+  border: 1px dashed var(--haze-color-border);
+  border-radius: 8px;
+  opacity: 0.75;
+`;
+
+const restoreBtn = css`
+  background: none;
+  border: 1px solid var(--haze-color-border);
+  border-radius: 4px;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  color: var(--haze-color-text-secondary);
+  cursor: pointer;
+  &:hover { background: var(--haze-color-bg); color: var(--haze-color-primary); border-color: var(--haze-color-primary); }
 `;
 
 const chapterCard = css`
@@ -133,6 +164,13 @@ const chapterActions = css`
   gap: 0.75rem;
 `;
 
+/** 双审阅体系说明（章节状态 vs 顶部审阅按钮）。 */
+const reviewHint = css`
+  font-size: 0.7rem;
+  color: var(--haze-color-text-secondary);
+  margin: 0.35rem 0 0;
+`;
+
 export default function WritingView({
   projectId,
   onViewChange,
@@ -177,6 +215,35 @@ export default function WritingView({
     },
   });
 
+  /** 质检归档章节（退化/AI 味超标被移出正文的章节），仅展示 + 一键恢复。 */
+  const { data: degradedChapters, refetch: refetchDegraded } = useQuery<Array<{ number: number; title: string; wordCount: number }>>({
+    queryKey: ['degraded-chapters', projectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/chapters/degraded`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.chapters ?? [];
+    },
+  });
+
+  const handleRestoreDegraded = async (num: number) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/chapters/degraded/${num}/restore`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        toast.success(`第 ${num} 章已恢复到正文`);
+        refetchDegraded();
+        queryClient.invalidateQueries({ queryKey: ['chapters', projectId] });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error((data as { error?: string }).error || '恢复失败');
+      }
+    } catch {
+      toast.error('恢复失败');
+    }
+  };
+
   const list = chapters || [];
   const totalWords = list.reduce((sum, c) => sum + (c.wordCount || 0), 0);
   /** 有正文的章节数。与服务端 countWrittenChaptersFromDisk 口径一致（CJK ≥ 100）。 */
@@ -189,6 +256,7 @@ export default function WritingView({
       <div>
         <strong>样章阶段（{writtenCount}/3 章）</strong>
         <p>写第 1 章 + 自选 2 个关键章节共 3 章样章，检验声口与节奏；每章复盘回灌大纲后进入正式写作。</p>
+        <p className={reviewHint}>章节状态 = 单章成熟度；顶部「审阅」= 批次合并 draft 到 main（发布门）。两者独立，请分别操作。</p>
       </div>
     </div>
   ) : gateBlocked ? (
@@ -268,6 +336,30 @@ export default function WritingView({
           </div>
         ))}
       </div>
+      {degradedChapters && degradedChapters.length > 0 && (
+        <div>
+          <div className={degradedHeading}>已归档（质检退回，点击恢复移回正文）</div>
+          <div className={chapterList}>
+            {degradedChapters.map((d) => (
+              <div key={d.number} className={degradedCard}>
+                <span className={chapterTitle}>
+                  第 {d.number} 章 {d.title}
+                </span>
+                <span className={chapterActions}>
+                  <span className={chapterMeta}>{(d.wordCount || 0).toLocaleString()} 字</span>
+                  <button
+                    className={restoreBtn}
+                    onClick={() => void handleRestoreDegraded(d.number)}
+                    title="移回正文章节列表"
+                  >
+                    ↺ 恢复
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {revision.renameDialog}
     </div>
   );

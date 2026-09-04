@@ -212,7 +212,7 @@ export default function ReviewPanel({ review, onMerge, onDiscard, merging, disca
           <div className={footer}>
             {confirmDiscard ? (
               <>
-                <span className={confirmText}>将丢弃所有未审阅改动（含未提交手改），确认？</span>
+                <span className={confirmText}>将丢弃所有未审阅改动（含未提交手改）。丢弃前会自动保存当前状态，可从 git reflog 找回。确认？</span>
                 <button className={discardBtn} onClick={() => { onDiscard(); setConfirmDiscard(false); }} disabled={discarding}>
                   {discarding ? '丢弃中...' : '确认丢弃'}
                 </button>

@@ -10,6 +10,7 @@ import {
   type OutlineChapter,
 } from '../../shared/diagram-builders';
 import { getAgentDef } from '../../agent/registry';
+import { getActiveRunForProject } from '../../agent/run';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
 import type { StreamEvent, RuntimeAgentDef } from '../../agent/types';
@@ -163,7 +164,17 @@ export function replaceChapterInteraction(
  * 修正单章「角色交互」字段，写回单章卡片文件。
  */
 timelineRouter.put('/:id/interaction', async (c) => {
-  const novelDir = await resolveNovelDir(c.req.param('id'));
+  const projectId = c.req.param('id');
+  // 项目串行锁：写大纲卡片与 agent 写盘互斥
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再编辑角色交互',
+      runId: activeRun.id,
+    }, 409);
+  }
+  const novelDir = await resolveNovelDir(projectId);
   const body = await c.req.json();
   const { chapter, interaction } = body as { chapter: number; interaction: string };
   if (typeof chapter !== 'number' || typeof interaction !== 'string') {
@@ -192,7 +203,17 @@ timelineRouter.put('/:id/interaction', async (c) => {
  * 逐章调 AI，每章完成后推送进度；已有字段的跳过。仅支持 CLI agent（非 ACP）。
  */
 timelineRouter.post('/:id/fill', async (c) => {
-  const novelDir = await resolveNovelDir(c.req.param('id'));
+  const projectId = c.req.param('id');
+  // 项目串行锁：批量预填逐章写大纲卡片（含多轮 AI 子进程），与 run 写盘互斥
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再批量预填',
+      runId: activeRun.id,
+    }, 409);
+  }
+  const novelDir = await resolveNovelDir(projectId);
   const agentId = c.req.query('agent') || 'claude';
   const def = getAgentDef(agentId);
   if (!def) return c.json({ error: `agent not found: ${agentId}` }, 400);

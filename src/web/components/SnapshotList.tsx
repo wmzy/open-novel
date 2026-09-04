@@ -143,7 +143,11 @@ export default function SnapshotList({ projectId }: Props) {
   }, [projectId]);
 
   const handleRollback = async (hash: string) => {
-    if (!confirm('回滚到此快照？当前未提交的更改将丢失。')) return;
+    if (!confirm(
+      '回滚到此快照？\n\n' +
+      '该快照之后产生的所有文件（含后续章节、设定）将被删除。\n' +
+      '回滚前会自动保存当前状态，可从快照列表找回。',
+    )) return;
 
     setRollingBack(hash);
     try {

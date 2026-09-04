@@ -45,7 +45,9 @@ async function readChapterFile(novelDir: string, num: number): Promise<string> {
 const exportRouter = new Hono();
 
 // Export all chapters as a single markdown file
+// 支持 ?scope=manuscript（仅正文，适合投稿/发布）；默认 full（含概念/世界观/角色设定）
 exportRouter.get('/markdown', async (c) => {
+  const scope = c.req.query('scope') === 'manuscript' ? 'manuscript' : 'full';
   const projectId = c.req.param('projectId')!;
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) return c.json({ error: 'Project not found' }, 404);
@@ -73,39 +75,42 @@ exportRouter.get('/markdown', async (c) => {
   if (project.theme) parts.push(`**主题**: ${project.theme}\n`);
   parts.push(`---\n`);
 
-  // Concept（拆分格式：合并目录，fallback 旧单文件）
-  {
-    const conceptDir = path.join(projectDir, 'concept');
-    const merged = await readSplitDoc(conceptDir);
-    if (merged) {
-      parts.push(`## 故事概念\n\n${merged}\n\n---\n`);
-    } else {
-      try {
-        const concept = await fs.readFile(path.join(projectDir, 'concept.md'), 'utf-8');
-        parts.push(`## 故事概念\n\n${concept}\n\n---\n`);
-      } catch { /* skip */ }
+  // manuscript 仅导出正文；full 额外附带概念/世界观/角色设定（默认，向后兼容）
+  if (scope === 'full') {
+    // Concept（拆分格式：合并目录，fallback 旧单文件）
+    {
+      const conceptDir = path.join(projectDir, 'concept');
+      const merged = await readSplitDoc(conceptDir);
+      if (merged) {
+        parts.push(`## 故事概念\n\n${merged}\n\n---\n`);
+      } else {
+        try {
+          const concept = await fs.readFile(path.join(projectDir, 'concept.md'), 'utf-8');
+          parts.push(`## 故事概念\n\n${concept}\n\n---\n`);
+        } catch { /* skip */ }
+      }
     }
-  }
 
-  // World building（拆分格式：合并目录，fallback 旧单文件）
-  {
-    const worldDir = path.join(projectDir, 'world');
-    const merged = await readSplitDoc(worldDir);
-    if (merged) {
-      parts.push(`## 世界观\n\n${merged}\n\n---\n`);
-    } else {
-      try {
-        const world = await fs.readFile(path.join(projectDir, 'world-building.md'), 'utf-8');
-        parts.push(`## 世界观\n\n${world}\n\n---\n`);
-      } catch { /* skip */ }
+    // World building（拆分格式：合并目录，fallback 旧单文件）
+    {
+      const worldDir = path.join(projectDir, 'world');
+      const merged = await readSplitDoc(worldDir);
+      if (merged) {
+        parts.push(`## 世界观\n\n${merged}\n\n---\n`);
+      } else {
+        try {
+          const world = await fs.readFile(path.join(projectDir, 'world-building.md'), 'utf-8');
+          parts.push(`## 世界观\n\n${world}\n\n---\n`);
+        } catch { /* skip */ }
+      }
     }
-  }
 
-  // Characters
-  try {
-    const chars = await fs.readFile(path.join(projectDir, 'characters', 'profiles.md'), 'utf-8');
-    parts.push(`## 角色\n\n${chars}\n\n---\n`);
-  } catch { /* skip */ }
+    // Characters
+    try {
+      const chars = await fs.readFile(path.join(projectDir, 'characters', 'profiles.md'), 'utf-8');
+      parts.push(`## 角色\n\n${chars}\n\n---\n`);
+    } catch { /* skip */ }
+  }
 
   // Chapters
   for (const ch of allChapters) {

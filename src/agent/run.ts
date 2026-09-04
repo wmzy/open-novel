@@ -161,9 +161,12 @@ export function registerAsk(
       if (!run._pendingAsks.has(askId)) return;
       emitEvent(run, 'agent', {
         type: 'status',
-        label: `提问超过 ${Math.round(config.agent.askTimeoutMs / 3600000)} 小时无人回答，已自动取消并继续执行`,
+        label: `提问超过 ${Math.round(config.agent.askTimeoutMs / 3600000)} 小时无人回答，已自动取消本次任务（不再继续执行）`,
       });
+      // 先唤醒挂起的 elicitation handler（否则 acp-bridge await 永远不返回），
+      // 再取消整个 run：无人回答的提问不应让 agent 带着缺省的答案继续写盘。
       resolveAsk(run, askId, { action: 'cancel' });
+      cancelRun(run);
     }, config.agent.askTimeoutMs);
     timer.unref?.();
     run._askTimers.set(askId, timer);

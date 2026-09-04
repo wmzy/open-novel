@@ -8,10 +8,28 @@ import { generateId } from '../../utils/id';
 import { resolveNovelDir } from '../../shared/project-dir';
 import { getActiveRunForProject } from '../../agent/run';
 import { parseForeshadowFile, serializeForeshadows } from '../../shared/foreshadow';
+import { createSnapshot } from '../../agent/snapshot';
 
 /** 章节状态枚举：草稿 / 审阅中 / 已修订 / 已定稿。 */
 export const CHAPTER_STATUSES = ['draft', 'review', 'revised', 'finalized'] as const;
 export type ChapterStatus = (typeof CHAPTER_STATUSES)[number];
+
+/** 手改正文落盘后的快照防抖：编辑器自动保存频率高，30s 窗口内合并为一次 commit。
+ * 手改此前不入版本库（要等下一次 run 才被 git 捕获），现在保存后自动纳入快照。 */
+const MANUAL_SNAPSHOT_DEBOUNCE_MS = 30_000;
+const manualSnapshotTimers = new Map<string, NodeJS.Timeout>();
+
+/** 手改正文落盘后调度一次防抖快照（每项目独立计时，多次保存合并）。 */
+function scheduleManualSnapshot(projectId: string, projectDir: string, chapterNum: number): void {
+  const existing = manualSnapshotTimers.get(projectId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    manualSnapshotTimers.delete(projectId);
+    void createSnapshot(projectDir, `manual edit chapter ${chapterNum}`).catch(() => {});
+  }, MANUAL_SNAPSHOT_DEBOUNCE_MS);
+  timer.unref?.();
+  manualSnapshotTimers.set(projectId, timer);
+}
 
 const chaptersRouter = new Hono();
 
@@ -153,6 +171,106 @@ chaptersRouter.post('/resync', async (c) => {
   return c.json({ chapters: all });
 });
 
+/**
+ * 列出质检归档的章节（.novel/degraded/ 隔离目录 + 旧版 chapters/*.degraded.md）。
+ * 归档章节不参与 resync/导出/样章门计数，仅经恢复端点移回正文。
+ */
+chaptersRouter.get('/degraded', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  let novelDir: string;
+  try {
+    novelDir = await resolveNovelDir(projectId);
+  } catch {
+    return c.json({ error: 'Project not found' }, 404);
+  }
+  const items: Array<{ number: number; title: string; wordCount: number; location: 'degraded-dir' | 'legacy-in-place' }> = [];
+  const candidates: Array<{ dir: string; pattern: RegExp; location: 'degraded-dir' | 'legacy-in-place' }> = [
+    { dir: path.join(novelDir, 'degraded'), pattern: /^(第(\d+)章|chapter-(\d+))\.md$/i, location: 'degraded-dir' },
+    { dir: path.join(novelDir, 'chapters'), pattern: /^(第(\d+)章|chapter-(\d+))\.degraded\.md$/i, location: 'legacy-in-place' },
+  ];
+  for (const cand of candidates) {
+    let files: string[];
+    try {
+      files = await fs.readdir(cand.dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const m = f.match(cand.pattern);
+      if (!m) continue;
+      const num = parseInt(m[2] ?? m[3], 10);
+      let title = '';
+      let wordCount = 0;
+      try {
+        const content = await fs.readFile(path.join(cand.dir, f), 'utf-8');
+        const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
+        const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+        wordCount = cjk > 0 ? cjk : stripped.split(/\s+/).filter(Boolean).length;
+        const titleMatch = content.match(/^#\s+(.+)$/m);
+        title = titleMatch ? titleMatch[1].trim() : '';
+      } catch { /* unreadable → keep defaults */ }
+      items.push({ number: num, title, wordCount, location: cand.location });
+    }
+  }
+  items.sort((a, b) => a.number - b.number);
+  return c.json({ chapters: items });
+});
+
+/** 把归档章节移回 chapters/第N章.md（隔离目录优先，兼容旧版就地改名）。
+ * 目标位置已有正文时拒绝，避免覆盖用户后续重写的内容。 */
+chaptersRouter.post('/degraded/:num/restore', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  const num = parseInt(c.req.param('num'), 10);
+  if (Number.isNaN(num)) return c.json({ error: 'Invalid chapter number' }, 400);
+
+  // 项目串行锁：恢复会写正文章节文件，与 agent 写盘互斥
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再恢复章节',
+      runId: activeRun.id,
+    }, 409);
+  }
+
+  let novelDir: string;
+  try {
+    novelDir = await resolveNovelDir(projectId);
+  } catch {
+    return c.json({ error: 'Project not found' }, 404);
+  }
+
+  const sources = [
+    path.join(novelDir, 'degraded', `第${num}章.md`),
+    path.join(novelDir, 'degraded', `chapter-${num}.md`),
+    path.join(novelDir, 'chapters', `第${num}章.degraded.md`),
+    path.join(novelDir, 'chapters', `chapter-${num}.degraded.md`),
+  ];
+  let src: string | null = null;
+  for (const s of sources) {
+    try {
+      await fs.access(s);
+      src = s;
+      break;
+    } catch { /* try next */ }
+  }
+  if (!src) return c.json({ error: '未找到该归档章节' }, 404);
+
+  const dest = chapterFilePath(novelDir, num);
+  try {
+    await fs.access(dest);
+    return c.json({ error: '目标章节已存在正文，恢复会覆盖现有内容，请先删除或改名现有章节' }, 409);
+  } catch { /* dest free */ }
+
+  try {
+    await fs.rename(src, dest);
+  } catch {
+    return c.json({ error: '恢复失败' }, 500);
+  }
+  await resyncChaptersFromDisk(projectId, { force: true }).catch(() => {});
+  return c.json({ ok: true, number: num });
+});
+
 chaptersRouter.get('/:num', async (c) => {
   const projectId = c.req.param('projectId')!;
   const num = parseInt(c.req.param('num'), 10);
@@ -243,6 +361,8 @@ chaptersRouter.patch('/:num', async (c) => {
       const novelDir = await resolveNovelDir(projectId);
       await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
       await fs.writeFile(chapterFilePath(novelDir, num), body.content, 'utf-8');
+      // 手改正文防抖快照：保存后 30s 自动 commit，不再等下一次 run 才入版本库
+      scheduleManualSnapshot(projectId, novelDir, num);
     } catch {
       return c.json({ error: 'Failed to write chapter content' }, 500);
     }
@@ -298,11 +418,23 @@ chaptersRouter.delete('/:num', async (c) => {
 
   // 磁盘是事实来源：删除 DB 行后同步删除正文与摘要文件，避免 resync 把它加回来
   let foreshadowRefsCleared = 0;
+  let summaryRemoved = false;
+  let outlineCardExists = false;
   try {
     const novelDir = await resolveNovelDir(projectId);
     await fs.unlink(chapterFilePath(novelDir, num)).catch(() => {});
     await fs.unlink(legacyChapterFilePath(novelDir, num)).catch(() => {});
-    await fs.unlink(path.join(novelDir, 'chapters', `第${num}章.summary.md`)).catch(() => {});
+    const summaryPath = path.join(novelDir, 'chapters', `第${num}章.summary.md`);
+    try {
+      await fs.unlink(summaryPath);
+      summaryRemoved = true;
+    } catch { /* 无摘要文件 */ }
+
+    // 大纲卡片是否仍引用本章（删除正文不自动删大纲卡片，供前端提示手动处理）
+    try {
+      await fs.access(path.join(novelDir, 'outline', 'chapters', `第${num}章.md`));
+      outlineCardExists = true;
+    } catch { /* 无大纲卡片 */ }
 
     // 清理伏笔悬挂引用：plantedIn/resolvedIn 指向被删章节的置空，避免债务视图误报
     try {
@@ -319,7 +451,7 @@ chaptersRouter.delete('/:num', async (c) => {
     } catch { /* 无伏笔文件或解析失败，忽略 */ }
   } catch { /* 目录不可用时忽略 */ }
 
-  return c.json({ ok: true, foreshadowRefsCleared });
+  return c.json({ ok: true, foreshadowRefsCleared, summaryRemoved, outlineCardExists });
 });
 
 export default chaptersRouter;

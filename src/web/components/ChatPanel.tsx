@@ -199,6 +199,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     userHint?: string;
     latestScores?: string | null;
     customDimensions?: Record<string, string[]>;
+    /** 可选预算上限（美元）：累计消耗达到即停，防无人值守循环烧穿额度。 */
+    budget?: number;
     /** 累计消耗（美元，累加每轮 run 的 usage.costUsd）。 */
     totalCost: number;
   } | null>(null);
@@ -207,6 +209,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const [deepenDialogStage, setDeepenDialogStage] = useState('');
   const [deadlineInput, setDeadlineInput] = useState('06:00');
   const [deepenHint, setDeepenHint] = useState('');
+  const [budgetInput, setBudgetInput] = useState('');
   const prevIsRunningRef = useRef(false);
   // 深化循环倒计时：活跃时每 30s 刷新一次剩余时间显示
   const [now, setNow] = useState(() => Date.now());
@@ -314,6 +317,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     }
     const ds = deepenDialogStage;
     const hint = deepenHint.trim() || undefined;
+    // 可选预算上限（美元）：空或非正数视为不设限
+    const budgetRaw = parseFloat(budgetInput.trim());
+    const budget = Number.isFinite(budgetRaw) && budgetRaw > 0 ? budgetRaw : undefined;
 
     // 创建里程碑快照：深化前的回滚点，用户审核后可 restore
     fetch(`/api/runs/projects/${projectId}/snapshot`, {
@@ -330,7 +336,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       toast.error('深化回滚点创建失败，请手动「存版本」');
     });
 
-    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, consecutiveNoImprovement: 0, converged: false, userHint: hint, customDimensions: pluginDimensions, totalCost: 0 });
+    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, consecutiveNoImprovement: 0, converged: false, userHint: hint, customDimensions: pluginDimensions, budget, totalCost: 0 });
     setShowDeepenDialog(false);
     sendMessage({
       projectId,
@@ -343,7 +349,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       deepenRound: 1,
       model: selectedModel !== 'default' ? selectedModel : undefined,
     });
-  }, [deadlineInput, deepenDialogStage, deepenHint, sendMessage, projectId, agentId, skillId, selectedModel, pluginDimensions]);
+  }, [deadlineInput, deepenDialogStage, deepenHint, budgetInput, sendMessage, projectId, agentId, skillId, selectedModel, pluginDimensions]);
 
   /** 退出深化模式 */
   const exitDeepen = useCallback((reason: string) => {
@@ -437,6 +443,13 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         // 停止条件 4：截止时间到
         if (Date.now() >= deepenMode.deadline) {
           exitDeepen('截止时间到');
+          prevIsRunningRef.current = isRunning;
+          return;
+        }
+
+        // 停止条件 5：预算上限（美元）——防止无人值守循环烧穿额度
+        if (deepenMode.budget != null && totalCost >= deepenMode.budget) {
+          exitDeepen(`达到预算上限 $${deepenMode.budget.toFixed(2)}（累计 $${totalCost.toFixed(4)}）`);
           prevIsRunningRef.current = isRunning;
           return;
         }
@@ -858,7 +871,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
       {isSampleGate && !isRunning && (
         <div className={gateBanner}>
-          <span>正式写作前需完成 3 章样章检验声口与节奏（正文不足 3 章已被门禁拦截）。</span>
+          <span>样章门未通过：正式写作前需完成 3 章样章（有效正文）并在 sample-feedback.md 提交 3 篇复盘。被拦截原因见上方错误提示。</span>
           <div className={gateBannerActions}>
             <button className={gateBtn} onClick={() => onStageChange?.('sample')}>
               去写样章
@@ -897,6 +910,16 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
                 value={deadlineInput}
                 onChange={(e) => setDeadlineInput(e.target.value)}
                 placeholder="HH:MM"
+                className={deepenInput}
+              />
+            </label>
+            <label>
+              预算上限（美元，可选）：
+              <input
+                type="text"
+                value={budgetInput}
+                onChange={(e) => setBudgetInput(e.target.value)}
+                placeholder="如 5（达到即停止循环）"
                 className={deepenInput}
               />
             </label>

@@ -548,10 +548,15 @@ export function parseChapterNumberFromMessage(message: string): number | null {
   return cnNumberToInt(m[1]);
 }
 
+/** 有效正文下限：与样章门禁/写作视图口径一致（CJK ≥ 100 才算已写）。 */
+const MIN_WRITTEN_CJK = 100;
+
 /**
- * 扫描 .novel/chapters/ 找最小未写章号（从 1 起第一个没有正文文件的章号）。
+ * 扫描 .novel/chapters/ 找最小未写章号（从 1 起第一个没有有效正文的章号）。
  * 全部已写则返回 最大章号+1；目录为空/不存在返回 1。
  * 只认正文章节命名（第N章.md / chapter-N.md），忽略摘要与归档文件。
+ * 空壳章节（仅标题、CJK < 100）不算已写——手动创建的占位章不会
+ * 让「继续写」推断跳过它，agent 会回填该章正文。
  */
 export async function findNextUnwrittenChapter(projectDir: string): Promise<number> {
   const chaptersDir = path.join(projectDir, '.novel', 'chapters');
@@ -566,7 +571,14 @@ export async function findNextUnwrittenChapter(projectDir: string): Promise<numb
     const cn = f.match(/^第(\d+)章\.md$/);
     const en = f.match(/^chapter-(\d+)\.md$/i);
     const m = cn ?? en;
-    if (m) nums.add(parseInt(m[1], 10));
+    if (!m) continue;
+    const num = parseInt(m[1], 10);
+    try {
+      const content = await fs.readFile(path.join(chaptersDir, f), 'utf-8');
+      const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
+      const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+      if (cjk >= MIN_WRITTEN_CJK) nums.add(num);
+    } catch { /* unreadable → 视为未写，允许 agent 回填 */ }
   }
   let next = 1;
   while (nums.has(next)) next++;

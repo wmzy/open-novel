@@ -392,22 +392,36 @@ describe('deepen', () => {
         role: i % 2 === 0 ? 'user' : 'assistant',
         content: `msg-${i}`,
       }));
-      // keepHead=2 + keepTail=6 = 8 条保留 + 1 条占位 = 9
+      // 2 head + 1 placeholder + 2 kept middle user (msg-2, msg-4) + 6 tail = 11
       const result = trimHistory(history);
-      expect(result.length).toBe(9);
+      expect(result.length).toBe(11);
 
       // 首轮保留
       expect(result[0].content).toBe('msg-0');
       expect(result[1].content).toBe('msg-1');
 
-      // 中间折叠为占位
+      // 中间 assistant 折叠为占位
       expect(result[2].role).toBe('system');
       expect(result[2].content).toContain('对话历史已折叠');
-      expect(result[2].content).toContain('4'); // 12 - 8 = 4 条被省略
+      expect(result[2].content).toContain('2'); // 中间 2 条 assistant（msg-3, msg-5）被省略
+
+      // 中间 user 消息全部保留
+      expect(result[3].content).toBe('msg-2');
+      expect(result[4].content).toBe('msg-4');
 
       // 尾部保留最近 6 条
-      expect(result[3].content).toBe('msg-6');
-      expect(result[8].content).toBe('msg-11');
+      expect(result[5].content).toBe('msg-6');
+      expect(result[10].content).toBe('msg-11');
+    });
+
+    it('keeps all middle user messages and returns history as-is when no assistant to fold', () => {
+      const history = Array.from({ length: 12 }, (_, i) => ({
+        role: 'user',
+        content: `msg-${i}`,
+      }));
+      const result = trimHistory(history, 2, 6);
+      // 中间只有 user 消息：全部保留，无需占位
+      expect(result).toBe(history);
     });
 
     it('custom keepHead and keepTail', () => {
@@ -416,11 +430,24 @@ describe('deepen', () => {
         content: `msg-${i}`,
       }));
       const result = trimHistory(history, 1, 2);
-      expect(result.length).toBe(4); // 1 head + 1 placeholder + 2 tail
+      expect(result).toBe(history); // 中间全是 user 消息，无 assistant 可折叠
+    });
+
+    it('custom keepHead and keepTail with mixed roles', () => {
+      const history = Array.from({ length: 10 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `msg-${i}`,
+      }));
+      const result = trimHistory(history, 1, 2);
+      // 1 head (msg-0) + 1 placeholder + kept middle user (msg-2,4,6) + 2 tail (msg-8,9) = 7
+      expect(result.length).toBe(7);
       expect(result[0].content).toBe('msg-0');
       expect(result[1].role).toBe('system');
-      expect(result[2].content).toBe('msg-8');
-      expect(result[3].content).toBe('msg-9');
+      expect(result[2].content).toBe('msg-2');
+      expect(result[3].content).toBe('msg-4');
+      expect(result[4].content).toBe('msg-6');
+      expect(result[5].content).toBe('msg-8');
+      expect(result[6].content).toBe('msg-9');
     });
 
     it('empty history returns empty', () => {
@@ -428,8 +455,8 @@ describe('deepen', () => {
     });
 
     it('placeholder references deepen-log and deepen-critique', () => {
-      const history = Array.from({ length: 10 }, (_, i) => ({
-        role: 'user',
+      const history = Array.from({ length: 12 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
         content: `msg-${i}`,
       }));
       const result = trimHistory(history);
@@ -438,8 +465,8 @@ describe('deepen', () => {
     });
 
     it('appends contextNote to placeholder when provided', () => {
-      const history = Array.from({ length: 10 }, (_, i) => ({
-        role: 'user',
+      const history = Array.from({ length: 12 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
         content: `msg-${i}`,
       }));
       const note = '评分轨迹：动机清晰度 3→4 → 4→5';
@@ -449,8 +476,8 @@ describe('deepen', () => {
     });
 
     it('omits contextNote gracefully when undefined', () => {
-      const history = Array.from({ length: 10 }, (_, i) => ({
-        role: 'user',
+      const history = Array.from({ length: 12 }, (_, i) => ({
+        role: i % 2 === 0 ? 'user' : 'assistant',
         content: `msg-${i}`,
       }));
       const result = trimHistory(history, 2, 6, undefined);

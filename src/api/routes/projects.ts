@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
-import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, rmSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
@@ -33,6 +33,26 @@ const projectsRouter = new Hono();
 // 故事脉络子路由（/:id/timeline 等）
 projectsRouter.route('/', timelineRouter);
 projectsRouter.route('/', documentsRouter);
+
+/** 目录下已存在 open-novel 项目结构时拒绝（两条记录指向同一目录会互相污染）。 */
+function canonicalProjectPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    // 目录尚未创建/已失效：回退到词法解析
+    return path.resolve(p);
+  }
+}
+
+/** 按真实路径（symlink 归一化）查重：同一磁盘目录只允许一条项目记录。
+ * 双记录会让项目级串行锁失效——两个 run 可并行写同一目录。 */
+async function findProjectByCanonicalPath(canon: string) {
+  const all = await db.select().from(projects);
+  for (const p of all) {
+    if (canonicalProjectPath(p.path) === canon) return p;
+  }
+  return null;
+}
 
 projectsRouter.get('/', async (c) => {
   const all = await db.select().from(projects).orderBy(desc(projects.createdAt));
@@ -75,6 +95,15 @@ projectsRouter.post('/', async (c) => {
     } catch { /* 读取失败不阻断创建 */ }
   }
   mkdirSync(userPath, { recursive: true });
+  // 真实路径查重：symlink/相对路径等不同写法指向同一目录时拒绝第二条记录
+  const canonical = canonicalProjectPath(userPath);
+  const dup = await findProjectByCanonicalPath(canonical);
+  if (dup) {
+    return c.json({
+      error: 'path-exists',
+      message: `该目录已是 open-novel 项目「${dup.title}」（可能经其他路径形式创建）。请使用「打开项目」导入，或另选目录。`,
+    }, 409);
+  }
   const [project] = await db.insert(projects).values({
     id,
     title: body.title || '未命名项目',
@@ -169,10 +198,11 @@ projectsRouter.post('/import', async (c) => {
     } catch { /* ignore */ }
   }
 
-  // Check if already imported
-  const existing = await db.select().from(projects).where(eq(projects.path, userPath)).limit(1);
-  if (existing.length > 0) {
-    return c.json({ error: '该项目已导入' }, 400);
+  // Check if already imported（真实路径查重，防 symlink/写法差异双记录）
+  const canonical = canonicalProjectPath(userPath);
+  const existing = await findProjectByCanonicalPath(canonical);
+  if (existing) {
+    return c.json({ error: '该项目已导入', message: `该目录已存在项目「${existing.title}」` }, 400);
   }
 
   const id = generateId('proj_');
@@ -259,6 +289,8 @@ projectsRouter.post('/:id/import-source', async (c) => {
     config = JSON.parse(readFileSync(configPath, 'utf-8'));
   } catch { /* noop */ }
   config.chapterCount = chapters.length;
+  // 逆向拆书项目标记：样章门禁的复盘要求对导入源文本豁免（导入原文无样章复盘概念）
+  config.sourceImported = true;
   writeFileSync(configPath, JSON.stringify(config, null, 2));
 
   // 更新 DB：章节数变化会摊薄每章字数目标（targetWords/chapterCount）。
@@ -293,7 +325,13 @@ projectsRouter.get('/:id', async (c) => {
   if (!project) return c.json({ error: 'Not found' }, 404);
   // 迁移到双分支模型（幂等，已有 draft 则跳过）。失败不阻塞项目读取。
   await ensureDraftBranch(project.path).catch(() => {});
-  return c.json({ project: { ...project, skillId: resolveSkillId(project.genre) } });
+  // 读取磁盘 config.json 附带样章门旁路标记（force 旁路时落盘，Dashboard 常驻警示）
+  let sampleGateBypassed = false;
+  try {
+    const cfg = JSON.parse(readFileSync(path.join(project.path, '.novel', 'config.json'), 'utf-8'));
+    sampleGateBypassed = cfg.sampleGateBypassed === true;
+  } catch { /* 无配置文件 */ }
+  return c.json({ project: { ...project, skillId: resolveSkillId(project.genre), sampleGateBypassed } });
 });
 
 projectsRouter.patch('/:id', async (c) => {
@@ -817,6 +855,16 @@ projectsRouter.post('/:id/migrate-split', async (c) => {
   const id = c.req.param('id');
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) return c.json({ error: 'Not found' }, 404);
+
+  // 项目串行锁：迁移写卡片 + 删旧文件，与 agent 写盘互斥
+  const activeRun = getActiveRunForProject(id);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再迁移文档结构',
+      runId: activeRun.id,
+    }, 409);
+  }
 
   const novelDir = path.join(project.path, '.novel');
 

@@ -408,13 +408,14 @@ export function parseDeadlineInput(input: string): number | null {
  *
  * 保留策略：
  * - 首批消息（首轮 Critique 的完整上下文）——定义本轮深化的核心问题域
+ * - 全部中间 user 消息——用户指令是创作决策的持久输入，折叠后无法恢复
  * - 最近 keepTail 条消息——当前工作记忆（上几轮的反馈与修改）
- * - 中间消息折叠为单行摘要占位，提示 agent 历史被截断
+ * - 仅中间 assistant 消息折叠为单行摘要占位（中间无 assistant 消息时不折叠）
  *
  * @param history 完整对话历史（role + content）
  * @param keepHead 保留头部消息数（默认 2 = 首轮 user + assistant）
  * @param keepTail 保留尾部消息数（默认 6 = 最近 3 个 Critique-Revise 对）
- * @returns 截断后的历史，中间用占位行替换
+ * @returns 截断后的历史，中间 assistant 消息用占位行替换
  */
 export function trimHistory(
   history: { role: string; content: string }[],
@@ -428,9 +429,16 @@ export function trimHistory(
 
   const head = history.slice(0, keepHead);
   const tail = history.slice(history.length - keepTail);
-  const omittedCount = history.length - keepHead - keepTail;
+  const middle = history.slice(keepHead, history.length - keepTail);
 
-  const base = `[对话历史已折叠：省略了 ${omittedCount} 条早期消息。完整改进记录见 .novel/deepen-log.md，最新审查见 .novel/deepen-critique.md]`;
+  // 保全部 user 消息：用户指令不可折叠，否则第 7 条长指令会无声消失。
+  const keptUserMessages = middle.filter((m) => m.role === 'user');
+  const omittedCount = middle.length - keptUserMessages.length;
+  if (omittedCount === 0) {
+    return history; // 中间只有 user 消息，无需折叠
+  }
+
+  const base = `[对话历史已折叠：省略了 ${omittedCount} 条中间 assistant 消息（用户指令已全部保留）。完整改进记录见 .novel/deepen-log.md，最新审查见 .novel/deepen-critique.md]`;
   const placeholder = contextNote ? `${base}\n${contextNote}` : base;
 
   return [
@@ -439,6 +447,7 @@ export function trimHistory(
       role: 'system',
       content: placeholder,
     },
+    ...keptUserMessages,
     ...tail,
   ];
 }

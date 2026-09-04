@@ -12,7 +12,7 @@ import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { detectAiPatterns, detectDegradation, buildExcludeGrams } from '../../agent/quality-checker';
 import type { AgentEvent, StreamEvent } from '../../agent/types';
 import { ensureContextArtifacts, getStateTable } from '../../agent/context-manager';
-import { readFile, readdir, rename } from 'node:fs/promises';
+import { readFile, readdir, rename, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
@@ -69,6 +69,44 @@ class RunLockError extends Error {
   }
 }
 
+/** 读取 .novel/config.json（不存在/损坏返回空对象）。 */
+async function readNovelConfig(projectDir: string): Promise<Record<string, unknown>> {
+  try {
+    return JSON.parse(await readFile(path.join(projectDir, '.novel', 'config.json'), 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+/** 文件是否存在（存在且可读）。 */
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    await readFile(p, 'utf-8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 统计 sample-feedback.md 中的复盘篇数。每篇复盘含固定四节，以「声口落地」节标题计数。 */
+async function countSampleFeedback(projectDir: string): Promise<number> {
+  try {
+    const content = await readFile(path.join(projectDir, '.novel', 'sample-feedback.md'), 'utf-8');
+    return (content.match(/声口落地/g) || []).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** force 旁路样章门后落盘记录 sampleGateBypassed，Dashboard 常驻警示徽标。 */
+async function recordSampleGateBypass(projectDir: string): Promise<void> {
+  try {
+    const existing = await readNovelConfig(projectDir);
+    existing.sampleGateBypassed = true;
+    await writeFile(path.join(projectDir, '.novel', 'config.json'), JSON.stringify(existing, null, 2), 'utf-8');
+  } catch { /* 记录失败不阻断写作 */ }
+}
+
 /** 统计磁盘上有有效正文的章节数（CJK 字数 ≥ SAMPLE_GATE_MIN_CJK）。 */
 async function countWrittenChaptersFromDisk(projectDir: string): Promise<number> {
   const chaptersDir = path.join(projectDir, '.novel', 'chapters');
@@ -99,9 +137,22 @@ function hasMetaNarrativeLeak(content: string): boolean {
   return /第\d+章|第[一二三四五六七八九十百]+章/.test(bodyLines.join('\n'));
 }
 
+/** 把质检不通过的章节移入 .novel/degraded/ 隔离目录（保留原文件名），
+ * 使其不再出现在写作视图与导出中；恢复端点可移回。 */
+async function archiveDegradedChapter(projectDir: string, fullPath: string): Promise<boolean> {
+  try {
+    const degradedDir = path.join(projectDir, '.novel', 'degraded');
+    await mkdir(degradedDir, { recursive: true });
+    await rename(fullPath, path.join(degradedDir, path.basename(fullPath)));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 写后质检门禁：对新章节正文跑全文退化终检 + detectAiPatterns + 元叙事泄漏检测。
- * canArchive 控制「退化归档为 .degraded.md」是否允许——仅写作产出阶段允许，
- * 其余阶段（revision/polish/decompose 等改写已有内容）只告警不归档，
+ * canArchive 控制「退化归档为 .novel/degraded/ 隔离文件」是否允许——仅成功且写作产出阶段允许，
+ * 失败 run 与 revision/polish/decompose 等改写已有内容只告警不归档，
  * 避免把用户导入/修订的原文误伤。 */
 async function qualityGateCheck(
   run: ReturnType<typeof createRun>,
@@ -123,11 +174,13 @@ async function qualityGateCheck(
     const degradation = detectDegradation(content, { excludeGrams });
     if (degradation.detected) {
       if (canArchive) {
-        try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
-        // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节（wordCount 为退化文本）
-        await db.delete(chapters)
-          .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
-          .catch(() => {});
+        const archived = await archiveDegradedChapter(projectDir, fullPath);
+        if (archived) {
+          // 移出 chapters/ 后同步删除 DB 行，避免写作视图显示幽灵章节（wordCount 为退化文本）
+          await db.delete(chapters)
+            .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
+            .catch(() => {});
+        }
         emitEvent(run, 'agent', {
           type: 'quality-rejected',
           chapter: chapterNum,
@@ -136,6 +189,7 @@ async function qualityGateCheck(
           phrase: degradation.repeatedPhrase,
           count: degradation.count,
           ratio: Math.round(degradation.ratio * 100),
+          archived,
         });
       } else {
         emitEvent(run, 'agent', {
@@ -152,17 +206,19 @@ async function qualityGateCheck(
     const report = detectAiPatterns(content);
     if (report.score >= QUALITY_REJECT_SCORE) {
       if (canArchive) {
-        // 退化严重：归档为 .degraded.md，通知前端
-        try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
-        // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节
-        await db.delete(chapters)
-          .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
-          .catch(() => {});
+        const archived = await archiveDegradedChapter(projectDir, fullPath);
+        if (archived) {
+          // 移出 chapters/ 后同步删除 DB 行，避免写作视图显示幽灵章节
+          await db.delete(chapters)
+            .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
+            .catch(() => {});
+        }
         emitEvent(run, 'agent', {
           type: 'quality-rejected',
           chapter: chapterNum,
           score: report.score,
           topIssues: report.issues.slice(0, 3).map((i) => i.suggestion),
+          archived,
         });
       } else {
         // 非写作产出阶段：高 AI 味只告警不归档（如 decompose 导入原文、revision 改写稿）
@@ -339,16 +395,37 @@ runsRouter.post('/', async (c) => {
   // 以磁盘为事实源（import-source 写盘不入库、退化归档改名、回滚都会让 DB 行失真）。
   // - stage==='sample' 放行（样章阶段本身就是写正文）
   // - 已有 ≥3 章正文的存量项目不受影响
-  // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作）
-  if ((stage === 'writing' || stage === 'drafting' || stage === 'revision' || stage === 'polish') && body.force !== true) {
-    const written = await countWrittenChaptersFromDisk(projectDir);
-    if (written < SAMPLE_GATE_REQUIRED) {
-      return c.json({
-        error: 'sample-gate',
-        message: `需先完成样章阶段：writing/drafting/revision/polish 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
-        completedSamples: written,
-        required: SAMPLE_GATE_REQUIRED,
-      }, 409);
+  // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作），并落盘记录
+  // - 复盘门：sample-feedback.md 存在时需 ≥3 篇复盘（存量项目无此文件不受影响）；
+  //   import-source 逆向拆书项目（sourceImported）豁免复盘要求
+  const gateStages = new Set(['writing', 'drafting', 'revision', 'polish']);
+  if (gateStages.has(stage)) {
+    if (body.force === true) {
+      await recordSampleGateBypass(projectDir);
+    } else {
+      const written = await countWrittenChaptersFromDisk(projectDir);
+      if (written < SAMPLE_GATE_REQUIRED) {
+        return c.json({
+          error: 'sample-gate',
+          message: `需先完成样章阶段：writing/drafting/revision/polish 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
+          completedSamples: written,
+          required: SAMPLE_GATE_REQUIRED,
+        }, 409);
+      }
+      // 复盘门：sample-feedback.md 已存在但复盘不足 3 篇 → 样章流程未走完
+      const novelCfg = await readNovelConfig(projectDir);
+      if (novelCfg.sourceImported !== true && await fileExists(path.join(projectDir, '.novel', 'sample-feedback.md'))) {
+        const feedbackCount = await countSampleFeedback(projectDir);
+        if (feedbackCount < SAMPLE_GATE_REQUIRED) {
+          return c.json({
+            error: 'sample-gate',
+            message: `样章复盘不足：sample-feedback.md 中需至少 ${SAMPLE_GATE_REQUIRED} 篇复盘（当前 ${feedbackCount} 篇）。请回到样章阶段完成复盘并修订大纲后再开始正式写作，或携带 force: true 强制开始。`,
+            completedSamples: written,
+            feedbackCount,
+            required: SAMPLE_GATE_REQUIRED,
+          }, 409);
+        }
+      }
     }
   }
 
@@ -361,6 +438,13 @@ runsRouter.post('/', async (c) => {
     // Load existing conversation
     const existing = await db.select().from(conversations).where(eq(conversations.id, conversationId)).limit(1);
     if (existing.length === 0) return c.json({ error: 'Conversation not found' }, 404);
+    // 归属校验：会话必须属于当前项目，防止把项目 A 的历史注入项目 B 的 prompt
+    if (existing[0].projectId !== projectId) {
+      return c.json({
+        error: 'conversation-mismatch',
+        message: '该会话不属于当前项目，无法继续使用',
+      }, 409);
+    }
     convId = conversationId;
 
     // Load prior messages for history
@@ -672,11 +756,12 @@ runsRouter.post('/', async (c) => {
       await syncFilesToDb(projectId, writtenPaths, projectDir).catch(() => {});
     }
 
-    // P1-b: 写后质检门禁 — 退化分高的章节自动归档为 .degraded.md
-    // 失败 run 同样执行：watchdog 中断前已落盘的退化章节不能逃过归档。
-    // 仅写作产出阶段（writing/sample/drafting）允许归档；revision/polish/decompose
-    // 改写已有内容，高 AI 味/退化只告警不归档，避免误伤导入原文与修订稿。
-    const canArchive = stage === 'writing' || stage === 'sample' || stage === 'drafting';
+    // P1-b: 写后质检门禁 — 退化分高的章节移入 .novel/degraded/ 隔离区（可恢复）
+    // 仅成功（code===0）且写作产出阶段（writing/sample/drafting）允许归档；
+    // 失败 run 只告警不归档——失败可能是中途被杀（watchdog 误报/超时），
+    // 此时归档会凭空"删除"用户可见的章节，与产品预期不符。
+    // revision/polish/decompose 改写已有内容，高 AI 味/退化只告警不归档，避免误伤导入原文与修订稿。
+    const canArchive = code === 0 && (stage === 'writing' || stage === 'sample' || stage === 'drafting');
     if (writtenPaths.size > 0) {
       await qualityGateCheck(run, projectDir, writtenPaths, excludeGrams, canArchive).catch(() => {});
     }
@@ -722,16 +807,6 @@ runsRouter.post('/', async (c) => {
       } catch { /* diff 生成失败不阻断收尾 */ }
     }
 
-    // Update run record（revise 模式附带 diff 进 payload）
-    const updateSet: Record<string, unknown> = {
-      status: code === 0 ? 'succeeded' : 'failed',
-      finishedAt: new Date(),
-    };
-    if (reviseDiff !== undefined) {
-      updateSet.payload = { targetFile, revisionNote, baseSnapshot, diff: reviseDiff };
-    }
-    await db.update(runsTable).set(updateSet).where(eq(runsTable.id, run.id)).execute();
-
     // P1: 零产出自动重试 — writing 阶段产出 0 个文件时自动重试一次。
     // 根因：agent 有时读上下文后空转退出（~30%概率），不写任何文件。
     // 不重试会浪费一轮对话额度且打断写作流程。
@@ -746,6 +821,27 @@ runsRouter.post('/', async (c) => {
       // 不 finishRun 也不 close stream — 重试复用同一事件流
       return;
     }
+
+    // P1: 重试后仍零产出 → 明确失败，不再把空转标记为 succeeded。
+    // retryOf !== null 表示本次 close 已是第二次尝试（或重试路径上的后续尝试）。
+    if (code === 0 && writtenPaths.size === 0 && retryOf !== null && (stage === 'writing' || stage === 'drafting' || stage === 'sample')) {
+      emitEvent(run, 'agent', {
+        type: 'error',
+        message: 'Agent 连续两次未产出任何文件，已标记为失败',
+      });
+      code = 1;
+    }
+
+    // Update run record（revise 模式附带 diff 进 payload）
+    // 放在重试检查之后：retry 提前 return 时行保持 running，最终尝试统一在此落库。
+    const updateSet: Record<string, unknown> = {
+      status: code === 0 ? 'succeeded' : 'failed',
+      finishedAt: new Date(),
+    };
+    if (reviseDiff !== undefined) {
+      updateSet.payload = { targetFile, revisionNote, baseSnapshot, diff: reviseDiff };
+    }
+    await db.update(runsTable).set(updateSet).where(eq(runsTable.id, run.id)).execute();
 
     // P0: 最后才 finishRun — 'end' 事件表示管道完全收尾
 

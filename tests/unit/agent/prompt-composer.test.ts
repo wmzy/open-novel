@@ -1711,7 +1711,10 @@ describe('composePrompt', () => {
       const novelDir = path.join(tempDir, '.novel');
       await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
       for (const n of [1, 5, 12]) {
-        await fs.writeFile(path.join(novelDir, 'chapters', `第${n}章.md`), `# 第${n}章`);
+        await fs.writeFile(
+          path.join(novelDir, 'chapters', `第${n}章.md`),
+          `# 第${n}章\n\n${'这是正文内容。'.repeat(20)}`,
+        );
       }
       expect(await findNextUnwrittenChapter(tempDir)).toBe(2);
     });
@@ -1720,9 +1723,24 @@ describe('composePrompt', () => {
       const novelDir = path.join(tempDir, '.novel');
       await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
       for (const n of [1, 2, 3]) {
-        await fs.writeFile(path.join(novelDir, 'chapters', `第${n}章.md`), `# 第${n}章`);
+        await fs.writeFile(
+          path.join(novelDir, 'chapters', `第${n}章.md`),
+          `# 第${n}章\n\n${'这是正文内容。'.repeat(20)}`,
+        );
       }
       expect(await findNextUnwrittenChapter(tempDir)).toBe(4);
+    });
+
+    it('空壳章节（仅标题）不算已写 → 推断回填空壳章', async () => {
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      // 第1章有正文，第2章是手动创建的空壳
+      await fs.writeFile(
+        path.join(novelDir, 'chapters', '第1章.md'),
+        `# 第1章\n\n${'这是正文内容。'.repeat(20)}`,
+      );
+      await fs.writeFile(path.join(novelDir, 'chapters', '第2章.md'), '# 第2章');
+      expect(await findNextUnwrittenChapter(tempDir)).toBe(2);
     });
 
     it('目录不存在/为空 → 返回 1；摘要与退化文件不干扰', async () => {

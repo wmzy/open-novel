@@ -28,8 +28,8 @@ export const config = {
   agent: {
     timeoutMs: parseInt(process.env.AGENT_TIMEOUT_MS || '1800000', 10),
     // 提问（elicitation）最长挂起时长（ms）。挂起期间超时计时暂停、用户思考不计入，
-    // 但提问本身不能无限挂起——过期自动取消，防止 run 与项目串行锁被永久占用。
-    // 默认 24 小时；可经 ASK_TIMEOUT_MS 覆盖。
+    // 但提问本身不能无限挂起——过期自动取消整个 run（agent 不再带着缺省答案继续写盘），
+    // 防止 run 与项目串行锁被永久占用。默认 24 小时；可经 ASK_TIMEOUT_MS 覆盖。
     askTimeoutMs: parseInt(process.env.ASK_TIMEOUT_MS || '86400000', 10),
   },
 

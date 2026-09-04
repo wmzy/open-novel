@@ -586,15 +586,16 @@ export default function HelpPage() {
                     <tr><th>按钮</th><th>作用</th></tr>
                   </thead>
                   <tbody>
-                    <tr><td>MD / TXT</td><td>导出全文为 Markdown 或纯文本</td></tr>
-                    <tr><td>撤销</td><td>撤销上一次更改（回退到上一版本）</td></tr>
+                    <tr><td>MD / MD稿</td><td>导出全文 Markdown（MD 含设定文档；MD稿 仅正文，适合投稿）</td></tr>
+                    <tr><td>TXT</td><td>导出纯文本</td></tr>
+                    <tr><td>回滚</td><td>回到任一历史快照（快照之后产生的文件会被删除，回滚前自动保存当前状态）</td></tr>
                     <tr><td>存版本</td><td>保存当前状态为版本标签（自动 git commit + tag）</td></tr>
                     <tr><td>同步</td><td>同步到远程仓库</td></tr>
                     <tr><td>显示预览</td><td>展开/收起右侧文件预览面板</td></tr>
                   </tbody>
                 </table>
                 <p className={paragraph}>
-                  每次写作完成后系统会自动创建快照；遇到不满意的结果用「撤销」回退，关键节点用「存版本」锁定。
+                  每次写作完成后系统会自动创建快照；遇到不满意的结果用「回滚」回到之前的状态，关键节点用「存版本」锁定。质检不通过被归档的章节可在写作视图底部「已归档」分组一键恢复。
                 </p>
               </div>
             </section>

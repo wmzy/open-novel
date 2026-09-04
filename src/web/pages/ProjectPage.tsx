@@ -520,11 +520,19 @@ export default function ProjectPage() {
 
   /** 阶段切换（进度条 / ChatPanel 命令）：切视图之外还要 PATCH currentStage 落库，
    * 否则「视图」与「阶段」脱钩——发消息仍走旧阶段的提示词（旧缺陷）。
-   * 写作子模式（drafting/revision/polish）不是主阶段，仅切视图不落库。 */
+   * 写作子模式（drafting/revision/polish）不是主阶段，仅切视图不落库。
+   * 跳级（越过中间未完成阶段）时给软提示——阶段门禁只有样章门是硬的，其余靠提示兜底。 */
   const handleStageChange = useCallback(async (stageId: string) => {
     handleViewChange(stageId);
     const isMainStage = STAGES.some((s) => s.id === stageId);
     if (!isMainStage || stageId === project?.currentStage) return;
+    const curIdx = STAGES.findIndex((s) => s.id === project?.currentStage);
+    const targetIdx = STAGES.findIndex((s) => s.id === stageId);
+    if (targetIdx > curIdx + 1) {
+      toast.warning(`跳过了 ${targetIdx - curIdx - 1} 个中间阶段（${STAGES.slice(curIdx + 1, targetIdx).map((s) => s.label).join('、')}），产出可能不完整`, {
+        description: '无产出文件的前置阶段将跳过；后续阶段若依赖缺失设定，agent 会按需补写',
+      });
+    }
     try {
       const res = await fetch(`/api/projects/${id}`, {
         method: 'PATCH',
@@ -542,8 +550,9 @@ export default function ProjectPage() {
     }
   }, [handleViewChange, id, project?.currentStage, queryClient]);
 
-  const handleExport = (format: 'markdown' | 'text') => {
-    window.open(`/api/projects/${id}/export/${format}`, '_blank');
+  const handleExport = (format: 'markdown' | 'text', scope?: 'full' | 'manuscript') => {
+    const qs = format === 'markdown' && scope === 'manuscript' ? '?scope=manuscript' : '';
+    window.open(`/api/projects/${id}/export/${format}${qs}`, '_blank');
   };
 
   const handleSync = async () => {
@@ -627,9 +636,10 @@ export default function ProjectPage() {
             <button className={previewToggle} onClick={() => setShowReview(true)} title="审阅并合并 draft 到 main">
               审阅{review.pendingCount > 0 && <span className={reviewBadge}>{review.pendingCount}</span>}
             </button>
-            <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown">MD</button>
+            <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown（含设定）">MD</button>
+            <button className={previewToggle} onClick={() => handleExport('markdown', 'manuscript')} title="导出纯正文 Markdown（投稿用）">MD稿</button>
             <button className={previewToggle} onClick={() => handleExport('text')} title="导出 TXT">TXT</button>
-            <button className={previewToggle} onClick={handleUndo} title="撤销上次更改">撤销</button>
+            <button className={previewToggle} onClick={handleUndo} title="回滚到历史快照（快照之后产生的文件将被删除）">回滚</button>
             <button className={previewToggle} onClick={handleSaveSnapshot} disabled={snapshotSaving} title="保存当前状态为版本标记">
               {snapshotSaving ? '保存中...' : '存版本'}
             </button>
@@ -703,7 +713,7 @@ export default function ProjectPage() {
         <div className={undoOverlay} onClick={() => setShowSnapshots(false)}>
           <div className={undoPanel} onClick={(e) => e.stopPropagation()}>
             <div className={undoHeader}>
-              <strong>选择要恢复的快照</strong>
+              <strong>选择要回滚到的快照</strong>
               <button className={undoClose} onClick={() => setShowSnapshots(false)} title="关闭">✕</button>
             </div>
             <div className={undoBody}>

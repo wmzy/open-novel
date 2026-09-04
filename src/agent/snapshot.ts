@@ -49,6 +49,10 @@ export async function createSnapshot(projectDir: string, message: string): Promi
     // Use rev-parse for reliable hash extraction (commit output format varies
     // by locale and root-commit vs normal commit)
     const { stdout: hashOut } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectDir });
+
+    // 轻量维护：累计松散对象/打包阈值时才打包，防止快照历史无限膨胀。
+    // gc --auto 是廉价 no-op，除非 git 自身判断需要。
+    await execFileAsync('git', ['gc', '--auto'], { cwd: projectDir }).catch(() => {});
     return hashOut.trim();
   } catch {
     return null;
@@ -141,7 +145,7 @@ export async function listSnapshots(projectDir: string, limit = 20): Promise<Sna
       date: c.date,
       tags: tagMap.get(c.hash) || [],
       isAuto: c.message.startsWith('[auto] '),
-    }));
+    })).filter((c) => c.message !== '[auto] review checkpoint');
   } catch {
     return [];
   }
@@ -447,10 +451,18 @@ export interface DiscardResult {
 
 /**
  * 丢弃整批未审阅：reset draft 到 main（含 working tree 改动）。
+ *
+ * 丢弃前先打 pre-discard 安全提交（含未提交改动），丢弃后仍可从
+ * reflog/悬空 commit 找回——reset --hard 本身不可逆，必须有后悔药，
+ * 与 restoreSnapshot 的 pre-rollback safety 对齐。
  */
 export async function discardDraft(projectDir: string): Promise<DiscardResult> {
   try {
     await ensureDraftBranch(projectDir);
+    // 安全提交：把当前 draft 状态（含 working tree 改动）落成一个 commit。
+    // reset --hard main 后该 commit 悬空，但 git 至少保留 90 天（gc.reflogExpireUnreachable），
+    // 期间可经 git reflog / fsck 找回。
+    await createSnapshot(projectDir, `pre-discard safety ${new Date().toISOString()}`);
     await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: projectDir });
     return { success: true };
   } catch {

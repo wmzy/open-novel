@@ -302,6 +302,9 @@ export default function DashboardView({ projectId }: Props) {
           {sampleGateIncomplete && (
             <div className={gateWarn}>⚠ 样章未完成（有效章节 {effectiveChapters}/3）</div>
           )}
+          {project?.sampleGateBypassed && (
+            <div className={gateWarn}>⚠ 已强制跳过样章门（force 旁路）</div>
+          )}
         </div>
         <div className={statCard}>
           <div className={statValue}>{progress}%</div>
