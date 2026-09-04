@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { eq, and } from 'drizzle-orm';
 import app from '../../src/api-app';
-import { ensureDbReady } from '../../src/db/drizzle';
+import { db, ensureDbReady } from '../../src/db/drizzle';
+import { chapters } from '../../src/db/schema';
 import { initPlugins } from '../../src/plugins/registry';
 
 /**
@@ -208,6 +210,61 @@ describe('Rewrite & Chapter content API', () => {
     const data = await res.json();
     expect(data.chapter.content).toBe('新正文');
     expect(data.chapter.status).toBe('finalized');
+  });
+
+  it('章节状态落盘：PATCH 写 chapter-status.json，DB 行删除后 resync 从文件恢复', async () => {
+    // 状态落盘（前一个测试已把第 1 章置为 finalized）
+    const statusPath = path.join(projectDir, '.novel', 'chapter-status.json');
+    const raw = JSON.parse(await fs.readFile(statusPath, 'utf-8'));
+    expect(raw['1']).toBe('finalized');
+
+    // 模拟 DB 缓存丢失（备份恢复/重建）：删除 DB 行，磁盘正文仍在
+    await db.delete(chapters).where(and(eq(chapters.projectId, projectId), eq(chapters.number, 1)));
+
+    // resync 应从磁盘 + 状态文件重建行，并恢复 finalized 状态
+    // （GET /chapters 的 resync 有 2s 冷却，此处走显式 force 端点）
+    const syncRes = await app.request(`/api/projects/${projectId}/chapters/resync`, {
+      method: 'POST',
+    });
+    expect(syncRes.ok).toBe(true);
+    const { chapters: all } = await syncRes.json();
+    const ch1 = all.find((c: { number: number }) => c.number === 1);
+    expect(ch1).toBeTruthy();
+    expect(ch1.status).toBe('finalized');
+  });
+
+  it('POST /chapters 章号超出计划章节数被拒绝（防手滑误建离群章号）', async () => {
+    // 项目 chapterCount 默认 20：第 999 章应被拒绝
+    const res = await app.request(`/api/projects/${projectId}/chapters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number: 999, title: '手滑章' }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toBe('invalid-chapter-number');
+
+    // 计划章节数内的乱序创建应放行（作者跳章写作）
+    const okRes = await app.request(`/api/projects/${projectId}/chapters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number: 15, title: '跳章写作' }),
+    });
+    expect(okRes.status).toBe(201);
+  });
+
+  it('DELETE /chapters/:num 同步清理状态文件与 lastUpdatedChapter', async () => {
+    // 状态文件包含第 1、15 章（第 15 章由上一个测试创建）
+    const statusPath = path.join(projectDir, '.novel', 'chapter-status.json');
+    const before = JSON.parse(await fs.readFile(statusPath, 'utf-8'));
+    expect(before['15']).toBe('draft');
+
+    // 删除第 1 章（不重编号）：状态条目移除
+    const delRes = await app.request(`/api/projects/${projectId}/chapters/1`, { method: 'DELETE' });
+    expect(delRes.ok).toBe(true);
+    const afterDel = JSON.parse(await fs.readFile(statusPath, 'utf-8'));
+    expect(afterDel['1']).toBeUndefined();
+    expect(afterDel['15']).toBe('draft');
   });
 
   it('POST /rewrite 缺少 chapterNum 返回 400', async () => {

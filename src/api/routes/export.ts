@@ -148,18 +148,29 @@ exportRouter.get('/markdown', async (c) => {
   }
 
   // Chapters
+  // 缺章占位：DB 行存在但文件缺失，或章号空洞（文件被删且 resync 已清行）——
+  // 导出文件内插入显式占位，避免「没注意 toast 就发出缺章稿」。
   const missingChapters: number[] = [];
+  let prevNumber = allChapters.length > 0 ? Math.min(...allChapters.map((c) => c.number)) - 1 : 0;
   for (const ch of allChapters) {
+    for (let n = prevNumber + 1; n < ch.number; n++) {
+      parts.push(`## 第 ${n} 章 【章节缺失】\n\n> 本章正文文件缺失，导出时未包含。\n`);
+      missingChapters.push(n);
+    }
+    prevNumber = ch.number;
     try {
       const content = await readChapterFile(projectDir, ch.number);
       parts.push(`## 第 ${ch.number} 章 ${ch.title || ''}\n\n${content}\n`);
-    } catch { missingChapters.push(ch.number); }
+    } catch {
+      parts.push(`## 第 ${ch.number} 章 ${ch.title || ''} 【章节缺失】\n\n> 本章正文文件缺失，导出时未包含。\n`);
+      missingChapters.push(ch.number);
+    }
   }
 
   // 质检归档章节不参与导出；收集后经响应头告知（前端 toast 提示缺章）。
   const degradedChapters = await collectDegradedChapterNumbers(projectDir).catch(() => [] as number[]);
   const warnings = [
-    ...missingChapters.map((n) => `第${n}章文件缺失，已跳过`),
+    ...missingChapters.map((n) => `第${n}章文件缺失，已在导出文件中标注占位`),
     ...degradedChapters.map((n) => `第${n}章处于质检归档状态，未包含在导出中（可在写作视图恢复）`),
   ];
 
@@ -199,19 +210,30 @@ exportRouter.get('/text', async (c) => {
   parts.push('');
 
   const missingChapters: number[] = [];
+  let prevNumber = allChapters.length > 0 ? Math.min(...allChapters.map((c) => c.number)) - 1 : 0;
   for (const ch of allChapters) {
+    for (let n = prevNumber + 1; n < ch.number; n++) {
+      parts.push(`【第 ${n} 章缺失：正文文件不存在，导出时未包含】`);
+      parts.push('');
+      missingChapters.push(n);
+    }
+    prevNumber = ch.number;
     try {
       const content = await readChapterFile(projectDir, ch.number);
       parts.push(`第 ${ch.number} 章 ${ch.title || ''}`);
       parts.push('-'.repeat(20));
       parts.push(content);
       parts.push('');
-    } catch { missingChapters.push(ch.number); }
+    } catch {
+      parts.push(`【第 ${ch.number} 章 ${ch.title || ''} 缺失：正文文件不存在，导出时未包含】`);
+      parts.push('');
+      missingChapters.push(ch.number);
+    }
   }
 
   const degradedChapters = await collectDegradedChapterNumbers(projectDir).catch(() => [] as number[]);
   const warnings = [
-    ...missingChapters.map((n) => `第${n}章文件缺失，已跳过`),
+    ...missingChapters.map((n) => `第${n}章文件缺失，已在导出文件中标注占位`),
     ...degradedChapters.map((n) => `第${n}章处于质检归档状态，未包含在导出中（可在写作视图恢复）`),
   ];
 

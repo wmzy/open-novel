@@ -14,7 +14,7 @@ import { resolveProjectDir } from '../../shared/project-dir';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { runs as runsTable } from '../../db/schema';
-import { sanitizeStderr } from './runs';
+import { sanitizeStderr, transformStreamEvents } from './runs';
 
 const rewriteRouter = new Hono();
 
@@ -88,7 +88,7 @@ rewriteRouter.post('/', async (c) => {
 
   // 创建 run（不绑定对话；RunStream 需要 conversationId 但重写不固化消息）
   const run = createRun({ projectId, agentId, skillId: skillId || '', stage: 'revision', conversationId: `rewrite_${Date.now()}` });
-  await db.insert(runsTable).values({ id: run.id, agent: agentId, status: 'running' });
+  await db.insert(runsTable).values({ id: run.id, agent: agentId, status: 'running', mode: 'rewrite' });
 
   // 启动 agent 子进程
   const { child } = launchAgent(def, composedPrompt, projectDir, [], model);
@@ -163,8 +163,7 @@ rewriteRouter.post('/', async (c) => {
       emitEvent(run, 'artifacts', { count: writtenPaths.size, paths: [...writtenPaths] });
     }
 
-    finishRun(run, code === 0 ? 'succeeded' : 'failed');
-
+    // 收尾顺序与主 runs.ts 对齐：'end' 事件最后发，前端收到时管道已完全收尾。
     if (writtenPaths.size > 0) {
       await syncFilesToDb(projectId, writtenPaths, projectDir).catch(() => {});
     }
@@ -176,8 +175,17 @@ rewriteRouter.post('/', async (c) => {
     await createSnapshot(projectDir, `Rewrite ${run.id.slice(0, 8)}: ${writtenPaths.size} files modified`).catch(() => {});
 
     await db.update(runsTable)
-      .set({ status: run.status, finishedAt: new Date() })
+      .set({ status: code === 0 ? 'succeeded' : 'failed', finishedAt: new Date() })
       .where(eq(runsTable.id, run.id)).execute();
+
+    // 固化事件流（重写不绑定对话，消息固化静默跳过；close 同时清理订阅者，
+    // 旧缺陷：从不 close → 订阅者内存泄漏 + 未 flush 事件丢失）。
+    await run.stream.close(transformStreamEvents, {
+      failed: code !== 0,
+      artifacts: writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null,
+    }).catch(() => {});
+
+    finishRun(run, code === 0 ? 'succeeded' : 'failed');
   });
 
   return c.json({ runId: run.id }, 201);

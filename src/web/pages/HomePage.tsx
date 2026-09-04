@@ -467,7 +467,7 @@ export default function HomePage() {
           <div className={deleteDialog} onClick={(e) => e.stopPropagation()}>
             <h3>删除「{deleteTarget.name}」</h3>
             <p className={deleteHint}>
-              仅移出列表：磁盘上的小说文件原样保留，之后可用「打开项目」重新导入。
+              仅移出列表：磁盘上的小说文件原样保留，之后可用「打开项目」重新导入；但该项目的全部对话记录会被删除且无法找回。
               删除文件：不可恢复，请确认已有备份。
             </p>
             <div className={actionRow}>

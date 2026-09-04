@@ -111,6 +111,7 @@ export default function StoryArcView({ projectId }: Props) {
   const [editText, setEditText] = useState('');
   const [filling, setFilling] = useState(false);
   const [fillProgress, setFillProgress] = useState('');
+  const [fillRunId, setFillRunId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<TimelineResponse>({
     queryKey: ['timeline', projectId],
@@ -124,6 +125,7 @@ export default function StoryArcView({ projectId }: Props) {
   async function handleFill() {
     setFilling(true);
     setFillProgress('启动中...');
+    setFillRunId(null);
     try {
       const res = await fetch(`/api/projects/${projectId}/fill`, { method: 'POST' });
       if (!res.body) throw new Error('no stream');
@@ -139,10 +141,15 @@ export default function StoryArcView({ projectId }: Props) {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const evt = JSON.parse(line.slice(6));
-          if (evt.type === 'plan') setFillProgress(`待填 ${evt.total} 章，跳过 ${evt.skipped} 章`);
+          if (evt.type === 'plan') {
+            setFillProgress(`待填 ${evt.total} 章，跳过 ${evt.skipped} 章`);
+            if (evt.runId) setFillRunId(evt.runId);
+          }
           else if (evt.type === 'progress') setFillProgress(`已填 ${evt.filled}/${evt.total}（当前第${evt.chapter}章）`);
           else if (evt.type === 'done') {
-            setFillProgress(`完成：填 ${evt.filled.length} 章，失败 ${evt.failed.length} 章`);
+            setFillProgress(evt.canceled
+              ? `已取消：填 ${evt.filled.length} 章，剩余 ${evt.remaining} 章未处理`
+              : `完成：填 ${evt.filled.length} 章，失败 ${evt.failed.length} 章`);
             queryClient.invalidateQueries({ queryKey: ['timeline', projectId] });
           }
         }
@@ -151,6 +158,17 @@ export default function StoryArcView({ projectId }: Props) {
       setFillProgress(`失败：${(e as Error)?.message}`);
     } finally {
       setFilling(false);
+      setFillRunId(null);
+    }
+  }
+
+  async function handleCancelFill() {
+    if (!fillRunId) return;
+    try {
+      await fetch(`/api/runs/${fillRunId}`, { method: 'DELETE' });
+      setFillProgress('正在取消…');
+    } catch {
+      setFillProgress('取消失败，请刷新页面重试');
     }
   }
 
@@ -176,6 +194,9 @@ export default function StoryArcView({ projectId }: Props) {
         <button className={fillBtn} onClick={handleFill} disabled={filling}>
           {filling ? '生成中...' : '✨ AI 批量生成交互'}
         </button>
+        {filling && (
+          <button className={editBtn} onClick={handleCancelFill} disabled={!fillRunId}>取消</button>
+        )}
         {fillProgress && <span className={progressText}>{fillProgress}</span>}
       </div>
       {data.timelines?.map((chunk, i) => (

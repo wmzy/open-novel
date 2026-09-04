@@ -7,6 +7,33 @@ import { summarizeDiff } from '../shared/diff-utils';
 const execFileAsync = promisify(execFile);
 
 /**
+ * 审阅/回滚等 git 结构性操作（checkout/commit/merge/reset）在进程内互斥。
+ *
+ * 这些操作会移动 HEAD / 改写索引，彼此并发或与「手改正文 30s 防抖快照」
+ * 并发会交错出错误提交（如把 draft 内容提交到 main）。防抖快照在
+ * scheduleManualSnapshot 中检查 isReviewOpInFlight 后跳过。
+ */
+const inflightGitOps = new Set<string>();
+
+/** 某项目目录是否有 git 结构操作在途（手改防抖快照应跳过）。 */
+export function isReviewOpInFlight(projectDir: string): boolean {
+  return inflightGitOps.has(projectDir);
+}
+
+/** 串行执行一次 git 结构操作；已在途时返回可读错误。 */
+async function runExclusiveGitOp<T>(projectDir: string, fn: () => Promise<T>): Promise<T> {
+  if (inflightGitOps.has(projectDir)) {
+    throw new Error('另一个审阅/版本操作正在进行，请稍候重试');
+  }
+  inflightGitOps.add(projectDir);
+  try {
+    return await fn();
+  } finally {
+    inflightGitOps.delete(projectDir);
+  }
+}
+
+/**
  * Initialize a git repository in the project directory if not already initialized.
  */
 export async function ensureGitInit(projectDir: string): Promise<void> {
@@ -160,6 +187,8 @@ export async function listSnapshots(projectDir: string, limit = 20): Promise<Sna
  * hash..HEAD 中 status=A 的路径（含快照之后的章节/设定文件）。
  */
 export async function restoreSnapshot(projectDir: string, commitHash: string): Promise<boolean> {
+  if (inflightGitOps.has(projectDir)) return false;
+  inflightGitOps.add(projectDir);
   try {
     await ensureGitInit(projectDir);
 
@@ -205,6 +234,8 @@ export async function restoreSnapshot(projectDir: string, commitHash: string): P
     return true;
   } catch {
     return false;
+  } finally {
+    inflightGitOps.delete(projectDir);
   }
 }
 
@@ -364,7 +395,8 @@ export async function reviewDiff(projectDir: string): Promise<ReviewResult> {
     await execFileAsync('git', ['commit', '-m', '[auto] review checkpoint'], { cwd: projectDir });
   }
 
-  // 2. commit 列表
+  // 2. commit 列表（过滤 merge commit：逐文件接受后自动合回 main 的同步 commit
+  //    无净变化，混入待审阅列表会污染 badge 计数与用户认知）
   const { stdout: revOut } = await execFileAsync('git', [
     'rev-list', 'main..draft', '--format=%H|%s|%ai', '--no-color',
   ], { cwd: projectDir });
@@ -373,7 +405,8 @@ export async function reviewDiff(projectDir: string): Promise<ReviewResult> {
     .map((line) => {
       const [hash, message, date] = line.split('|');
       return { hash, message, date };
-    });
+    })
+    .filter((c) => !/^Merge branch/i.test(c.message));
 
   if (commits.length === 0) {
     return { commits: [], files: [], totalAdded: 0, totalRemoved: 0 };
@@ -447,11 +480,16 @@ export interface MergeResult {
  * 破坏镜像不变量且用户无感知；改为显式失败，由用户选择逐文件接受/丢弃。
  */
 export async function mergeDraft(projectDir: string): Promise<MergeResult> {
+  if (inflightGitOps.has(projectDir)) {
+    return { success: false, fastForward: false, hash: null, error: '另一个审阅操作正在进行，请稍候重试' };
+  }
+  inflightGitOps.add(projectDir);
   try {
     await ensureDraftBranch(projectDir);
     await execFileAsync('git', ['checkout', 'main'], { cwd: projectDir });
 
-    // 检测能否 ff（工作区未提交改动已由 reviewDiff checkpoint，理论干净）
+    // 检测能否 ff（工作区未提交改动已由 reviewDiff checkpoint，理论干净；
+    // 逐文件接受后已自动把 main 合回 draft，此处应始终可 ff——分叉属异常残留）
     let fastForward = true;
     try {
       await execFileAsync('git', ['merge', '--ff-only', 'draft'], { cwd: projectDir });
@@ -466,7 +504,7 @@ export async function mergeDraft(projectDir: string): Promise<MergeResult> {
           success: false,
           fastForward: false,
           hash: null,
-          error: 'main 与 draft 历史分叉，无法安全合并。请先逐文件接受/丢弃待审阅改动，或先执行「丢弃」重置 draft 到 main。',
+          error: '合并失败：主线与草稿的历史状态异常，无法自动合并。请先逐文件「接受/拒绝」处理剩余改动，全部处理完即视为合并完成；或执行「丢弃」重置草稿后重试。',
         };
       }
       throw err;
@@ -477,6 +515,8 @@ export async function mergeDraft(projectDir: string): Promise<MergeResult> {
     return { success: true, fastForward, hash: stdout.trim() };
   } catch {
     return { success: false, fastForward: false, hash: null, error: '合并失败：git 操作异常，请稍后重试' };
+  } finally {
+    inflightGitOps.delete(projectDir);
   }
 }
 
@@ -492,6 +532,8 @@ export interface DiscardResult {
  * 与 restoreSnapshot 的 pre-rollback safety 对齐。
  */
 export async function discardDraft(projectDir: string): Promise<DiscardResult> {
+  if (inflightGitOps.has(projectDir)) return { success: false };
+  inflightGitOps.add(projectDir);
   try {
     await ensureDraftBranch(projectDir);
     // 安全提交：把当前 draft 状态（含 working tree 改动）落成一个 commit。
@@ -502,6 +544,8 @@ export async function discardDraft(projectDir: string): Promise<DiscardResult> {
     return { success: true };
   } catch {
     return { success: false };
+  } finally {
+    inflightGitOps.delete(projectDir);
   }
 }
 
@@ -523,8 +567,18 @@ function isSafeRepoPath(filePath: string): boolean {
  */
 export async function acceptFileInReview(projectDir: string, filePath: string): Promise<FileReviewResult> {
   if (!isSafeRepoPath(filePath)) return { success: false, error: '非法文件路径' };
+  if (inflightGitOps.has(projectDir)) return { success: false, error: '另一个审阅操作正在进行，请稍候重试' };
+  inflightGitOps.add(projectDir);
   try {
     await ensureDraftBranch(projectDir);
+    // 待审阅校验：路径必须在 main..draft 的净差异中。旧缺陷：不在审阅列表中的
+    // 路径（前端传错/列表过期）会静默「成功」，用户以为已接受但什么都没发生。
+    const { stdout: diffName } = await execFileAsync('git', [
+      'diff', '--name-only', 'main..draft', '--', filePath,
+    ], { cwd: projectDir });
+    if (!diffName.trim()) {
+      return { success: false, error: `「${filePath}」不在待审阅改动中（可能已被处理或路径有误）` };
+    }
     await execFileAsync('git', ['checkout', 'main'], { cwd: projectDir });
     // 判断 draft 中该文件是否存在：不存在 = draft 删除了该文件，接受=从 main 同步删除
     let existsInDraft = false;
@@ -550,11 +604,32 @@ export async function acceptFileInReview(projectDir: string, filePath: string): 
       // 无变化（内容相同）也视为接受成功：无需提交
     }
     await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
+
+    // 接受在 main 上产生了 draft 历史外的 commit → main/draft 分叉 → 之后
+    // 「合并」的 ff-only merge 必然失败（逐文件接受与合并隐性互斥）。
+    // 此处把 main 合回 draft：main 成为 draft 的祖先，ff 不变量恢复，
+    // 混合使用「逐文件接受」与「合并」不再互相排斥。
+    // 分析：main 的新 commit 只含 draft 自身的文件版本，双方内容一致，merge 无冲突；
+    // 其余文件 main 未动、draft 领先，按 draft 取胜。冲突防御：abort 后回到 draft HEAD。
+    try {
+      await execFileAsync('git', ['merge', '--no-edit', 'main'], { cwd: projectDir });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!/up[ -]?to[ -]?date/i.test(msg)) {
+        await execFileAsync('git', ['merge', '--abort'], { cwd: projectDir }).catch(() => {});
+        await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: projectDir }).catch(() => {});
+        await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir }).catch(() => {});
+        return { success: false, error: `文件已接受，但草稿与主线同步失败（${msg}）。请重试或执行「丢弃」后重来` };
+      }
+      // Already up to date：main 无新 commit（如文件内容相同未提交），无需同步
+    }
     return { success: true };
   } catch (err: unknown) {
     await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir }).catch(() => {});
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, error: msg };
+  } finally {
+    inflightGitOps.delete(projectDir);
   }
 }
 
@@ -564,8 +639,17 @@ export async function acceptFileInReview(projectDir: string, filePath: string): 
  */
 export async function rejectFileInReview(projectDir: string, filePath: string): Promise<FileReviewResult> {
   if (!isSafeRepoPath(filePath)) return { success: false, error: '非法文件路径' };
+  if (inflightGitOps.has(projectDir)) return { success: false, error: '另一个审阅操作正在进行，请稍候重试' };
+  inflightGitOps.add(projectDir);
   try {
     await ensureDraftBranch(projectDir);
+    // 待审阅校验：与 accept 一致，拒绝不在净差异中的路径返回明确错误而非假成功
+    const { stdout: diffName } = await execFileAsync('git', [
+      'diff', '--name-only', 'main..draft', '--', filePath,
+    ], { cwd: projectDir });
+    if (!diffName.trim()) {
+      return { success: false, error: `「${filePath}」不在待审阅改动中（可能已被处理或路径有误）` };
+    }
     // 确保在 draft 分支
     await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
     try {
@@ -583,5 +667,7 @@ export async function rejectFileInReview(projectDir: string, filePath: string): 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { success: false, error: msg };
+  } finally {
+    inflightGitOps.delete(projectDir);
   }
 }

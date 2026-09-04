@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { RuntimeAgentDef } from './types';
 import { resolveAgentExecutable } from './executables';
+import { registerAgentChild } from './child-registry';
 
 export interface AgentProcess {
   child: ReturnType<typeof spawn>;
@@ -33,6 +34,9 @@ export function launchAgent(
     env,
     stdio: [useStdinPipe ? 'pipe' : 'ignore', 'pipe', 'pipe'],
   });
+
+  // 登记子进程：崩溃后成为孤儿的 agent CLI 由启动对账杀掉（见 child-registry）。
+  registerAgentChild(child, def.id);
 
   if (def.usesAcp) {
     // ACP: 不向 stdin write prompt；runAcpTurn 会经 JSON-RPC 发送

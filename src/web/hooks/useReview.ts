@@ -36,6 +36,10 @@ export function useReview(projectId: string) {
       return (await res.json()) as ReviewResult;
     },
     enabled: !!projectId,
+    // GET /review 会跑整套 git 命令并可能产生 checkpoint commit（有写副作用）：
+    // 窗口聚焦/重挂载不再触发高频重构，改动由 merge/discard/accept/reject 显式失效。
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const mergeMut = useMutation({

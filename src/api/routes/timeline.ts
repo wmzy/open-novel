@@ -10,7 +10,9 @@ import {
   type OutlineChapter,
 } from '../../shared/diagram-builders';
 import { getAgentDef } from '../../agent/registry';
-import { getActiveRunForProject } from '../../agent/run';
+import { createRun, finishRun, getActiveRunForProject } from '../../agent/run';
+import { createSnapshot } from '../../agent/snapshot';
+import { resolveProjectDir } from '../../shared/project-dir';
 import { launchAgent } from '../../agent/launch';
 import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
 import type { StreamEvent, RuntimeAgentDef } from '../../agent/types';
@@ -238,6 +240,17 @@ timelineRouter.post('/:id/fill', async (c) => {
     }
   }
 
+  // 预填注册为 run：进入项目串行锁（与其他写路径互斥）+ 支持取消（DELETE /runs/:id）。
+  // 旧缺陷：预填只在开头检查一次锁、自身不占锁——进行中可开新 run 并发写大纲卡片。
+  const run = createRun({
+    projectId,
+    agentId,
+    skillId: '',
+    stage: 'outline',
+    conversationId: `fill_${Date.now()}`,
+  });
+  run.status = 'running';
+
   return stream(c, async (streamWriter) => {
     c.header('Content-Type', 'text/event-stream');
     c.header('Cache-Control', 'no-cache, no-transform');
@@ -246,13 +259,18 @@ timelineRouter.post('/:id/fill', async (c) => {
 
     const filled: number[] = [];
     const failed: Array<{ chapter: number; message: string }> = [];
+    let canceled = false;
 
     const send = (obj: unknown) =>
       streamWriter.write(`data: ${JSON.stringify(obj)}\n\n`);
 
-    send({ type: 'plan', total: toFill.length, skipped: cards.length - toFill.length });
+    send({ type: 'plan', total: toFill.length, skipped: cards.length - toFill.length, runId: run.id });
 
     for (const item of toFill) {
+      if (run.cancelRequested) {
+        canceled = true;
+        break;
+      }
       const { card, chapter: ch } = item;
       try {
         const input: FillChapterInput = {
@@ -263,35 +281,81 @@ timelineRouter.post('/:id/fill', async (c) => {
           cast: ch.cast,
         };
         const prompt = buildFillPrompt(input);
-        const aiResponse = await callAgentOnce(def, prompt, novelDir);
-        const interaction = parseAiResponse(aiResponse);
+        const aiResponse = await callAgentOnce(def, prompt, novelDir, FILL_CHAPTER_TIMEOUT_MS, (child) => {
+          run.child = child;
+        });
 
-        if (interaction) {
-          const updated = replaceChapterInteraction(card.content, interaction);
-          if (updated) {
-            const chapterPath = path.join(novelDir, 'outline', 'chapters', `第${card.number}章.md`);
-            await writeFile(chapterPath, updated, 'utf-8');
-            card.content = updated; // 后续迭代用更新后的内容
+        if (run.cancelRequested) {
+          canceled = true;
+          break;
+        }
+        if (aiResponse) {
+          const interaction = parseAiResponse(aiResponse);
+          if (interaction) {
+            const updated = replaceChapterInteraction(card.content, interaction);
+            if (updated) {
+              const chapterPath = path.join(novelDir, 'outline', 'chapters', `第${card.number}章.md`);
+              await writeFile(chapterPath, updated, 'utf-8');
+              card.content = updated; // 后续迭代用更新后的内容
+            }
+            filled.push(ch.number);
+            send({ type: 'progress', chapter: ch.number, filled: filled.length, total: toFill.length });
+          } else {
+            failed.push({ chapter: ch.number, message: 'AI 输出无法解析' });
           }
-          filled.push(ch.number);
-          send({ type: 'progress', chapter: ch.number, filled: filled.length, total: toFill.length });
-        } else {
-          failed.push({ chapter: ch.number, message: 'AI 输出无法解析' });
         }
       } catch (e) {
         failed.push({ chapter: ch.number, message: (e as Error)?.message || 'unknown error' });
       }
     }
 
-    send({ type: 'done', filled, failed });
+    // 结束快照：批量写卡进版本库（含部分完成/取消时的已写卡片），
+    // 不再等下一次 run 才被 git 捕获。
+    try {
+      const projectDir = await resolveProjectDir(projectId);
+      await createSnapshot(
+        projectDir,
+        `timeline fill: ${filled.length} filled, ${failed.length} failed${canceled ? ', canceled' : ''}`,
+      );
+    } catch { /* 快照失败不阻断预填结果 */ }
+
+    finishRun(run, canceled ? 'canceled' : 'succeeded');
+    send({ type: 'done', filled, failed, canceled, remaining: toFill.length - filled.length - failed.length });
   });
 });
 
-/** 单次调 AI 取文本响应（同步等完）。复用 launchAgent + stream 解析。 */
-async function callAgentOnce(def: RuntimeAgentDef, prompt: string, cwd: string): Promise<string> {
+/** 单章预填的 agent 调用超时：逐章 spawn 无超时会因单个挂死子进程让整条 SSE 永挂。 */
+const FILL_CHAPTER_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** 单次调 AI 取文本响应（同步等完）。复用 launchAgent + stream 解析。
+ * timeoutMs 到期杀掉子进程并拒绝；onChild 回调用于把子进程挂到 run 上（取消时杀掉当前章）。 */
+async function callAgentOnce(
+  def: RuntimeAgentDef,
+  prompt: string,
+  cwd: string,
+  timeoutMs = FILL_CHAPTER_TIMEOUT_MS,
+  onChild?: (child: ReturnType<typeof launchAgent>['child']) => void,
+): Promise<string> {
   const { child } = launchAgent(def, prompt, cwd, [], undefined);
+  onChild?.(child);
   return new Promise((resolve, reject) => {
     let output = '';
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* 已退出 */
+      }
+      finish(() => reject(new Error('AI 调用超时，已中止当前章节')));
+    }, timeoutMs);
+    timer.unref?.();
     const onEvent = (event: StreamEvent) => {
       if (event.type === 'text_delta') output += String(event.delta || '');
     };
@@ -305,10 +369,10 @@ async function callAgentOnce(def: RuntimeAgentDef, prompt: string, cwd: string):
     child.stderr?.on('data', () => {});
     child.on('close', (code) => {
       handler.flush();
-      if (code === 0) resolve(output);
-      else reject(new Error(`agent exited with code ${code}`));
+      if (code === 0) finish(() => resolve(output));
+      else finish(() => reject(new Error('AI 调用失败，agent 异常退出')));
     });
-    child.on('error', (e) => reject(e));
+    child.on('error', (e) => finish(() => reject(new Error(`AI 调用失败：${e.message}`))));
   });
 }
 

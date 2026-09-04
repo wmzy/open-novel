@@ -3,13 +3,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { eq, and } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
-import { chapters } from '../../db/schema';
+import { chapters, projects } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { resolveNovelDir } from '../../shared/project-dir';
 import { parseChapterNumber } from '../../shared/chapter-names';
 import { getActiveRunForProject } from '../../agent/run';
 import { parseForeshadowFile, serializeForeshadows } from '../../shared/foreshadow';
-import { createSnapshot } from '../../agent/snapshot';
+import { readChapterStatuses, setChapterStatus, removeChapterStatus, shiftChapterStatuses } from '../../shared/chapter-status';
+import { createSnapshot, isReviewOpInFlight } from '../../agent/snapshot';
 
 /** 章节状态枚举：草稿 / 审阅中 / 已修订 / 已定稿。 */
 export const CHAPTER_STATUSES = ['draft', 'review', 'revised', 'finalized'] as const;
@@ -20,12 +21,18 @@ export type ChapterStatus = (typeof CHAPTER_STATUSES)[number];
 const MANUAL_SNAPSHOT_DEBOUNCE_MS = 30_000;
 const manualSnapshotTimers = new Map<string, NodeJS.Timeout>();
 
-/** 手改正文落盘后调度一次防抖快照（每项目独立计时，多次保存合并）。 */
+/** 手改正文落盘后调度一次防抖快照（每项目独立计时，多次保存合并）。
+ * 执行时跳过两类并发场景：
+ * 1. 项目有活跃 run（agent 正在写盘，半成品不应被快照捕获）；
+ * 2. 审阅/回滚等 git 结构操作在途（checkout 会移动 HEAD，此时 commit 会把
+ *    draft 内容错提交到 main——防抖窗口 30s 恰好覆盖「保存后立即去审阅」的操作链）。 */
 function scheduleManualSnapshot(projectId: string, projectDir: string, chapterNum: number): void {
   const existing = manualSnapshotTimers.get(projectId);
   if (existing) clearTimeout(existing);
   const timer = setTimeout(() => {
     manualSnapshotTimers.delete(projectId);
+    if (getActiveRunForProject(projectId)) return; // 下次 run 结束快照会兜底捕获
+    if (isReviewOpInFlight(projectDir)) return;    // 审阅/回滚操作在途，避免交错 commit
     void createSnapshot(projectDir, `manual edit chapter ${chapterNum}`).catch(() => {});
   }, MANUAL_SNAPSHOT_DEBOUNCE_MS);
   timer.unref?.();
@@ -117,6 +124,9 @@ export async function resyncChaptersFromDisk(projectId: string, opts?: { force?:
     .where(eq(chapters.projectId, projectId));
   const existingByNum = new Map(existing.map((row) => [row.number, row]));
 
+  // 章节状态落盘文件（.novel/chapter-status.json）：DB 行缺失/重建时从磁盘恢复用户状态。
+  const statuses = await readChapterStatuses(novelDir).catch(() => new Map<number, string>());
+
   // 删除 DB 有而磁盘无的行
   for (const row of existing) {
     if (!diskChapters.has(row.number)) {
@@ -136,13 +146,23 @@ export async function resyncChaptersFromDisk(projectId: string, opts?: { force?:
         number: num,
         title: meta.title,
         wordCount: meta.wordCount,
-        status: 'draft',
+        status: statuses.get(num) ?? 'draft',
       }).catch(() => {});
-    } else if (row.wordCount !== meta.wordCount || (row.title ?? '') !== meta.title) {
-      await db.update(chapters)
-        .set({ wordCount: meta.wordCount, title: meta.title, updatedAt: new Date() })
-        .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
-        .catch(() => {});
+    } else {
+      // 状态文件为状态事实源：与 DB 不一致时以文件为准（DB 恢复旧备份后回填）。
+      const fileStatus = statuses.get(num);
+      const needsStatusSync = fileStatus !== undefined && fileStatus !== row.status;
+      if (row.wordCount !== meta.wordCount || (row.title ?? '') !== meta.title || needsStatusSync) {
+        await db.update(chapters)
+          .set({
+            wordCount: meta.wordCount,
+            title: meta.title,
+            ...(needsStatusSync ? { status: fileStatus } : {}),
+            updatedAt: new Date(),
+          })
+          .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
+          .catch(() => {});
+      }
     }
   }
 }
@@ -318,6 +338,26 @@ chaptersRouter.post('/', async (c) => {
     }, 409);
   }
 
+  // 章号范围校验：防止误输入造成大纲/正文永久错位（如误建第 999 章）。
+  // 规则：1 ≤ number ≤ max(计划章节数, 现有最大章号 + 1)——计划章节数内允许
+  // 乱序创建（作者跳章写作是合法场景，空洞可经删除+重编号修复）；
+  // 超过计划章节数的离群值（手滑多打一位）直接拒绝。
+  const existingAll = await db.select().from(chapters)
+    .where(eq(chapters.projectId, projectId));
+  const maxNum = existingAll.reduce((m, row) => Math.max(m, row.number), 0);
+  let plannedCount = 0;
+  try {
+    const [proj] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+    plannedCount = proj?.chapterCount ?? 0;
+  } catch { /* DB 不可用时不阻断创建 */ }
+  const maxAllowed = Math.max(plannedCount, maxNum + 1);
+  if (!Number.isInteger(body.number) || body.number < 1 || body.number > maxAllowed) {
+    return c.json({
+      error: 'invalid-chapter-number',
+      message: `章号超出范围：项目计划 ${plannedCount} 章（当前最大章号 ${maxNum}），无法创建第 ${body.number} 章`,
+    }, 400);
+  }
+
   // Check for duplicate
   const existing = await db.select().from(chapters)
     .where(and(eq(chapters.projectId, projectId), eq(chapters.number, body.number)))
@@ -346,6 +386,8 @@ chaptersRouter.post('/', async (c) => {
     } catch {
       await fs.writeFile(filePath, `# ${chapter.title}\n`, 'utf-8');
     }
+    // 状态落盘（draft 也记录，保证状态文件与 DB 一致）
+    await setChapterStatus(novelDir, body.number, body.status || 'draft');
   } catch { /* 项目目录不可用时忽略 */ }
 
   return c.json({ chapter }, 201);
@@ -383,10 +425,12 @@ chaptersRouter.patch('/:num', async (c) => {
   const dbUpdates: Record<string, unknown> = { updatedAt: new Date() };
   if (typeof body.title === 'string') dbUpdates.title = body.title;
   if (typeof body.wordCount === 'number') dbUpdates.wordCount = body.wordCount;
+  let statusPersisted: string | null = null;
   if (typeof body.status === 'string') {
     // 校验 status 取值，非法值忽略
     if ((CHAPTER_STATUSES as readonly string[]).includes(body.status)) {
       dbUpdates.status = body.status;
+      statusPersisted = body.status;
     }
   }
 
@@ -395,6 +439,14 @@ chaptersRouter.patch('/:num', async (c) => {
     .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
     .returning();
   if (!updated) return c.json({ error: 'Not found' }, 404);
+
+  // 状态落盘：DB 备份恢复后从文件回填用户工作流状态（文件是状态事实源）
+  if (statusPersisted !== null) {
+    try {
+      const novelDir = await resolveNovelDir(projectId);
+      await setChapterStatus(novelDir, num, statusPersisted as (typeof CHAPTER_STATUSES)[number]);
+    } catch { /* 项目目录不可用时忽略，DB 仍为当前事实 */ }
+  }
 
   // 返回时附加最新正文
   let content = '';
@@ -489,6 +541,43 @@ chaptersRouter.delete('/:num', async (c) => {
         await fs.writeFile(fp, serializeForeshadows(parsed.foreshadows), 'utf-8');
       }
     } catch { /* 无伏笔文件或解析失败，忽略 */ }
+
+    // 状态文件同步：删除本行；重编号时 > num 的章号前移一位
+    try {
+      if (renumber) {
+        await shiftChapterStatuses(novelDir, num);
+      } else {
+        await removeChapterStatus(novelDir, num);
+      }
+    } catch { /* 状态文件缺失/损坏，忽略 */ }
+
+    // state.json.lastUpdatedChapter 一致性：删除章（含重编号平移）后章号语义已变。
+    // 旧缺陷：重编号只平移伏笔引用，lastUpdatedChapter 仍指向移位前的章号。
+    try {
+      const statePath = path.join(novelDir, 'state.json');
+      const state = JSON.parse(await fs.readFile(statePath, 'utf-8')) as { lastUpdatedChapter?: unknown };
+      if (typeof state.lastUpdatedChapter === 'number' && Number.isFinite(state.lastUpdatedChapter)) {
+        const cur = state.lastUpdatedChapter;
+        if (cur === num) {
+          // 被删章节是最后更新章：回退到剩余章节的最大章号。
+          // 此块在重编号重命名前执行：读到的仍是旧章号，renumber 时 > num 的章号
+          // 即将前移一位，故预减一位得到重命名后的真实最大章号。
+          let maxChapter = 0;
+          try {
+            const chaptersDir = path.join(novelDir, 'chapters');
+            const after = await fs.readdir(chaptersDir);
+            for (const f of after) {
+              const n = parseChapterNumber(f);
+              if (n !== null && n > maxChapter) maxChapter = n;
+            }
+          } catch { /* 目录不可读，保持 0 */ }
+          state.lastUpdatedChapter = renumber && maxChapter > num ? maxChapter - 1 : maxChapter;
+        } else if (renumber && cur > num) {
+          state.lastUpdatedChapter = cur - 1;
+        }
+        await fs.writeFile(statePath, JSON.stringify(state, null, 2), 'utf-8');
+      }
+    } catch { /* state.json 缺失/损坏：ensureContextArtifacts 会兜底重建 */ }
 
     // 重编号：后续章节（正文/摘要/大纲卡片）章号前移一位，降序处理避免覆盖冲突
     if (renumber) {

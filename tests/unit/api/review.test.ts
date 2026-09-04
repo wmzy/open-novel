@@ -104,6 +104,37 @@ describe('review API', () => {
     expect(paths).not.toContain('ch1.md');
   });
 
+  it('POST /review/files/accept 后仍可整体合并（逐文件接受与合并不再互斥）', async () => {
+    await fs.writeFile(path.join(tempDir, 'ch1.md'), '第一章\n');
+    await fs.writeFile(path.join(tempDir, 'ch2.md'), '第二章\n');
+    await createSnapshot(tempDir, '写两章');
+
+    // 先逐文件接受 ch1：main 上产生 draft 历史外的 commit（历史分叉场景）
+    const acceptRes = await apiApp.request(`/api/projects/${projectId}/review/files/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'ch1.md' }),
+    });
+    expect(acceptRes.status).toBe(200);
+
+    // 旧缺陷：此时「合并」因 main/draft 分叉必失败。修复后 main 已合回 draft，
+    // ff 不变量恢复——合并剩余改动应当成功。
+    const mergeRes = await apiApp.request(`/api/projects/${projectId}/review/merge`, {
+      method: 'POST',
+    });
+    expect(mergeRes.status).toBe(200);
+    const mergeData = await mergeRes.json();
+    expect(mergeData.success).toBe(true);
+    expect(mergeData.fastForward).toBe(true);
+
+    // 合并后无待审阅改动，且 ch2 已进入 main
+    const after = await apiApp.request(`/api/projects/${projectId}/review`);
+    const afterData = await after.json();
+    expect(afterData.commits).toHaveLength(0);
+    const { stdout } = await execFileAsync('git', ['show', 'main:ch2.md'], { cwd: tempDir });
+    expect(stdout).toBe('第二章\n');
+  });
+
   it('POST /review/files/reject 拒绝单个文件（draft 还原为 main 版本）', async () => {
     await fs.writeFile(path.join(tempDir, 'ch1.md'), '第一章\n');
     await createSnapshot(tempDir, '写第一章');
@@ -140,6 +171,21 @@ describe('review API', () => {
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(400);
+  });
+
+  it('POST /review/files/accept 不在待审阅列表中的路径返回明确错误（防假成功）', async () => {
+    await fs.writeFile(path.join(tempDir, 'ch1.md'), '第一章\n');
+    await createSnapshot(tempDir, '写第一章');
+
+    // ch2.md 不在待审阅改动中：旧缺陷会静默返回成功，用户以为已接受
+    const res = await apiApp.request(`/api/projects/${projectId}/review/files/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'ch2.md' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toContain('不在待审阅改动中');
   });
 
   it('项目不存在时返回 404', async () => {

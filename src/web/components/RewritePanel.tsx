@@ -247,7 +247,12 @@ export default function RewritePanel({ projectId, chapterNum, agentId = 'claude'
     if (chapter?.content !== undefined) setContent(chapter.content);
   }, [chapter?.content]);
 
-  const { result, isRunning, status, error, startRewrite, cancel, reset } = useRewrite();
+  const { result, isRunning, status, error, startRewrite, resumeRewrite, cancel, reset } = useRewrite();
+
+  // 刷新/切换视图后恢复上次重写（进行中=重连事件流，已完成=重放还原结果）
+  useEffect(() => {
+    void resumeRewrite(projectId, chapterNum);
+  }, [projectId, chapterNum, resumeRewrite]);
 
   // 监听 textarea 选区变化
   const handleSelect = useCallback(() => {

@@ -5,6 +5,10 @@
 export const config = {
   // Server
   port: parseInt(process.env.PORT || '3006', 10),
+  // TODO(security): 当前无任何认证，HOST 默认 0.0.0.0 意味着局域网内任意主机可
+  // 读写全部项目文件、触发 AI 调用（消耗 API 额度）、删除项目/恢复备份。
+  // 产品上线前必须加访问控制（认证或默认绑定 127.0.0.1）；本地单机使用期间
+  // 建议显式设置 HOST=127.0.0.1。
   host: process.env.HOST || '0.0.0.0',
 
   // Agent paths

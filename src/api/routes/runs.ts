@@ -1201,50 +1201,67 @@ runsRouter.get('/conversations/:id/stream', async (c) => {
 runsRouter.post('/:id/retry', async (c) => {
   const runId = c.req.param('id');
   const run = getRun(runId);
-  if (!run) return c.json({ error: 'Run not found' }, 404);
-  if (run.status !== 'failed' && run.status !== 'canceled') return c.json({ error: 'Only failed/canceled runs can be retried' }, 400);
+
+  // DB 行是持久事实：内存 miss（服务重启 / 30 分钟回收）也要能重建重试上下文，
+  // 否则「异常中断可重试继续」的承诺在重启后落空（旧缺陷：getRun 404）。
+  const [runRecord] = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
+  if (!run && !runRecord) return c.json({ error: 'Run not found' }, 404);
+
+  const status = run ? run.status : runRecord!.status;
+  if (status !== 'failed' && status !== 'canceled') return c.json({ error: 'Only failed/canceled runs can be retried' }, 400);
 
   // Get the conversation and original message
-  const [runRecord] = await db.select().from(runsTable).where(eq(runsTable.id, runId)).limit(1);
-  if (!runRecord?.conversationId) return c.json({ error: 'No conversation found' }, 404);
+  const convId = runRecord?.conversationId ?? null;
+  if (!convId) return c.json({ error: 'No conversation found' }, 404);
 
-  const lastUserMsg = await db.select().from(messages)
-    .where(eq(messages.conversationId, runRecord.conversationId))
+  const allMsgs = await db.select().from(messages)
+    .where(eq(messages.conversationId, convId))
     .orderBy(messages.createdAt);
 
-  const userMessage = lastUserMsg.filter((m) => m.role === 'user').pop();
+  const userMessage = allMsgs.filter((m) => m.role === 'user').pop();
   if (!userMessage) return c.json({ error: 'No user message to retry' }, 400);
 
-  // 异常中断恢复：上一轮 run 状态为 failed/canceled，视为异常中断。
-  // 从 history 中提取上一轮的 user message 和 assistant content，构造 interruptedResume。
-  // 前端收到后，在用户"继续"时将该对象回传给 POST /，注入中断现场。
-  let interruptedResume: { userMessage: string; assistantContent: string; reason: string } | undefined;
-  if (run.status === 'failed' || run.status === 'canceled') {
-    const assistantMsg = lastUserMsg.filter((m) => m.role === 'assistant').pop();
-    const reason =
-      run.cancelReason === 'ask-timeout'
+  // 异常中断恢复：从 history 中提取上一轮的 user message 和 assistant content，
+  // 构造 interruptedResume。前端收到后，在用户"继续"时将该对象回传给 POST /，注入中断现场。
+  // 内存 miss（重启后）无法精确判定中断原因，给出如实的产品化说明。
+  const assistantMsg = allMsgs.filter((m) => m.role === 'assistant').pop();
+  const reason =
+    !run
+      ? '服务曾重启，任务被中断（已写入的文件保留，可继续）'
+      : run.cancelReason === 'ask-timeout'
         ? '提问长时间无人回答，任务自动结束（已写入的文件保留）'
         : 'agent 进程异常退出（exit code != 0，可能因 timeout、watchdog 或 crash 中断）';
-    interruptedResume = {
-      userMessage: userMessage.content,
-      assistantContent: assistantMsg?.content ?? '',
-      reason,
-    };
-  }
+  const interruptedResume = {
+    userMessage: userMessage.content,
+    assistantContent: assistantMsg?.content ?? '',
+    reason,
+  };
 
-  // 过期提问的暂存答案：用户回答时任务已结束，答案保留在 run 会话中，
-  // 随 retry 响应回传，前端"继续"时可注入中断现场。
-  const lateAnswers = [...run._lateAnswers.entries()].map(([askId, ans]) => ({
-    askId,
-    action: ans.action,
-    content: ans.content,
-  }));
+  // 过期提问的暂存答案：仅内存中存在（重启后丢失），随 retry 响应回传。
+  const lateAnswers = run
+    ? [...run._lateAnswers.entries()].map(([askId, ans]) => ({
+        askId,
+        action: ans.action,
+        content: ans.content,
+      }))
+    : [];
+
+  // 内存 miss（重启后）无法读取 run.stage（runs 表无此列）：
+  // 回退到会话所属项目的 currentStage，与「继续」时的默认阶段一致。
+  let stage = run?.stage ?? 'writing';
+  if (!run) {
+    const [convRow] = await db.select().from(conversations).where(eq(conversations.id, convId)).limit(1);
+    if (convRow) {
+      const [projRow] = await db.select().from(projects).where(eq(projects.id, convRow.projectId)).limit(1);
+      stage = projRow?.currentStage ?? 'writing';
+    }
+  }
 
   // Return info needed to retry
   return c.json({
-    conversationId: runRecord.conversationId,
-    agentId: run.agentId,
-    stage: run.stage,
+    conversationId: convId,
+    agentId: runRecord!.agent,
+    stage,
     message: userMessage.content,
     interruptedResume,
     lateAnswers,
