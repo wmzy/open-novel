@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
-import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
@@ -22,8 +22,10 @@ import {
 } from '../../shared/template-generator';
 import { splitMarkdownToCards, buildIndexMarkdown, DOC_DIR } from '../../shared/split-document';
 import type { DocType } from '../../shared/split-document';
+import { STAGES } from '../../shared/stages';
 import timelineRouter from './timeline';
 import documentsRouter from './documents';
+import { resyncChaptersFromDisk } from './chapters';
 
 const projectsRouter = new Hono();
 
@@ -51,6 +53,14 @@ projectsRouter.post('/', async (c) => {
   const sensitive = ['/etc', '/proc', '/sys', '/dev', '/boot', '/usr', '/bin', '/sbin', '/lib'];
   if (sensitive.some((p) => userPath === p || userPath.startsWith(p + '/'))) {
     return c.json({ error: '不允许在系统目录下创建项目' }, 400);
+  }
+  // 目录已是 open-novel 项目（存在 .novel/）：引导用户走「打开项目」，
+  // 避免两条项目记录指向同一目录（删除其中一个会互相污染）。
+  if (existsSync(path.join(userPath, '.novel'))) {
+    return c.json({
+      error: 'workspace-exists',
+      message: '该目录已是 open-novel 项目（存在 .novel/ 结构），请使用「打开项目」导入',
+    }, 409);
   }
   mkdirSync(userPath, { recursive: true });
   const [project] = await db.insert(projects).values({
@@ -169,20 +179,26 @@ projectsRouter.post('/:id/import-source', async (c) => {
     return c.json({ error: '未检测到有效文本' }, 400);
   }
 
-  // 写标准化章节文件
+  // 写标准化章节文件（与已有章节冲突时先备份为 .bak，再覆盖）
   mkdirSync(path.join(novelDir, 'chapters'), { recursive: true });
+  const conflicts: number[] = [];
   for (const ch of chapters) {
     const header = ch.title && ch.title !== `第${ch.number}章`
       ? `# 第${ch.number}章 ${ch.title}`
       : `# 第${ch.number}章`;
-    writeFileSync(
-      path.join(novelDir, 'chapters', `第${ch.number}章.md`),
-      `${header}\n\n${ch.content}`,
-    );
+    const chapterPath = path.join(novelDir, 'chapters', `第${ch.number}章.md`);
+    if (existsSync(chapterPath)) {
+      copyFileSync(chapterPath, `${chapterPath}.bak`);
+      conflicts.push(ch.number);
+    }
+    writeFileSync(chapterPath, `${header}\n\n${ch.content}`);
   }
 
-  // 更新 config.json
+  // 更新 config.json（覆盖前备份）
   const configPath = path.join(novelDir, 'config.json');
+  if (existsSync(configPath)) {
+    copyFileSync(configPath, `${configPath}.bak`);
+  }
   let config: Record<string, unknown> = {};
   try {
     config = JSON.parse(readFileSync(configPath, 'utf-8'));
@@ -196,7 +212,10 @@ projectsRouter.post('/:id/import-source', async (c) => {
     .set({ chapterCount: chapters.length, targetWords: chapters.length * 5000 })
     .where(eq(projects.id, id));
 
-  return c.json({ chapterCount: chapters.length }, 200);
+  // 同步 chapters 表：导入的章节立即可见于写作视图与样章门（磁盘为事实源）
+  await resyncChaptersFromDisk(id).catch(() => {});
+
+  return c.json({ chapterCount: chapters.length, conflicts }, 200);
 });
 
 /** 收集目录下所有 .txt/.md 文件的 { name, content }。 */
@@ -226,7 +245,14 @@ projectsRouter.patch('/:id', async (c) => {
   if (body.chapterCount !== undefined) allowed.chapterCount = body.chapterCount;
   if (body.theme !== undefined) allowed.theme = body.theme;
   if (body.perspective !== undefined) allowed.perspective = body.perspective;
-  if (body.currentStage !== undefined) allowed.currentStage = body.currentStage;
+  if (body.currentStage !== undefined) {
+    // 枚举校验：只接受 7 个主阶段之一，防止 agent/前端写入非法阶段值
+    const valid = STAGES.map((s) => s.id);
+    if (typeof body.currentStage !== 'string' || !valid.includes(body.currentStage)) {
+      return c.json({ error: `currentStage 必须是 ${valid.join('/')} 之一` }, 400);
+    }
+    allowed.currentStage = body.currentStage;
+  }
   allowed.updatedAt = new Date();
 
   const [updated] = await db.update(projects)
@@ -243,8 +269,27 @@ projectsRouter.patch('/:id', async (c) => {
 
 projectsRouter.delete('/:id', async (c) => {
   const id = c.req.param('id');
+  const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
+  if (!project) return c.json({ error: 'Not found' }, 404);
+
+  // removeFiles=true：连同磁盘上的小说目录一起删除（用户显式确认的不可恢复操作）。
+  // 默认仅移出列表——文件保留在磁盘，避免「以为删了数据」的隐私/清理预期落空。
+  const removeFiles = c.req.query('removeFiles') === 'true';
+  if (removeFiles) {
+    const userPath = path.resolve(project.path);
+    const sensitive = ['/etc', '/proc', '/sys', '/dev', '/boot', '/usr', '/bin', '/sbin', '/lib'];
+    if (sensitive.some((p) => userPath === p || userPath.startsWith(p + '/'))) {
+      return c.json({ error: '拒绝删除系统目录下的项目文件' }, 400);
+    }
+    try {
+      rmSync(userPath, { recursive: true, force: true });
+    } catch {
+      return c.json({ error: '磁盘文件删除失败，项目记录未移除' }, 500);
+    }
+  }
+
   await db.delete(projects).where(eq(projects.id, id));
-  return c.json({ ok: true });
+  return c.json({ ok: true, removedFiles: removeFiles });
 });
 
 projectsRouter.post('/:id/init', async (c) => {

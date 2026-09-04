@@ -1,7 +1,14 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { css } from '@linaria/core';
 import { reviseBtn } from './viewShared';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
+
+const STATUS_OPTIONS: Array<[string, string]> = [
+  ['draft', '草稿'],
+  ['review', '审阅中'],
+  ['revised', '已修订'],
+  ['finalized', '已定稿'],
+];
 
 interface ChapterRow {
   id: string;
@@ -71,14 +78,16 @@ const chapterMeta = css`
   color: var(--haze-color-text-secondary);
 `;
 
-const statusBadge = css`
-  display: inline-block;
-  padding: 0.125rem 0.5rem;
-  border-radius: 4px;
-  font-size: 0.7rem;
+const statusSelect = css`
   margin-left: 0.5rem;
-  background: var(--haze-color-bg-secondary);
-  color: var(--haze-color-text-secondary);
+  padding: 0.125rem 0.25rem;
+  font-size: 0.7rem;
+  border-radius: 4px;
+  border: 1px solid var(--haze-color-border);
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  cursor: pointer;
+  &:hover { background: var(--haze-color-bg-secondary); }
 `;
 
 const emptyHint = css`
@@ -124,13 +133,6 @@ const chapterActions = css`
   gap: 0.75rem;
 `;
 
-const statusLabels: Record<string, string> = {
-  draft: '草稿',
-  review: '审阅中',
-  revised: '已修订',
-  finalized: '已定稿',
-};
-
 export default function WritingView({
   projectId,
   onViewChange,
@@ -142,6 +144,22 @@ export default function WritingView({
   variant?: 'writing' | 'sample';
 }) {
   const revision = useFileRevision({ projectId, targetFile: '', stage: 'writing' });
+  const queryClient = useQueryClient();
+
+  /** 手动流转章节状态（草稿/审阅中/已修订/已定稿）。 */
+  const updateStatus = async (num: number, status: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/chapters/${num}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      queryClient.invalidateQueries({ queryKey: ['chapters', projectId] });
+    } catch {
+      // 状态更新失败静默回滚下拉值（查询缓存未变，重渲染即恢复）
+    }
+  };
   const { data: chapters } = useQuery<ChapterRow[]>({
     queryKey: ['chapters', projectId],
     queryFn: async () => {
@@ -223,7 +241,17 @@ export default function WritingView({
           <div key={c.id} className={chapterCard} onClick={() => onViewChange(`chapter-${c.number}`)}>
             <span className={chapterTitle}>
               第 {c.number} 章 {c.title}
-              <span className={statusBadge}>{statusLabels[c.status] || c.status}</span>
+              <select
+                className={statusSelect}
+                value={c.status || 'draft'}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => void updateStatus(c.number, e.target.value)}
+                title="章节状态"
+              >
+                {STATUS_OPTIONS.map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
             </span>
             <span className={chapterActions}>
               <span className={chapterMeta}>{(c.wordCount || 0).toLocaleString()} 字</span>

@@ -48,11 +48,12 @@ interface Props {
   activeView: string;
   onViewChange: (view: string) => void;
   chapters: Array<{ number: number; title: string | null }>;
+  /** 项目技能 id：非 wuxia 项目隐藏「武侠」视图（类型专属视图不该全局可见）。 */
+  skillId?: string;
 }
 
-function Sidebar({ activeView, onViewChange, chapters }: Props) {
-
-  const views = ALL_VIEWS;
+function Sidebar({ activeView, onViewChange, chapters, skillId }: Props) {
+  const views = skillId === 'wuxia' ? ALL_VIEWS : ALL_VIEWS.filter((v) => v.id !== 'wuxia');
 
   return (
     <div className={sidebar} data-testid="sidebar">

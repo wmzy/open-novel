@@ -313,9 +313,38 @@ export function buildDeepenMessage(
 /**
  * 检测 critique 文件中是否包含"无实质改进"信号。
  * 调用方应统计连续出现次数——连续 2 次才真正饱和。
+ * 宽容匹配：忽略空白差异，只要正文出现「无实质改进」即视为命中。
  */
 export function detectNoImprovement(critiqueContent: string): boolean {
-  return critiqueContent.includes(NO_IMPROVEMENT_SIGNAL);
+  const normalized = critiqueContent.replace(/\s+/g, '');
+  return normalized.includes('无实质改进');
+}
+
+/**
+ * 提取 deepen-log.md 中全部维度评分行（按出现顺序），供停滞检测用。
+ * 匹配 "**维度评分变化**：" 或 "**维度评分**：" 开头的行。
+ */
+export function parseScoreLines(logContent: string): string[] {
+  const lines: string[] = [];
+  for (const line of logContent.split('\n')) {
+    const match = line.match(/\*\*维度评分(?:变化)?\*\*[：:]\s*(.+)/);
+    if (match) lines.push(match[1].trim());
+  }
+  return lines;
+}
+
+/**
+ * 评分停滞检测：最近两轮维度评分完全一致（无任何维度变动）。
+ * 与 NO_IMPROVEMENT_SIGNAL 语义等价，但不依赖 agent 逐字写出标记串——
+ * 评分行是每轮 Critique/Revise 的必写格式，措辞漂移不影响提取。
+ */
+export function detectScoreStagnation(logContent: string): boolean {
+  const lines = parseScoreLines(logContent);
+  if (lines.length < 2) return false;
+  const norm = (s: string) => s.replace(/\s+/g, '');
+  const last = lines[lines.length - 1];
+  const prev = lines[lines.length - 2];
+  return last.length > 0 && norm(last) === norm(prev);
 }
 
 /**

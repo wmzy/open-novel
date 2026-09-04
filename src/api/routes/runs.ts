@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
-import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun, resolveAsk } from '../../agent/run';
+import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun, resolveAsk, getActiveRunForProject } from '../../agent/run';
 import type { RunSession } from '../../agent/run';
 import { composePrompt } from '../../agent/prompt-composer';
 import { getAgentDef } from '../../agent/registry';
@@ -21,15 +21,22 @@ import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, projects, runs as runsTable, chapters } from '../../db/schema';
 import { generateId } from '../../utils/id';
-import { eq, desc, and, gt } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
+import { resyncChaptersFromDisk } from './chapters';
 
 // ===== 流层 watchdog 配置 =====
 /** 滑动窗口大小（字符数）。窗口内统计 2-gram 重复率。 */
 const WATCHDOG_WINDOW_SIZE = 2000;
 
 // ===== 样章门禁 =====
-/** 进入 writing 阶段前，chapters 表中 wordCount>0 的最少章节数（样章要求）。 */
+/** 进入 writing 阶段前，磁盘上 CJK 字数 ≥ 此值的正文章节最少数量（样章要求）。 */
 const SAMPLE_GATE_REQUIRED = 3;
+/** 样章门「有效正文」下限：只含标题的空壳文件不计入。 */
+const SAMPLE_GATE_MIN_CJK = 100;
+
+// ===== 普通聊天历史窗口 =====
+/** 非 deepen 续聊同样折叠中间消息（文件是跨轮状态层，历史只保留决策脉络）。 */
+const GENERAL_HISTORY_TRIM_THRESHOLD = 14;
 
 // ===== 写后质检门禁阈值 =====
 const QUALITY_REJECT_SCORE = 60;
@@ -53,6 +60,36 @@ function isChapterBody(p: string): number | null {
 /** 将 writtenPath 解析为绝对路径。 */
 function resolveWrittenPath(projectDir: string, p: string): string {
   return path.isAbsolute(p) ? p : path.join(projectDir, p);
+}
+
+/** 项目级串行锁冲突（launchAndTrack 二次检查命中）。 */
+class RunLockError extends Error {
+  constructor(public readonly runId: string) {
+    super('run-in-progress');
+  }
+}
+
+/** 统计磁盘上有有效正文的章节数（CJK 字数 ≥ SAMPLE_GATE_MIN_CJK）。 */
+async function countWrittenChaptersFromDisk(projectDir: string): Promise<number> {
+  const chaptersDir = path.join(projectDir, '.novel', 'chapters');
+  let files: string[];
+  try {
+    files = await readdir(chaptersDir);
+  } catch {
+    return 0;
+  }
+  let count = 0;
+  for (const f of files) {
+    const num = isChapterBody(f);
+    if (num === null) continue;
+    try {
+      const content = await readFile(path.join(chaptersDir, f), 'utf-8');
+      const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
+      const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+      if (cjk >= SAMPLE_GATE_MIN_CJK) count++;
+    } catch { /* skip unreadable */ }
+  }
+  return count;
 }
 
 /** 检测正文中是否出现章节编号引用（如「第15章」），排除首行标题。 */
@@ -82,6 +119,10 @@ async function qualityGateCheck(
     const degradation = detectDegradation(content, { excludeGrams });
     if (degradation.detected) {
       try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
+      // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节（wordCount 为退化文本）
+      await db.delete(chapters)
+        .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
+        .catch(() => {});
       emitEvent(run, 'agent', {
         type: 'quality-rejected',
         chapter: chapterNum,
@@ -98,6 +139,10 @@ async function qualityGateCheck(
     if (report.score >= QUALITY_REJECT_SCORE) {
       // 退化严重：归档为 .degraded.md，通知前端
       try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
+      // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节
+      await db.delete(chapters)
+        .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
+        .catch(() => {});
       emitEvent(run, 'agent', {
         type: 'quality-rejected',
         chapter: chapterNum,
@@ -243,18 +288,29 @@ runsRouter.post('/', async (c) => {
   // 提前解析 projectDir：trimHistory 需要读取 deepen-log.md
   const projectDir = await resolveProjectDir(projectId);
 
-  // 样章门禁：进入 writing 阶段前须完成 3 章样章（chapters 表中 wordCount>0 的章节数）。
+  // 项目级串行锁：同项目同时刻只允许一个 run——并行写 state.json/character-states.md
+  // 会互相污染（last-writer-wins）。前端也会禁用发送，此处是服务端兜底。
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目已有正在运行的写作任务，请等待完成后再开始新任务',
+      runId: activeRun.id,
+    }, 409);
+  }
+
+  // 样章门禁：进入 writing 阶段前须完成 3 章有效正文。
+  // 以磁盘为事实源（import-source 写盘不入库、退化归档改名、回滚都会让 DB 行失真）。
   // - stage==='sample' 放行（样章阶段本身就是写正文）
   // - 已有 ≥3 章正文的存量项目不受影响
   // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作）
   if (stage === 'writing' && body.force !== true) {
-    const written = await db.select({ id: chapters.id }).from(chapters)
-      .where(and(eq(chapters.projectId, projectId), gt(chapters.wordCount, 0)));
-    if (written.length < SAMPLE_GATE_REQUIRED) {
+    const written = await countWrittenChaptersFromDisk(projectDir);
+    if (written < SAMPLE_GATE_REQUIRED) {
       return c.json({
         error: 'sample-gate',
-        message: `需先完成样章阶段：writing 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written.length} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
-        completedSamples: written.length,
+        message: `需先完成样章阶段：writing 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
+        completedSamples: written,
         required: SAMPLE_GATE_REQUIRED,
       }, 409);
     }
@@ -286,6 +342,9 @@ runsRouter.post('/', async (c) => {
         if (trajectory) contextNote = `评分轨迹：${trajectory}`;
       } catch { /* deepen-log.md may not exist yet */ }
       history = trimHistory(history, 2, 6, contextNote);
+    } else if (history.length > GENERAL_HISTORY_TRIM_THRESHOLD) {
+      // 普通聊天同样限制上下文：文件是跨轮状态层，历史超长只会推高成本与退化风险
+      history = trimHistory(history, 2, 8);
     }
   } else {
     // Create new conversation
@@ -382,6 +441,12 @@ runsRouter.post('/', async (c) => {
   async function launchAndTrack(retryOf: string | null, existingRun?: RunSession): Promise<RunSession> {
   if (!def) throw new Error('Agent definition missing');
   // retry 复用同一 run/stream，前端 SSE 不断流、事件累积在同一流中
+  if (!existingRun) {
+    // 二次锁检查：composePrompt 是异步耗时路径，两个并发请求可能同时通过
+    // 早前检查——真正创建 run 前再验一次，保证串行性。
+    const active = getActiveRunForProject(projectId);
+    if (active) throw new RunLockError(active.id);
+  }
   const run = existingRun ?? createRun({ projectId, agentId, skillId, stage, conversationId: convId });
   run.status = 'running';
 
@@ -408,8 +473,28 @@ runsRouter.post('/', async (c) => {
 
   // Watchdog: cancel the run if the agent subprocess exceeds the configured timeout.
   // unref() so the timer never keeps the event loop (and process) alive.
-  const timeoutTimer = setTimeout(() => cancelRun(run), config.agent.timeoutMs);
-  timeoutTimer.unref();
+  // ask 挂起时暂停计时（用户思考时间不计入超时），回答后恢复。
+  let timeoutTimer: NodeJS.Timeout | null = null;
+  let timeoutRemaining = config.agent.timeoutMs;
+  let timeoutStartedAt = Date.now();
+  const armTimeout = () => {
+    timeoutTimer = setTimeout(() => cancelRun(run), timeoutRemaining);
+    timeoutTimer.unref?.();
+  };
+  const pauseTimeout = () => {
+    if (!timeoutTimer) return;
+    clearTimeout(timeoutTimer);
+    timeoutRemaining = Math.max(0, timeoutRemaining - (Date.now() - timeoutStartedAt));
+    timeoutTimer = null;
+  };
+  const resumeTimeout = () => {
+    if (timeoutTimer) return;
+    timeoutStartedAt = Date.now();
+    armTimeout();
+  };
+  armTimeout();
+  run._pauseTimeout = pauseTimeout;
+  run._resumeTimeout = resumeTimeout;
 
   // P2 缺陷5: 读取角色名生成 excludeGrams，避免聚焦章误报退化检测
   const characterState = await getStateTable(projectDir).catch(() => null);
@@ -436,6 +521,11 @@ runsRouter.post('/', async (c) => {
   let watchdogBuffer = '';
   let watchdogTriggered = false;
   const emitWithWatchdog = (event: StreamEvent) => {
+    // claude CLI 的 AskUserQuestion：子进程阻塞等待 stdin tool_result，
+    // 与 ACP registerAsk 同样属于「暂停等待用户输入」——暂停超时计时，回答后恢复。
+    if (event.type === 'tool_use' && event.name === 'AskUserQuestion') {
+      run._pauseTimeout?.();
+    }
     if (event.type === 'text_delta' && typeof event.delta === 'string') {
       if (watchdogTriggered) return;
       watchdogBuffer = (watchdogBuffer + event.delta).slice(-WATCHDOG_WINDOW_SIZE);
@@ -491,7 +581,7 @@ runsRouter.post('/', async (c) => {
   }
 
   child.on('error', (err) => {
-    clearTimeout(timeoutTimer);
+    if (timeoutTimer) clearTimeout(timeoutTimer);
     emitEvent(run, 'agent', { type: 'error', message: err.message });
     handler.flush();
     finishRun(run, 'failed');
@@ -499,7 +589,7 @@ runsRouter.post('/', async (c) => {
   });
 
   child.on('close', async (code) => {
-    clearTimeout(timeoutTimer);
+    if (timeoutTimer) clearTimeout(timeoutTimer);
     handler.flush();
 
     // ACP 模式：omp 常驻进程被 SIGTERM 终止，exit code 无意义。
@@ -622,8 +712,20 @@ runsRouter.post('/', async (c) => {
   return run;
   } // end launchAndTrack
 
-  // 启动首次尝试
-  const firstRun = await launchAndTrack(null);
+  // 启动首次尝试（二次锁检查命中时返回 409）
+  let firstRun: RunSession;
+  try {
+    firstRun = await launchAndTrack(null);
+  } catch (err) {
+    if (err instanceof RunLockError) {
+      return c.json({
+        error: 'run-in-progress',
+        message: '该项目已有正在运行的写作任务，请等待完成后再开始新任务',
+        runId: err.runId,
+      }, 409);
+    }
+    throw err;
+  }
   return c.json({ runId: firstRun.id, conversationId: convId }, 201);
 });
 
@@ -690,6 +792,8 @@ runsRouter.post('/:id/tool-result', async (c) => {
     });
     run.child.stdin.write(msg + '\n');
   }
+  // AskUserQuestion 已回答：恢复超时计时
+  run._resumeTimeout?.();
   return c.json({ ok: true });
 });
 
@@ -872,6 +976,9 @@ runsRouter.post('/projects/:projectId/rollback', async (c) => {
   const projectDir = await resolveProjectDir(projectId);
   const success = await restoreSnapshot(projectDir, body.commitHash);
   if (!success) return c.json({ error: 'Rollback failed' }, 500);
+
+  // 磁盘回滚后按磁盘重建 chapters 表：避免写作视图显示幽灵章节与过期字数
+  await resyncChaptersFromDisk(projectId).catch(() => {});
 
   return c.json({ ok: true });
 });

@@ -77,6 +77,12 @@ export type AskPrompt = {
   optionsMulti?: string[];
   /** 文本输入提示（kind='input' 时）。 */
   placeholder?: string;
+  /**
+   * claude CLI 的 AskUserQuestion 工具调用 id。
+   * 存在时回答走 POST /api/runs/:id/tool-result（stdin tool_result），
+   * 而不是 ACP 的 POST /api/runs/:id/ask/:askId。
+   */
+  toolUseId?: string;
 };
 
 /** Persisted agent events on messages (used by frontend) */

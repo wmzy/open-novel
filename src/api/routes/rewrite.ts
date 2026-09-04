@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
-import { createRun, emitEvent, finishRun, cancelRun } from '../../agent/run';
+import { createRun, emitEvent, finishRun, cancelRun, getActiveRunForProject } from '../../agent/run';
 import { composePrompt } from '../../agent/prompt-composer';
 import { getAgentDef } from '../../agent/registry';
 import { detectAgents } from '../../agent/detection';
@@ -58,6 +58,16 @@ rewriteRouter.post('/', async (c) => {
   const agents = await detectAgents();
   const detected = agents.find((a) => a.id === agentId);
   if (!detected?.available) return c.json({ error: 'Agent not available' }, 400);
+
+  // 项目级串行锁：重写与写作 run 同样不能并行（同写 state/章节文件）
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目已有正在运行的写作任务，请等待完成后再开始新任务',
+      runId: activeRun.id,
+    }, 409);
+  }
 
   // 组装局部重写 prompt（任务约定模板）
   const rewriteMessage =

@@ -44,11 +44,14 @@ async function readChapterContent(novelDir: string, num: number): Promise<string
 }
 
 /**
- * 扫描 .novel/chapters/ 目录，将磁盘上存在但 DB 缺失的章节补入。
- * 解决 DB 数据丢失（如 PGlite 重建）后写作视图为空的问题。
- * 文件系统是事实来源，DB 仅缓存元数据。
+ * 扫描 .novel/chapters/ 目录，将 chapters 表与磁盘全量对齐：
+ * - 磁盘有、DB 缺失的章节补入
+ * - 磁盘有、DB 已有的章节刷新 wordCount/title（不覆盖 status）
+ * - DB 有、磁盘缺失的章节删除（幽灵章节：退化归档改名/回滚/手动删除文件后 DB 滞留）
+ * 解决 DB 数据丢失（如 PGlite 重建）后写作视图为空的问题，
+ * 也解决回滚后 DB 与磁盘脱节的问题。文件系统是事实来源，DB 仅缓存元数据。
  */
-async function resyncChaptersFromDisk(projectId: string): Promise<void> {
+export async function resyncChaptersFromDisk(projectId: string): Promise<void> {
   const novelDir = await resolveNovelDir(projectId);
   const chaptersDir = path.join(novelDir, 'chapters');
   let files: string[];
@@ -56,17 +59,15 @@ async function resyncChaptersFromDisk(projectId: string): Promise<void> {
     files = await fs.readdir(chaptersDir);
   } catch { return; }
 
+  const diskChapters = new Map<number, { title: string; wordCount: number }>();
   for (const file of files) {
     if (!file.endsWith('.md') || file.endsWith('.summary.md')) continue;
-    const match = file.match(/(\d+)/);
+    // 只认正文章节命名；.degraded.md 归档文件不算正文
+    const cn = file.match(/^第(\d+)章\.md$/);
+    const en = file.match(/^chapter-(\d+)\.md$/i);
+    const match = cn ?? en;
     if (!match) continue;
     const num = parseInt(match[1], 10);
-
-    const [existing] = await db.select().from(chapters)
-      .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
-      .limit(1);
-    if (existing) continue;
-
     try {
       const content = await fs.readFile(path.join(chaptersDir, file), 'utf-8');
       const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
@@ -74,22 +75,61 @@ async function resyncChaptersFromDisk(projectId: string): Promise<void> {
       const wordCount = cjk > 0 ? cjk : stripped.split(/\s+/).filter(Boolean).length;
       const titleMatch = content.match(/^#\s+(.+)$/m);
       const title = titleMatch ? titleMatch[1].trim() : '';
+      diskChapters.set(num, { title, wordCount });
+    } catch { /* skip unreadable */ }
+  }
 
+  const existing = await db.select().from(chapters)
+    .where(eq(chapters.projectId, projectId));
+  const existingByNum = new Map(existing.map((row) => [row.number, row]));
+
+  // 删除 DB 有而磁盘无的行
+  for (const row of existing) {
+    if (!diskChapters.has(row.number)) {
+      await db.delete(chapters)
+        .where(and(eq(chapters.projectId, projectId), eq(chapters.number, row.number)))
+        .catch(() => {});
+    }
+  }
+
+  // 插入缺失 / 刷新已有
+  for (const [num, meta] of diskChapters) {
+    const row = existingByNum.get(num);
+    if (!row) {
       await db.insert(chapters).values({
         id: generateId('ch_'),
         projectId,
         number: num,
-        title,
-        wordCount,
+        title: meta.title,
+        wordCount: meta.wordCount,
         status: 'draft',
-      });
-    } catch { /* skip unreadable */ }
+      }).catch(() => {});
+    } else if (row.wordCount !== meta.wordCount || (row.title ?? '') !== meta.title) {
+      await db.update(chapters)
+        .set({ wordCount: meta.wordCount, title: meta.title, updatedAt: new Date() })
+        .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
+        .catch(() => {});
+    }
   }
 }
 
 chaptersRouter.get('/', async (c) => {
   const projectId = c.req.param('projectId')!;
   await resyncChaptersFromDisk(projectId).catch(() => {});
+  const all = await db.select().from(chapters)
+    .where(eq(chapters.projectId, projectId))
+    .orderBy(chapters.number);
+  return c.json({ chapters: all });
+});
+
+// 手动触发磁盘 → DB 全量对齐（GET 已自动执行，此端点供脚本/回滚后显式刷新）
+chaptersRouter.post('/resync', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  try {
+    await resyncChaptersFromDisk(projectId);
+  } catch {
+    return c.json({ error: 'Project not found' }, 404);
+  }
   const all = await db.select().from(chapters)
     .where(eq(chapters.projectId, projectId))
     .orderBy(chapters.number);
@@ -194,6 +234,15 @@ chaptersRouter.delete('/:num', async (c) => {
     .returning();
 
   if (!deleted) return c.json({ error: 'Not found' }, 404);
+
+  // 磁盘是事实来源：删除 DB 行后同步删除正文与摘要文件，避免 resync 把它加回来
+  try {
+    const novelDir = await resolveNovelDir(projectId);
+    await fs.unlink(chapterFilePath(novelDir, num)).catch(() => {});
+    await fs.unlink(legacyChapterFilePath(novelDir, num)).catch(() => {});
+    await fs.unlink(path.join(novelDir, 'chapters', `第${num}章.summary.md`)).catch(() => {});
+  } catch { /* 目录不可用时忽略 */ }
+
   return c.json({ ok: true });
 });
 

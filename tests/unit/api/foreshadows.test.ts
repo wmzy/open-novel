@@ -70,14 +70,30 @@ describe('伏笔债务路由 /api/projects/:projectId/foreshadows', () => {
     expect(data.warnings.some((w: string) => w.includes('status 非法'))).toBe(true);
     // "第64-66章" → 64
     expect(data.foreshadows[0].plantedIn).toBe(64);
-    // currentChapter = max(lastUpdatedChapter=10, max plantedIn=64) = 64
-    expect(data.currentChapter).toBe(64);
-    // #2 期限 8 < 64 → 逾期；#1 无期限
+    // currentChapter 以实际写作进度为准（lastUpdatedChapter=10），
+    // 不再被未来埋设章（64）前移——否则逾期/临期/密度窗口全部失真
+    expect(data.currentChapter).toBe(10);
+    // #2 期限 8 < 10 → 逾期；#1 无期限
     expect(data.stats.overdue.map((f: { id: number }) => f.id)).toEqual([2]);
     // 未结清 2 条（#1 light + #2 light）→ 债务分 2
     expect(data.stats.debtScore).toBe(2);
     expect(data.stats.byStatus).toEqual({ pending: 0, planted: 2, resolved: 0, dropped: 0 });
     expect(data.chapterCount).toBe(20);
+  });
+
+  it('GET：未开写（lastUpdatedChapter=0）时 currentChapter 回退到最大规划埋设章', async () => {
+    writeNovelFile(tmpDir, 'state.json', {
+      characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 0, updatedAt: '',
+    });
+    writeNovelFile(tmpDir, 'foreshadow.json', {
+      foreshadows: [
+        { id: 1, content: '未来伏笔', status: 'pending', plantedIn: 18, resolveDeadline: null, resolvedIn: null },
+      ],
+    });
+    const res = await app.request(`/api/projects/${projectId}/foreshadows`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.currentChapter).toBe(18);
   });
 
   it('GET：文件缺失时返回空清单与零债务，不报错', async () => {

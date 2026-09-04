@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { css, cx } from '@linaria/core';
 import { toast } from 'sonner';
@@ -106,6 +106,45 @@ const inputFull = css`width:100%;`;
 
 const fieldLabel = css`display:block;font-size:0.8rem;margin-bottom:0.25rem;color:var(--haze-color-text-secondary);`;
 
+const genreHint = css`
+  font-size: 0.75rem;
+  color: var(--haze-color-warning, #f59e0b);
+  margin-top: 0.25rem;
+`;
+
+const deleteOverlay = css`
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+`;
+
+const deleteDialog = css`
+  background: var(--haze-color-bg);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  width: 380px;
+  max-width: calc(100vw - 2rem);
+  & h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+`;
+
+const deleteHint = css`
+  font-size: 0.8rem;
+  color: var(--haze-color-text-secondary);
+  margin: 0 0 0.75rem;
+  line-height: 1.5;
+`;
+
+const deleteDangerBtn = css`
+  background: var(--haze-color-error, #ef4444);
+  border: 1px solid var(--haze-color-error, #ef4444);
+  &:hover { background: #dc2626; border-color: #dc2626; }
+`;
+
 const actionRow = css`margin-top:0.75rem;display:flex;gap:0.5rem;`;
 
 const importGrid = css`display:grid;gap:0.75rem;`;
@@ -167,6 +206,17 @@ export default function HomePage() {
   const [intentCharacterWeight, setIntentCharacterWeight] = useState('');
   const [intentForeshadowStyle, setIntentForeshadowStyle] = useState('');
   const [intentStyleAnchor, setIntentStyleAnchor] = useState('');
+  // 删除对话框目标（null = 关闭）
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  // 可用技能插件 id 列表（用于「类型无专属技能」提示）
+  const [pluginIds, setPluginIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetch('/api/plugins')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setPluginIds((d?.plugins ?? []).map((p: { id: string }) => p.id)))
+      .catch(() => { /* 忽略 */ });
+  }, []);
 
   const filtered = useMemo(() => {
     if (!projects) return [];
@@ -207,22 +257,28 @@ export default function HomePage() {
         setIntentStyleAnchor('');
         navigate(`/projects/${data.project.id}`);
       },
+      onError: (err) => {
+        toast.error(err instanceof Error ? err.message : '创建失败');
+      },
     });
   };
 
-  const handleDelete = (e: React.MouseEvent, id: string, name: string) => {
+  const handleDeleteClick = (e: React.MouseEvent, id: string, name: string) => {
     e.stopPropagation();
-    toast(`确定删除「${name}」？`, {
-      description: '此操作不可撤销',
-      action: {
-        label: '删除',
-        onClick: () => {
-          deleteProject.mutate(id, {
-            onSuccess: () => toast.success('已删除'),
-          });
+    setDeleteTarget({ id, name });
+  };
+
+  const confirmDelete = (removeFiles: boolean) => {
+    if (!deleteTarget) return;
+    deleteProject.mutate(
+      { id: deleteTarget.id, removeFiles },
+      {
+        onSuccess: () => {
+          setDeleteTarget(null);
+          toast.success(removeFiles ? '已删除（含磁盘文件）' : '已移出列表（文件保留在磁盘）');
         },
       },
-    });
+    );
   };
 
   const handleImport = async () => {
@@ -277,6 +333,9 @@ export default function HomePage() {
                 <option value="mystery">悬疑</option>
                 <option value="reality">现实</option>
               </select>
+              {pluginIds.length > 0 && !pluginIds.includes(genre) && (
+                <p className={genreHint}>该类型暂无专属技能，将使用通用创作技能</p>
+              )}
             </div>
             <div>
               <label className={fieldLabel}>目标字数</label>
@@ -370,7 +429,7 @@ export default function HomePage() {
           <div className={grid}>
             {paged.map((p) => (
               <div key={p.id} className={`${card} ${projectCard}`} onClick={() => navigate(`/projects/${p.id}`)}>
-                <button className={`delete-btn ${deleteBtn}`} onClick={(e) => handleDelete(e, p.id, p.title)} title="删除项目">
+                <button className={`delete-btn ${deleteBtn}`} onClick={(e) => handleDeleteClick(e, p.id, p.title)} title="删除项目">
                   &times;
                 </button>
                 <h3>{p.title}</h3>
@@ -397,6 +456,22 @@ export default function HomePage() {
             </div>
           )}
         </>
+      )}
+      {deleteTarget && (
+        <div className={deleteOverlay} onClick={() => setDeleteTarget(null)}>
+          <div className={deleteDialog} onClick={(e) => e.stopPropagation()}>
+            <h3>删除「{deleteTarget.name}」</h3>
+            <p className={deleteHint}>
+              仅移出列表：磁盘上的小说文件原样保留，之后可用「打开项目」重新导入。
+              删除文件：不可恢复，请确认已有备份。
+            </p>
+            <div className={actionRow}>
+              <button className={primaryBtn} onClick={() => confirmDelete(false)}>仅移出列表</button>
+              <button className={cx(primaryBtn, deleteDangerBtn)} onClick={() => confirmDelete(true)}>同时删除文件</button>
+              <button onClick={() => setDeleteTarget(null)}>取消</button>
+            </div>
+          </div>
+        </div>
       )}
       </div>
     </div>

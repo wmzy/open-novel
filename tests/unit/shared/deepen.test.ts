@@ -8,6 +8,8 @@ import {
   buildDeepenMessage,
   isCritiqueRound,
   detectNoImprovement,
+  parseScoreLines,
+  detectScoreStagnation,
   critiqueSeverityCounts,
   critiqueConverged,
   parseDeadlineInput,
@@ -170,6 +172,64 @@ describe('deepen', () => {
     it('returns false when no signal present', () => {
       const content = '# 审查报告\n- 问题1：角色动机不足';
       expect(detectNoImprovement(content)).toBe(false);
+    });
+
+    it('宽容匹配：信号串中间换行/多余空白仍命中', () => {
+      const content = '审查结论：与上一次审查相比\n无实质  改进';
+      expect(detectNoImprovement(content)).toBe(true);
+    });
+  });
+
+  describe('parseScoreLines', () => {
+    it('按顺序提取全部维度评分行', () => {
+      const log = [
+        '## 第2轮（修订）',
+        '**维度评分变化**：动机 3→4, 关系 2→3',
+        '## 第4轮（修订）',
+        '**维度评分变化**：动机 4→5, 关系 3→4',
+      ].join('\n');
+      expect(parseScoreLines(log)).toEqual(['动机 3→4, 关系 2→3', '动机 4→5, 关系 3→4']);
+    });
+
+    it('兼容无「变化」后缀的评分行', () => {
+      const log = '## 第1轮\n**维度评分**：动机 3, 关系 4';
+      expect(parseScoreLines(log)).toEqual(['动机 3, 关系 4']);
+    });
+
+    it('无评分行返回空数组', () => {
+      expect(parseScoreLines('没有评分')).toEqual([]);
+    });
+  });
+
+  describe('detectScoreStagnation', () => {
+    it('最近两轮评分完全一致时判定停滞', () => {
+      const log = [
+        '**维度评分变化**：动机 4→5, 关系 3→4',
+        '**维度评分变化**：动机 4→5, 关系 3→4',
+      ].join('\n');
+      expect(detectScoreStagnation(log)).toBe(true);
+    });
+
+    it('最近两轮评分不同时不判定停滞', () => {
+      const log = [
+        '**维度评分变化**：动机 3→4',
+        '**维度评分变化**：动机 4→5',
+      ].join('\n');
+      expect(detectScoreStagnation(log)).toBe(false);
+    });
+
+    it('不足两轮评分时不判定停滞', () => {
+      expect(detectScoreStagnation('**维度评分变化**：动机 3→4')).toBe(false);
+      expect(detectScoreStagnation('')).toBe(false);
+    });
+
+    it('前两轮一致但最近一轮变化时取最近两轮', () => {
+      const log = [
+        '**维度评分变化**：动机 1→2',
+        '**维度评分变化**：动机 1→2',
+        '**维度评分变化**：动机 2→3',
+      ].join('\n');
+      expect(detectScoreStagnation(log)).toBe(false);
     });
   });
 

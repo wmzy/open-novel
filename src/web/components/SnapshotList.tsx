@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 import { css } from '@linaria/core';
 
 const container = css`
@@ -141,7 +142,7 @@ export default function SnapshotList({ projectId }: Props) {
   }, [projectId]);
 
   const handleRollback = async (hash: string) => {
-    if (!confirm('Rollback to this snapshot? Current changes will be lost.')) return;
+    if (!confirm('回滚到此快照？当前未提交的更改将丢失。')) return;
 
     setRollingBack(hash);
     try {
@@ -151,14 +152,17 @@ export default function SnapshotList({ projectId }: Props) {
         body: JSON.stringify({ commitHash: hash }),
       });
       if (res.ok) {
-        alert('Rollback successful. Refresh the page to see changes.');
+        toast.success('已回滚到所选快照，正在刷新...');
+        // 回滚后后端已按磁盘重建 chapters 表，整页刷新让所有视图一致
+        window.location.reload();
       } else {
-        alert('Rollback failed.');
+        toast.error('回滚失败');
+        setRollingBack(null);
       }
     } catch {
-      alert('Rollback failed.');
+      toast.error('回滚失败');
+      setRollingBack(null);
     }
-    setRollingBack(null);
   };
 
   if (loading) return <div className={emptyState}>加载快照中...</div>;

@@ -37,7 +37,12 @@ export function useCreateProject() {
   return useMutation({
     mutationFn: async (body: CreateProjectInput) => {
       const res = await fetch('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-      return res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        // 409 workspace-exists 等业务错误：抛出后端 message 供 UI toast
+        throw new Error((data as { message?: string; error?: string }).message || (data as { error?: string }).error || `创建失败 (${res.status})`);
+      }
+      return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['projects'] }),
   });
@@ -46,8 +51,13 @@ export function useCreateProject() {
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+    mutationFn: async ({ id, removeFiles }: { id: string; removeFiles?: boolean }) => {
+      const res = await fetch(`/api/projects/${id}${removeFiles ? '?removeFiles=true' : ''}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error || `删除失败 (${res.status})`);
+      }
+      return data;
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['projects'] }),
   });

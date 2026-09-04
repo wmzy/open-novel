@@ -263,10 +263,15 @@ describe('computeDensityBudget：每 3 章新埋不超过 2 条', () => {
 });
 
 describe('resolveCurrentChapter', () => {
-  it('取 lastUpdatedChapter 与最大埋设章的较大值', () => {
+  it('写作已开始时以实际进度为准（忽略未来埋设章）', () => {
     const list = [make({ id: 1, plantedIn: 7 }), make({ id: 2, plantedIn: 3 })];
-    expect(resolveCurrentChapter(list, 5)).toBe(7);
+    expect(resolveCurrentChapter(list, 5)).toBe(5);
     expect(resolveCurrentChapter(list, 9)).toBe(9);
+  });
+
+  it('未开写（进度 0）时回退到最大规划埋设章', () => {
+    const list = [make({ id: 1, plantedIn: 7 }), make({ id: 2, plantedIn: 3 })];
+    expect(resolveCurrentChapter(list, 0)).toBe(7);
   });
 
   it('空清单与非法进度回退为 0', () => {

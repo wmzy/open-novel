@@ -125,4 +125,50 @@ describe('POST /api/projects/:id/import-source', () => {
     const data = await res.json();
     expect(data.error).toContain('未找到');
   });
+
+  it('与已有章节冲突时备份原文件为 .bak 并报告 conflicts', async () => {
+    // 预置第1章正文
+    const existingPath = path.join(tmpDir, '.novel/chapters/第1章.md');
+    fs.writeFileSync(existingPath, '# 第1章 旧内容\n\n旧正文');
+
+    const novelPath = path.join(tmpDir, 'raw.txt');
+    fs.writeFileSync(novelPath, '第一章 开始\n内容A\n\n第二章 结束\n内容B');
+
+    const res = await apiApp.request(`/api/projects/${projectId}/import-source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sourcePath: novelPath }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.chapterCount).toBe(2);
+    expect(data.conflicts).toEqual([1]);
+
+    // 原文件已备份为 .bak，新文件已覆盖
+    expect(fs.readFileSync(`${existingPath}.bak`, 'utf-8')).toContain('旧正文');
+    expect(fs.readFileSync(existingPath, 'utf-8')).toContain('内容A');
+
+    // config.json 覆盖前也备份
+    expect(fs.existsSync(path.join(tmpDir, '.novel/config.json.bak'))).toBe(true);
+
+    // chapters 表已同步（导入的章节立即可见于写作视图）
+    const { chapters: chaptersTable } = await import('../../../src/db/schema');
+    const rows = await db.select().from(chaptersTable).where(eq(chaptersTable.projectId, projectId));
+    expect(rows.map((r) => r.number).sort()).toEqual([1, 2]);
+  });
+
+  it('章节状态无效值时忽略（PATCH 校验）', async () => {
+    // 通过 chapters 表预置一行，再走 chapters PATCH 校验非法 status
+    const { chapters: chaptersTable } = await import('../../../src/db/schema');
+    const { generateId: genId } = await import('../../../src/utils/id');
+    await db.insert(chaptersTable).values({ id: genId('ch_'), projectId, number: 1, title: 't', wordCount: 10, status: 'draft' });
+    const res = await apiApp.request(`/api/projects/${projectId}/chapters/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'banana' }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.chapter.status).toBe('draft'); // 非法值被忽略
+  });
 });

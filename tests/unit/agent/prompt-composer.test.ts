@@ -22,7 +22,7 @@ vi.mock('../../../src/plugins/registry', () => ({
 }));
 
 // Import AFTER mocks are registered.
-const { composePrompt } = await import('../../../src/agent/prompt-composer');
+const { composePrompt, parseChapterNumberFromMessage, findNextUnwrittenChapter } = await import('../../../src/agent/prompt-composer');
 
 // 用于识别各阶段指令的特征文本（STAGE_INSTRUCTIONS 的首句片段）。
 const STAGE_FEATURES: Record<string, string> = {
@@ -1685,6 +1685,53 @@ describe('composePrompt', () => {
         projectDir: tempDir,
       });
       expect(prompt).not.toContain('阶段不匹配提醒');
+    });
+  });
+
+  describe('章号推断（parseChapterNumberFromMessage / findNextUnwrittenChapter）', () => {
+    it('解析阿拉伯数字章号', () => {
+      expect(parseChapterNumberFromMessage('请写第3章正文')).toBe(3);
+      expect(parseChapterNumberFromMessage('写第12章')).toBe(12);
+    });
+
+    it('解析中文数字章号（含十/百）', () => {
+      expect(parseChapterNumberFromMessage('写第五章')).toBe(5);
+      expect(parseChapterNumberFromMessage('写第十二章')).toBe(12);
+      expect(parseChapterNumberFromMessage('写第二十三章')).toBe(23);
+      expect(parseChapterNumberFromMessage('写第一百零五章')).toBe(105);
+    });
+
+    it('无显式章号返回 null（写下一章/继续写）', () => {
+      expect(parseChapterNumberFromMessage('写下一章')).toBeNull();
+      expect(parseChapterNumberFromMessage('继续写')).toBeNull();
+      expect(parseChapterNumberFromMessage('')).toBeNull();
+    });
+
+    it('扫描目录取最小未写章：样章写了 1、5、12 → 返回 2', async () => {
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      for (const n of [1, 5, 12]) {
+        await fs.writeFile(path.join(novelDir, 'chapters', `第${n}章.md`), `# 第${n}章`);
+      }
+      expect(await findNextUnwrittenChapter(tempDir)).toBe(2);
+    });
+
+    it('连续章节全部写完 → 返回最大+1', async () => {
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      for (const n of [1, 2, 3]) {
+        await fs.writeFile(path.join(novelDir, 'chapters', `第${n}章.md`), `# 第${n}章`);
+      }
+      expect(await findNextUnwrittenChapter(tempDir)).toBe(4);
+    });
+
+    it('目录不存在/为空 → 返回 1；摘要与退化文件不干扰', async () => {
+      expect(await findNextUnwrittenChapter(tempDir)).toBe(1);
+      const novelDir = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
+      await fs.writeFile(path.join(novelDir, 'chapters', '第1章.summary.md'), '摘要');
+      await fs.writeFile(path.join(novelDir, 'chapters', '第2章.degraded.md'), '退化');
+      expect(await findNextUnwrittenChapter(tempDir)).toBe(1);
     });
   });
 });

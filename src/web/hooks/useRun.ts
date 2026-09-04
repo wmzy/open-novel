@@ -14,6 +14,10 @@ export interface ChatMessage {
   usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
   contextSize?: { chars: number; tokens: number };
   error?: string;
+  /** 后端返回的错误码（如 sample-gate / run-in-progress），供 UI 特判渲染。 */
+  errorCode?: string;
+  /** 该消息所属的 runId（失败消息用于重试端点）。 */
+  runId?: string;
   artifacts?: { count: number; paths: string[] };
   /** revise run 成功后携带的修订 diff（由 revision-applied 事件填充）。 */
   revisionDiff?: { targetFile: string; diff: string; addedLines: number; removedLines: number };
@@ -152,7 +156,7 @@ export function useRun(conversationId?: string) {
     autonomous?: boolean;
     /** Plan Mode：先分析规划再执行，不直接修改文件。 */
     planMode?: boolean;
-    /** 运行模式：generate（默认）或 revise（修订已有文件）。 */
+    /** 运行模式：generate（默认，生成全新）或 revise（修订已有文件）。 */
     mode?: 'generate' | 'revise';
     /** revise 模式：目标文件相对 .novel/ 的路径。 */
     targetFile?: string;
@@ -162,6 +166,10 @@ export function useRun(conversationId?: string) {
     trimHistory?: boolean;
     /** Deepen 循环：当前轮次号（用于后端注入 stage 产出文件 + critique）。 */
     deepenRound?: number;
+    /** 强制开始正式写作：旁路样章门（样章门 409 后的「仍要开始」按钮）。 */
+    force?: boolean;
+    /** 异常中断恢复：上一轮中断现场（超时/看门狗/崩溃），由重试端点返回。 */
+    interruptedResume?: { userMessage: string; assistantContent: string; reason: string };
   }) => {
     // Add user message
     setMessages((prev) => [...prev, { id: String(msgIdCounter++), role: 'user', content: params.message }]);
@@ -178,9 +186,14 @@ export function useRun(conversationId?: string) {
       });
       if (!res.ok) {
         const errBody = await res.text().catch(() => '');
-        let errorMsg = 'Request failed';
+        let errorMsg = '请求失败';
+        let errorCode: string | undefined;
         if (errBody) {
-          try { errorMsg = JSON.parse(errBody).error || errorMsg; }
+          try {
+            const parsed = JSON.parse(errBody);
+            errorMsg = parsed.message || parsed.error || errorMsg;
+            if (typeof parsed.error === 'string') errorCode = parsed.error;
+          }
           catch { errorMsg = errBody; }
         }
         setMessages((prev) => {
@@ -188,9 +201,10 @@ export function useRun(conversationId?: string) {
           const last = updated[updated.length - 1];
           if (last?.role === 'assistant') {
             last.error = errorMsg;
+            last.errorCode = errorCode;
             last.endedAt = Date.now();
           } else {
-            updated.push({ id: String(msgIdCounter++), role: 'assistant', content: '', error: errorMsg, endedAt: Date.now() });
+            updated.push({ id: String(msgIdCounter++), role: 'assistant', content: '', error: errorMsg, errorCode, endedAt: Date.now() });
           }
           return updated;
         });
@@ -204,12 +218,12 @@ export function useRun(conversationId?: string) {
       activeRunsRef.current.add(runId);
       if (returnedConvId) conversationIdRef.current = returnedConvId;
 
-      // Add assistant message placeholder
+      // Add assistant message placeholder（runId 挂在消息上，失败时供重试端点使用）
       const startedAt = Date.now();
       assistantContentRef.current = '';
       assistantEventsRef.current = null;
       assistantArtifactsRef.current = null;
-      setMessages((prev) => [...prev, { id: String(msgIdCounter++), role: 'assistant', content: '', events: [], startedAt }]);
+      setMessages((prev) => [...prev, { id: String(msgIdCounter++), role: 'assistant', content: '', events: [], startedAt, runId }]);
 
       // Connect to SSE stream with reconnection support
       let lastEventId: string | undefined;
@@ -474,10 +488,34 @@ export function useRun(conversationId?: string) {
           break;
         }
         case 'tool_use': {
+          const toolName = String(event.name || '');
+          // claude CLI 的 AskUserQuestion：子进程阻塞等待 stdin tool_result，
+          // 转成选择框渲染，用户回答经 /api/runs/:id/tool-result 回传。
+          if (toolName === 'AskUserQuestion') {
+            const input = event.input as {
+              question?: string;
+              options?: Array<{ label?: string; description?: string }>;
+              multiSelect?: boolean;
+            } | null;
+            const labels = (input?.options ?? [])
+              .map((o) => o.label ?? '')
+              .filter((l) => l.length > 0);
+            setPendingAsk({
+              askId: String(event.id || ''),
+              kind: labels.length > 0
+                ? (input?.multiSelect ? 'multiselect' : 'select')
+                : 'input',
+              message: input?.question || '请选择',
+              options: labels.length > 0 ? labels : undefined,
+              optionsMulti: input?.multiSelect && labels.length > 0 ? labels : undefined,
+              placeholder: labels.length > 0 ? undefined : '请输入回答...',
+              toolUseId: String(event.id || ''),
+            });
+          }
           last.events = [...events, {
             kind: 'tool_use',
             id: String(event.id || ''),
-            name: String(event.name || ''),
+            name: toolName,
             input: event.input,
           }];
           break;
@@ -559,11 +597,24 @@ export function useRun(conversationId?: string) {
     const runId = [...activeRunsRef.current][0];
     if (!runId) return;
     try {
-      await fetch(`/api/runs/${runId}/ask/${ask.askId}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, value }),
-      });
+      if (ask.toolUseId) {
+        // claude CLI：回答经 stdin tool_result 回传
+        await fetch(`/api/runs/${runId}/tool-result`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            toolUseId: ask.toolUseId,
+            content: Array.isArray(value) ? JSON.stringify(value) : (value ?? (action === 'cancel' ? '取消' : '')),
+            isError: action === 'cancel',
+          }),
+        });
+      } else {
+        await fetch(`/api/runs/${runId}/ask/${ask.askId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, value }),
+        });
+      }
     } catch { /* ignore */ }
   }, [pendingAsk]);
 

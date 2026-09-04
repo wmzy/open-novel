@@ -26,6 +26,13 @@ export interface RunSession {
    * 调 resolveAsk 唤醒，handler 返回用户答案给 omp。
    */
   _pendingAsks: Map<string, (response: { action: 'accept' | 'cancel'; content?: unknown }) => void>;
+  /**
+   * ask 挂起/清空时的超时计时钩子（由 runs.ts launchAndTrack 注入）。
+   * 提问挂起期间 run 处于暂停等待状态（agent 子进程阻塞在 stdin/协议上），
+   * 超时计时应同步暂停，用户回答后恢复——避免用户长时间思考被误杀。
+   */
+  _pauseTimeout?: () => void;
+  _resumeTimeout?: () => void;
 }
 
 const runs = new Map<string, RunSession>();
@@ -58,6 +65,20 @@ export function createRun(meta: { projectId: string; agentId: string; skillId: s
 
 export function getRun(id: string): RunSession | null {
   return runs.get(id) ?? null;
+}
+
+/**
+ * 项目级串行锁：返回该项目当前处于运行态的 run（queued/running）。
+ * 同项目同时刻只允许一个 run——并行写 state.json/character-states.md 会
+ * 互相污染（last-writer-wins）。
+ */
+export function getActiveRunForProject(projectId: string): RunSession | null {
+  for (const r of runs.values()) {
+    if (r.projectId === projectId && (r.status === 'running' || r.status === 'queued')) {
+      return r;
+    }
+  }
+  return null;
 }
 
 export function emitEvent(run: RunSession, event: string, data: unknown) {
@@ -95,7 +116,10 @@ export function registerAsk(
   askId: string,
 ): Promise<{ action: 'accept' | 'cancel'; content?: unknown }> {
   return new Promise((resolve) => {
+    const first = run._pendingAsks.size === 0;
     run._pendingAsks.set(askId, resolve);
+    // 提问挂起：暂停 run 超时计时，等待用户回答（不设 TTL）
+    if (first) run._pauseTimeout?.();
   });
 }
 
@@ -113,6 +137,8 @@ export function resolveAsk(
   if (!resolver) return false;
   run._pendingAsks.delete(askId);
   resolver(response);
+  // 全部提问已答：恢复超时计时
+  if (run._pendingAsks.size === 0) run._resumeTimeout?.();
   return true;
 }
 

@@ -506,6 +506,73 @@ async function readNovelFile(projectDir: string, relativePath: string): Promise<
   }
 }
 
+const CN_DIGITS: Record<string, number> = {
+  零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+};
+
+/** 中文数字（1-999）转阿拉伯数字；无法解析返回 null。 */
+function cnNumberToInt(s: string): number | null {
+  const t = s.trim();
+  if (/^\d+$/.test(t)) {
+    const n = parseInt(t, 10);
+    return n > 0 && n < 10000 ? n : null;
+  }
+  if (!/^[零一二两三四五六七八九十百]+$/.test(t)) return null;
+  let total = 0;
+  let section = 0;
+  for (const ch of t) {
+    if (ch === '十') {
+      section = (section === 0 ? 1 : section) * 10;
+      total += section;
+      section = 0;
+    } else if (ch === '百') {
+      section = (section === 0 ? 1 : section) * 100;
+      total += section;
+      section = 0;
+    } else {
+      section = CN_DIGITS[ch];
+    }
+  }
+  total += section;
+  return total > 0 ? total : null;
+}
+
+/**
+ * 从用户消息解析显式目标章号（「写第3章」「写第十二章」等）。
+ * 返回 null 表示消息未指定章号（「写下一章」「继续写」）。
+ */
+export function parseChapterNumberFromMessage(message: string): number | null {
+  if (!message) return null;
+  const m = message.match(/写第\s*([0-9零一二两三四五六七八九十百]+)\s*章/);
+  if (!m) return null;
+  return cnNumberToInt(m[1]);
+}
+
+/**
+ * 扫描 .novel/chapters/ 找最小未写章号（从 1 起第一个没有正文文件的章号）。
+ * 全部已写则返回 最大章号+1；目录为空/不存在返回 1。
+ * 只认正文章节命名（第N章.md / chapter-N.md），忽略摘要与归档文件。
+ */
+export async function findNextUnwrittenChapter(projectDir: string): Promise<number> {
+  const chaptersDir = path.join(projectDir, '.novel', 'chapters');
+  let files: string[];
+  try {
+    files = await fs.readdir(chaptersDir);
+  } catch {
+    return 1;
+  }
+  const nums = new Set<number>();
+  for (const f of files) {
+    const cn = f.match(/^第(\d+)章\.md$/);
+    const en = f.match(/^chapter-(\d+)\.md$/i);
+    const m = cn ?? en;
+    if (m) nums.add(parseInt(m[1], 10));
+  }
+  let next = 1;
+  while (nums.has(next)) next++;
+  return next;
+}
+
 /**
  * 意图层：读取 .novel/intent.md（作者创作偏好），全量注入 prompt。
  * 文件缺失或为空返回空串——run 不阻断，存量项目平滑过渡。
@@ -1083,9 +1150,17 @@ ${questionRule}
       parts.push(`\n## 本章字数要求\n每章目标约 ${perChapter} 字（CJK 字符），允许 ±20% 浮动。偏差超 ±30% 将被系统标记为字数异常。`);
     }
 
-    // 计算当前章号 = 已完成章数 + 1（从 state.json lastUpdatedChapter 推断）
-    const state = await getStateTable(projectDir);
-    const currentChapter = state.lastUpdatedChapter + 1;
+    // 计算当前章号：优先用户消息显式指定的章号（写第N章），
+    // 章节修订（revise）优先取修订目标文件的章号，
+    // 否则扫描 chapters/ 目录取最小未写章（从 1 起第一个缺文件的章）。
+    // 不再用 state.lastUpdatedChapter+1——样章阶段写第1章+自选2章后 state 停在
+    // 最后一个样章号，会跳过中间未写章节。
+    const targetChapter = isChapterTarget && reviseTarget
+      ? (parseInt(reviseTarget.match(/第(\d+)章/)?.[1] ?? '', 10) || null)
+      : null;
+    const currentChapter = targetChapter
+      ?? parseChapterNumberFromMessage(message)
+      ?? await findNextUnwrittenChapter(projectDir);
 
     // 定向提醒：本章须埋设的伏笔，置顶于分层上下文之前（仅 generate 模式；revise 不埋新伏笔）
     if (mode === 'generate') {

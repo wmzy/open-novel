@@ -11,6 +11,7 @@ import RewritePanel from '@/web/components/RewritePanel';
 import QualityCheckPanel from '@/web/components/QualityCheckPanel';
 import FilePreview from '@/web/components/FilePreview';
 import ReviewPanel from '@/web/components/ReviewPanel';
+import SnapshotList from '@/web/components/SnapshotList';
 import { useFilePreview } from '@/web/hooks/useFilePreview';
 import { useReview } from '@/web/hooks/useReview';
 import { useAgentSelection } from '@/web/hooks/useAgents';
@@ -171,6 +172,51 @@ const rewriteSummary = css`
   &:hover { color: var(--haze-color-text); }
 `;
 
+const undoOverlay = css`
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+`;
+
+const undoPanel = css`
+  background: var(--haze-color-bg);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 8px;
+  width: 480px;
+  max-width: calc(100vw - 2rem);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+`;
+
+const undoHeader = css`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--haze-color-border);
+  font-size: 0.9rem;
+`;
+
+const undoClose = css`
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: var(--haze-color-text-secondary);
+  &:hover { color: var(--haze-color-text); }
+`;
+
+const undoBody = css`
+  overflow-y: auto;
+  padding: 0.75rem 1rem;
+`;
+
 /** 全屏状态占位（加载中 / 加载失败 / 项目不存在）。 */
 const stateWrap = css`
   display: flex;
@@ -246,6 +292,11 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: {
   if (activeView === 'wuxia') return <WuxiaView projectId={projectId} />;
   if (activeView === 'sample') return <WritingView projectId={projectId} onViewChange={onViewChange} variant="sample" />;
   if (activeView === 'writing') return <WritingView projectId={projectId} onViewChange={onViewChange} />;
+  // drafting/revision/polish 是写作子模式（/draft /revision /polish 命令切换），
+  // 没有独立视图——映射到写作视图，避免落入「未知视图」兜底。
+  if (activeView === 'drafting' || activeView === 'revision' || activeView === 'polish') {
+    return <WritingView projectId={projectId} onViewChange={onViewChange} />;
+  }
   if (activeView.startsWith('chapter-')) {
     const num = parseInt(activeView.replace('chapter-', ''), 10);
     return (
@@ -282,6 +333,7 @@ export default function ProjectPage() {
   const [syncing, setSyncing] = useState(false);
   const [snapshotSaving, setSnapshotSaving] = useState(false);
   const [showReview, setShowReview] = useState(false);
+  const [showSnapshots, setShowSnapshots] = useState(false);
   const review = useReview(id!);
 
   const queryClient = useQueryClient();
@@ -366,6 +418,13 @@ export default function ProjectPage() {
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'scenes'] });
         } else if (filePath === 'foreshadow.json') {
           queryClient.invalidateQueries({ queryKey: ['novel-file', id, 'foreshadow'] });
+        } else if (filePath?.startsWith('chapters/')) {
+          // 章节文件变更：刷新写作视图章节列表/字数（之前此分支缺失导致列表滞后）
+          queryClient.invalidateQueries({ queryKey: ['chapters', id] });
+        } else if (filePath === 'state.json' || filePath === 'state-intent.json' || filePath === 'progress.md' || filePath === 'character-states.md') {
+          // 状态/进度文件变更：刷新总览（卫生警示、伏笔债务摘要、进度）
+          queryClient.invalidateQueries({ queryKey: ['state-hygiene', id] });
+          queryClient.invalidateQueries({ queryKey: ['foreshadow-stats', id] });
         } else if (filePath === 'config.json') {
           // Config changed - refetch project for stage updates
           refetchProject();
@@ -502,39 +561,9 @@ export default function ProjectPage() {
     }
   };
 
-  const handleUndo = async () => {
-    try {
-      const res = await fetch(`/api/runs/projects/${id}/snapshots`);
-      const data = await res.json();
-      const snapshots = data.snapshots || [];
-      if (snapshots.length === 0) {
-        toast.info('没有可用的快照');
-        return;
-      }
-      const latest = snapshots[0];
-
-      toast(`恢复到快照 ${latest.hash.slice(0, 8)}？`, {
-        description: latest.message,
-        action: {
-          label: '确认恢复',
-          onClick: async () => {
-            const rollbackRes = await fetch(`/api/runs/projects/${id}/rollback`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ commitHash: latest.hash }),
-            });
-            if (rollbackRes.ok) {
-              toast.success('撤销成功，正在刷新...');
-              window.location.reload();
-            } else {
-              toast.error('撤销失败');
-            }
-          },
-        },
-      });
-    } catch {
-      toast.error('撤销失败');
-    }
+  const handleUndo = () => {
+    // 打开快照列表对话框：用户选择要恢复的快照（替代旧的「恢复最新快照」单键）
+    setShowSnapshots(true);
   };
 
 
@@ -563,7 +592,7 @@ export default function ProjectPage() {
 
   return (
     <div className={layout}>
-      <Sidebar activeView={activeView} onViewChange={handleViewChange} chapters={chapters ?? EMPTY_CHAPTERS} />
+      <Sidebar activeView={activeView} onViewChange={handleViewChange} chapters={chapters ?? EMPTY_CHAPTERS} skillId={project.skillId} />
       <div className={main}>
         <div className={topBar}>
           <Link to="/" className={backLink}>← 首页</Link>
@@ -644,6 +673,19 @@ export default function ProjectPage() {
           discarding={review.discarding}
           onClose={() => setShowReview(false)}
         />
+      )}
+      {showSnapshots && (
+        <div className={undoOverlay} onClick={() => setShowSnapshots(false)}>
+          <div className={undoPanel} onClick={(e) => e.stopPropagation()}>
+            <div className={undoHeader}>
+              <strong>选择要恢复的快照</strong>
+              <button className={undoClose} onClick={() => setShowSnapshots(false)} title="关闭">✕</button>
+            </div>
+            <div className={undoBody}>
+              <SnapshotList projectId={id!} />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

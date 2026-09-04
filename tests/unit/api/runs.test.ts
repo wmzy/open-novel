@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { db, ensureDbReady } from '../../../src/db/drizzle';
-import { projects, chapters } from '../../../src/db/schema';
+import { projects } from '../../../src/db/schema';
 import { eq } from 'drizzle-orm';
 import apiApp from '../../../src/api-app';
 import { sanitizeStderr } from '../../../src/api/routes/runs';
@@ -106,27 +106,22 @@ describe('POST /api/runs — 样章门禁（sample-gate）', () => {
   let tempDir: string;
   let projectId: string;
 
-  /** 插入 n 章正文（wordCount>0）；countZero 控制额外插入 0 字的空壳章节。 */
+  /** 在磁盘写 n 章正文（CJK 字数 ≥100）；zeroWordCount 控制额外写只含标题的空壳文件。 */
   async function seedChapters(n: number, zeroWordCount = 0) {
+    await fs.mkdir(path.join(tempDir, '.novel', 'chapters'), { recursive: true });
     for (let i = 1; i <= n; i++) {
-      await db.insert(chapters).values({
-        id: `sg_c${i}`,
-        projectId,
-        number: i,
-        title: `第${i}章`,
-        wordCount: 2000,
-        status: 'draft',
-      });
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'chapters', `第${i}章.md`),
+        `# 第${i}章 标题\n\n${'这是样章正文内容。'.repeat(30)}`,
+        'utf-8',
+      );
     }
     for (let i = 1; i <= zeroWordCount; i++) {
-      await db.insert(chapters).values({
-        id: `sg_z${i}`,
-        projectId,
-        number: 100 + i,
-        title: `空章${i}`,
-        wordCount: 0,
-        status: 'draft',
-      });
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'chapters', `第${100 + i}章.md`),
+        `# 第${100 + i}章`,
+        'utf-8',
+      );
     }
   }
 

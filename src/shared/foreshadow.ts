@@ -343,10 +343,16 @@ export function computeDensityBudget(
 // ── 章号推断 ──
 
 /**
- * 推断当前章号：max(state.json lastUpdatedChapter, 全部 plantedIn, 0)。
- * state 落后于大纲规划时以规划的最大埋设章为准。
+ * 推断「债务视角」的当前章号：写作已开始（lastUpdatedChapter > 0）时以
+ * state.json 的实际写作进度为准；未开写时回退到最大规划埋设章（供规划期
+ * 甘特图展示）。不再取 max(进度, 未来埋设章)——未来伏笔会把逾期/临期/密度
+ * 窗口整体前移，写作到第 3 章时按第 18 章计算债务。
  */
 export function resolveCurrentChapter(foreshadows: Foreshadow[], lastUpdatedChapter: number): number {
+  const progress = typeof lastUpdatedChapter === 'number' && Number.isFinite(lastUpdatedChapter) && lastUpdatedChapter > 0
+    ? lastUpdatedChapter
+    : 0;
+  if (progress > 0) return progress;
   const maxPlanted = foreshadows.reduce((m, f) => Math.max(m, f.plantedIn ?? 0), 0);
-  return Math.max(0, lastUpdatedChapter || 0, maxPlanted);
+  return Math.max(0, maxPlanted);
 }

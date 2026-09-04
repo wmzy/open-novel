@@ -16,6 +16,7 @@ import {
   isCritiqueRound,
   buildDeepenMessage,
   detectNoImprovement,
+  detectScoreStagnation,
   critiqueConverged,
   parseDeadlineInput,
   parseLatestScores,
@@ -93,6 +94,45 @@ const activeCount = css`
 /** 错误重试包裹 */
 const errorRetryWrap = css`
   padding: 0.5rem 1rem;
+`;
+
+/** 样章门提示条（sample-gate 409 后的引导操作） */
+const gateBanner = css`
+  margin: 0 1rem 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--haze-color-primary);
+  border-radius: 8px;
+  background: var(--haze-color-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--haze-color-text-secondary);
+`;
+
+const gateBannerActions = css`
+  display: flex;
+  gap: 0.5rem;
+`;
+
+const gateBtn = css`
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 6px;
+  border: 1px solid var(--haze-color-border);
+  background: var(--haze-color-bg-secondary);
+  color: var(--haze-color-text);
+  cursor: pointer;
+  &:hover { background: var(--haze-color-bg); }
+`;
+
+const gateBtnPrimary = css`
+  ${gateBtn};
+  background: var(--haze-color-primary);
+  border-color: var(--haze-color-primary);
+  color: white;
+  &:hover { opacity: 0.9; }
 `;
 
 /** 重试按钮全宽 */
@@ -303,40 +343,54 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
       // 饱和检测 + 时间检查是异步的（需 fetch deepen-critique.md）
       (async () => {
-        // 停止条件 3：改进验证饱和——仅在超过最低轮数后，且当前刚完成 Critique 轮时检查
+        // 收敛判定（任何轮次都检查）：审查无 P0/P1（仅 P2）→ 下一轮 revise 为冻结轮。
+        // 不再受 DEEPEN_MIN_ROUNDS 限制——审查报告客观无 P0/P1 就该收敛，不强制凑轮数。
         let consecutiveNoImprovement = deepenMode.consecutiveNoImprovement;
-        // 并联收敛判定：审查无 P0/P1（仅 P2）→ 下一轮 revise 为冻结轮
         let critiqueConvergedNow = false;
-        if (deepenMode.round >= DEEPEN_MIN_ROUNDS && isCritiqueRound(deepenMode.round)) {
+        let critiqueContent = '';
+        if (isCritiqueRound(deepenMode.round)) {
           try {
             const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-critique.md')}`);
             if (res.ok) {
               const data = await res.json();
-              if (detectNoImprovement(data.content || '')) {
-                consecutiveNoImprovement++;
-              } else {
-                consecutiveNoImprovement = 0;
-              }
-              // 连续 2 个 Critique 轮报告无实质改进 → 真正饱和
-              if (consecutiveNoImprovement >= 2) {
-                exitDeepen('改进验证：连续 2 轮审查无实质改进');
-                prevIsRunningRef.current = isRunning;
-                return;
-              }
-              critiqueConvergedNow = critiqueConverged(data.content || '');
+              critiqueContent = data.content || '';
+              critiqueConvergedNow = critiqueConverged(critiqueContent);
             }
           } catch { /* 读文件失败不阻断 */ }
         }
 
-        // 获取最新评分轨迹用于状态条展示
-        let latestScores = deepenMode.latestScores;
+        // 获取 deepen-log.md（评分轨迹展示 + 停滞检测共用一次读取）
+        let logContent = '';
         try {
           const logRes = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-log.md')}`);
           if (logRes.ok) {
             const logData = await logRes.json();
-            latestScores = parseLatestScores(logData.content || '');
+            logContent = logData.content || '';
           }
         } catch { /* 读文件失败不阻断 */ }
+
+        // 停止条件 3：改进验证饱和——仅在超过最低轮数后检查（防止早期偶然命中）。
+        // 信号 = 审查报告标记串 或 最近两轮维度评分完全停滞（不依赖 agent 逐字写标记）。
+        if (deepenMode.round >= DEEPEN_MIN_ROUNDS && isCritiqueRound(deepenMode.round)) {
+          const saturated = detectNoImprovement(critiqueContent) || detectScoreStagnation(logContent);
+          if (saturated) {
+            consecutiveNoImprovement++;
+          } else {
+            consecutiveNoImprovement = 0;
+          }
+          // 连续 2 个 Critique 轮饱和 → 真正停滞
+          if (consecutiveNoImprovement >= 2) {
+            exitDeepen('改进验证：连续 2 轮审查无实质改进');
+            prevIsRunningRef.current = isRunning;
+            return;
+          }
+        }
+
+        // 获取最新评分轨迹用于状态条展示
+        let latestScores = deepenMode.latestScores;
+        if (logContent) {
+          latestScores = parseLatestScores(logContent);
+        }
 
         // 停止条件 4：截止时间到
         if (Date.now() >= deepenMode.deadline) {
@@ -441,7 +495,10 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           toast.error(data.error || '导入失败');
           return;
         }
-        toast.success(`已切分为 ${data.chapterCount} 章，开始逆向拆书`);
+        const conflictNote = Array.isArray(data.conflicts) && data.conflicts.length > 0
+          ? `（${data.conflicts.length} 章与已有章节冲突，原文件已备份为 .bak）`
+          : '';
+        toast.success(`已切分为 ${data.chapterCount} 章${conflictNote}，开始逆向拆书`);
       } catch {
         toast.error('导入失败');
         return;
@@ -481,22 +538,26 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   };
 
   const handleRetry = async () => {
-    // Try to use the retry API for failed runs
+    // 优先走重试端点：携带 interruptedResume（中断前已完成内容），
+    // 让 agent 从异常中断位置继续，而不是盲发原文重写/跳过章节。
     const lastAssistantMsg = [...chatMessages].reverse().find((m) => m.role === 'assistant' && m.error);
-    if (lastAssistantMsg?.error) {
-      // Find the run ID from events (if available)
-      const lastUserMsg = [...chatMessages].reverse().find((m) => m.role === 'user');
-      if (lastUserMsg) {
-        sendMessage({
-          projectId,
-          agentId,
-          skillId,
-          stage,
-          message: lastUserMsg.content,
-          model: selectedModel !== 'default' ? selectedModel : undefined,
-        });
-      }
-      return;
+    if (lastAssistantMsg?.runId) {
+      try {
+        const res = await fetch(`/api/runs/${lastAssistantMsg.runId}/retry`, { method: 'POST' });
+        if (res.ok) {
+          const data = await res.json();
+          sendMessage({
+            projectId,
+            agentId,
+            skillId,
+            stage: data.stage || stage,
+            message: data.message,
+            interruptedResume: data.interruptedResume,
+            model: selectedModel !== 'default' ? selectedModel : undefined,
+          });
+          return;
+        }
+      } catch { /* 端点失败回退到原文重发 */ }
     }
 
     // Fallback: resend last user message
@@ -511,6 +572,29 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         model: selectedModel !== 'default' ? selectedModel : undefined,
       });
     }
+  };
+
+  /** 样章门被拦后「仍要开始正式写作」：显式确认后 force 旁路。 */
+  const handleForceWriting = () => {
+    const lastUserMsg = [...chatMessages].reverse().find((m) => m.role === 'user');
+    if (!lastUserMsg) return;
+    toast('跳过样章直接开始正式写作？', {
+      description: '样章用于检验声口与节奏，跳过后大纲问题会在正文中直接暴露',
+      action: {
+        label: '确认开始',
+        onClick: () => {
+          sendMessage({
+            projectId,
+            agentId,
+            skillId,
+            stage: 'writing',
+            message: lastUserMsg.content,
+            force: true,
+            model: selectedModel !== 'default' ? selectedModel : undefined,
+          });
+        },
+      },
+    });
   };
 
   const localCommands: Command[] = useMemo(() => [
@@ -572,7 +656,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
   // Find the runId from the last assistant message's events
   const lastError = chatMessages.length > 0 ? chatMessages[chatMessages.length - 1] : null;
-  const hasError = lastError?.role === 'assistant' && lastError.error;
+  const hasError = lastError?.role === 'assistant' && !!lastError.error;
+  const isSampleGate = lastError?.role === 'assistant' && lastError.errorCode === 'sample-gate';
 
   return (
     <div className={panel}>
@@ -704,6 +789,20 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           <button className={cx(stopBtn, retryBtnFull)} onClick={handleRetry}>
             重试
           </button>
+        </div>
+      )}
+
+      {isSampleGate && !isRunning && (
+        <div className={gateBanner}>
+          <span>正式写作前需完成 3 章样章检验声口与节奏（正文不足 3 章已被门禁拦截）。</span>
+          <div className={gateBannerActions}>
+            <button className={gateBtn} onClick={() => onStageChange?.('sample')}>
+              去写样章
+            </button>
+            <button className={gateBtnPrimary} onClick={handleForceWriting}>
+              仍要开始正式写作
+            </button>
+          </div>
         </div>
       )}
 
@@ -1025,7 +1124,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
             }
           }}
         />
-        <button className={sendBtn} onClick={handleSend} disabled={!input.trim() || !agentAvailable} title="发送">
+        <button className={sendBtn} onClick={handleSend} disabled={!input.trim() || !agentAvailable || isRunning} title="发送">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="22" y1="2" x2="11" y2="13" />
             <polygon points="22 2 15 22 11 13 2 9 22 2" />
