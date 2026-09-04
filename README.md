@@ -4,12 +4,16 @@ AI 辅助小说写作应用：通过调用外部 AI 编码 agent（`claude` / `o
 
 ## 工作流
 
-创作被拆分为若干阶段，每个阶段产出对应的 `.novel/` 文件：
+创作被拆分为若干阶段，每个阶段产出对应的 `.novel/` 文件（阶段定义以 `src/shared/stages.ts` 为准）：
 
 ```
-concept → world → characters → outline → scenes → writing → revision → polish
- 立意     世界观    人物设定     大纲      场景      写作      修订       润色
+concept → world → characters → outline → scenes → sample → writing
+ 立意     世界观    人物设定     大纲      场景      样章      写作
 ```
+
+- **样章（sample）**：scenes 与 writing 之间的强制关卡，写 3 章样章检验声口与节奏。
+- **drafting / revision / polish** 是写作子模式（`/draft`、`/revision`、`/polish` 命令），
+  不是独立主线阶段，与 writing 共用分层上下文。
 
 ## 技术栈
 

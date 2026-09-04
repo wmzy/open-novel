@@ -179,8 +179,8 @@ export default function WritingView({
 
   const list = chapters || [];
   const totalWords = list.reduce((sum, c) => sum + (c.wordCount || 0), 0);
-  /** 有正文的章节数（样章门按 wordCount>0 计）。 */
-  const writtenCount = list.filter((c) => (c.wordCount || 0) > 0).length;
+  /** 有正文的章节数。与服务端 countWrittenChaptersFromDisk 口径一致（CJK ≥ 100）。 */
+  const writtenCount = list.filter((c) => (c.wordCount || 0) >= 100).length;
   /** 样章门：writing 阶段但正文不足 3 章时，提示先去写样章。 */
   const gateBlocked = variant === 'writing' && project?.currentStage === 'writing' && writtenCount < 3;
 

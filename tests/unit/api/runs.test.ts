@@ -7,6 +7,7 @@ import { projects } from '../../../src/db/schema';
 import { eq } from 'drizzle-orm';
 import apiApp from '../../../src/api-app';
 import { sanitizeStderr } from '../../../src/api/routes/runs';
+import { createRun, finishRun } from '../../../src/agent/run';
 
 // 仅用于 autonomous 透传测试：mock composePrompt 使其在被调用后即抛错，
 // 避免路由继续 launch 子进程；同时可断言传入参数。
@@ -217,5 +218,74 @@ describe('POST /api/runs — 样章门禁（sample-gate）', () => {
       body: JSON.stringify({ projectId, agentId: 'claude', stage: 'scenes', message: '规划场景' }),
     });
     expect(mockCompose).toHaveBeenCalled();
+  });
+
+  it('stage=drafting（/draft 命令）同样被样章门拦截', async () => {
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'drafting', message: '写第4章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toBe('sample-gate');
+    expect(data.completedSamples).toBe(0);
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('stage=drafting 携带 force: true 时旁路门禁', async () => {
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'drafting', message: '写第1章', force: true }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+});
+
+describe('写路径项目串行锁', () => {
+  let tempDir: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    await ensureDbReady();
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'runs-api-lock-'));
+    projectId = 'test_proj_lock_guard';
+    await db.delete(projects).where(eq(projects.id, projectId));
+    await db.insert(projects).values({ id: projectId, title: 't', path: tempDir, genre: 'wuxia' });
+  });
+
+  afterEach(async () => {
+    await db.delete(projects).where(eq(projects.id, projectId)).catch(() => {});
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('活跃 run 存在时 POST /rollback 返回 409 run-in-progress', async () => {
+    const run = createRun({ projectId, agentId: 'claude', skillId: 'novel', stage: 'writing', conversationId: 'conv_lock' });
+    run.status = 'running';
+    try {
+      const res = await apiApp.request(`/api/runs/projects/${projectId}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commitHash: 'abc123' }),
+      });
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.error).toBe('run-in-progress');
+    } finally {
+      finishRun(run, 'succeeded');
+    }
+  });
+
+  it('无活跃 run 时 POST /rollback 正常进入回滚逻辑（commit 不存在返回 500）', async () => {
+    const res = await apiApp.request(`/api/runs/projects/${projectId}/rollback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ commitHash: 'nonexistent' }),
+    });
+    // 锁不拦截；restoreSnapshot 失败 → 500（证明已越过锁检查）
+    expect(res.status).toBe(500);
+    const data = await res.json();
+    expect(data.error).toBe('Rollback failed');
   });
 });

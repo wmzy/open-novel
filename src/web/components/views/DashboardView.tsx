@@ -260,8 +260,8 @@ export default function DashboardView({ projectId }: Props) {
   const progress = Math.min(100, Math.round((totalWords / targetWords) * 100));
   const currentStageIdx = STAGES.findIndex((s) => s.id === project?.currentStage);
   const stageLabel = currentStageIdx >= 0 ? STAGES[currentStageIdx].label : project?.currentStage || '-';
-  // 样章门：写作阶段需至少 3 个有效章节（wordCount > 0）
-  const effectiveChapters = (chapters || []).filter((ch: { wordCount?: number }) => (ch.wordCount || 0) > 0).length;
+  // 样章门：写作阶段需至少 3 个有效章节。口径与服务端一致（wordCount ≥ 100）
+  const effectiveChapters = (chapters || []).filter((ch: { wordCount?: number }) => (ch.wordCount || 0) >= 100).length;
   const sampleGateIncomplete = project?.currentStage === 'writing' && effectiveChapters < 3;
   const overdueCount = Array.isArray(foreshadowStats?.overdue) ? foreshadowStats!.overdue!.length : 0;
   const pendingCount = foreshadowStats?.byStatus?.pending ?? 0;

@@ -304,12 +304,12 @@ runsRouter.post('/', async (c) => {
   // - stage==='sample' 放行（样章阶段本身就是写正文）
   // - 已有 ≥3 章正文的存量项目不受影响
   // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作）
-  if (stage === 'writing' && body.force !== true) {
+  if ((stage === 'writing' || stage === 'drafting') && body.force !== true) {
     const written = await countWrittenChaptersFromDisk(projectDir);
     if (written < SAMPLE_GATE_REQUIRED) {
       return c.json({
         error: 'sample-gate',
-        message: `需先完成样章阶段：writing 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
+        message: `需先完成样章阶段：writing/drafting 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
         completedSamples: written,
         required: SAMPLE_GATE_REQUIRED,
       }, 409);
@@ -318,6 +318,8 @@ runsRouter.post('/', async (c) => {
 
   let convId: string;
   let history: { role: string; content: string }[] = [];
+  /** 本 run 是否折叠过对话历史（折叠后向用户发出提示，避免静默丢失上下文）。 */
+  let historyTrimmed = false;
 
   if (conversationId) {
     // Load existing conversation
@@ -342,9 +344,11 @@ runsRouter.post('/', async (c) => {
         if (trajectory) contextNote = `评分轨迹：${trajectory}`;
       } catch { /* deepen-log.md may not exist yet */ }
       history = trimHistory(history, 2, 6, contextNote);
+      historyTrimmed = true;
     } else if (history.length > GENERAL_HISTORY_TRIM_THRESHOLD) {
       // 普通聊天同样限制上下文：文件是跨轮状态层，历史超长只会推高成本与退化风险
       history = trimHistory(history, 2, 8);
+      historyTrimmed = true;
     }
   } else {
     // Create new conversation
@@ -449,6 +453,14 @@ runsRouter.post('/', async (c) => {
   }
   const run = existingRun ?? createRun({ projectId, agentId, skillId, stage, conversationId: convId });
   run.status = 'running';
+
+  // 历史折叠提示：仅首次 attempt 推送，向用户说明早期对话已折叠（文件是跨轮状态层）
+  if (!existingRun && historyTrimmed) {
+    emitEvent(run, 'agent', {
+      type: 'status',
+      label: '早期对话已折叠，仅保留决策脉络（产出文件为跨轮状态层，未丢失）',
+    });
+  }
 
   // 通知前端上下文大小（字符数 + 估算 token）
   emitEvent(run, 'agent', { type: 'context_size', chars: composedPrompt.length, tokens: estimateTokens(composedPrompt) });
@@ -625,7 +637,8 @@ runsRouter.post('/', async (c) => {
     }
 
     // P1-b: 写后质检门禁 — 退化分高的章节自动归档为 .degraded.md
-    if (code === 0 && writtenPaths.size > 0) {
+    // 失败 run 同样执行：watchdog 中断前已落盘的退化章节不能逃过归档。
+    if (writtenPaths.size > 0) {
       await qualityGateCheck(run, projectDir, writtenPaths, excludeGrams).catch(() => {});
     }
 
@@ -682,10 +695,10 @@ runsRouter.post('/', async (c) => {
     // P1: 零产出自动重试 — writing 阶段产出 0 个文件时自动重试一次。
     // 根因：agent 有时读上下文后空转退出（~30%概率），不写任何文件。
     // 不重试会浪费一轮对话额度且打断写作流程。
-    if (code === 0 && writtenPaths.size === 0 && stage === 'writing' && retryOf === null) {
+    if (code === 0 && writtenPaths.size === 0 && (stage === 'writing' || stage === 'drafting' || stage === 'sample') && retryOf === null) {
       emitEvent(run, 'agent', {
-        type: 'info',
-        message: 'Agent 未产出任何文件，正在自动重试…',
+        type: 'status',
+        label: 'Agent 未产出任何文件，正在自动重试…',
         retry: true,
       });
       // 短暂延迟后重试，复用同一 run/stream（前端 SSE 不断流）
@@ -973,6 +986,16 @@ runsRouter.post('/projects/:projectId/rollback', async (c) => {
   const body = await c.req.json();
   if (!body.commitHash) return c.json({ error: 'commitHash is required' }, 400);
 
+  // 项目串行锁：run 正在写文件时回滚会覆盖工作区并污染 agent 后续写入
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再回滚',
+      runId: activeRun.id,
+    }, 409);
+  }
+
   const projectDir = await resolveProjectDir(projectId);
   const success = await restoreSnapshot(projectDir, body.commitHash);
   if (!success) return c.json({ error: 'Rollback failed' }, 500);
@@ -989,6 +1012,16 @@ runsRouter.post('/projects/:projectId/snapshot', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return c.json({ error: 'name is required' }, 400);
+
+  // 项目串行锁：run 写入途中提交会捕获半成品文件
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再保存版本',
+      runId: activeRun.id,
+    }, 409);
+  }
 
   const projectDir = await resolveProjectDir(projectId);
   const hash = await createUserSnapshot(projectDir, name);

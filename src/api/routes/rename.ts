@@ -6,6 +6,7 @@ import { performRename, findSubstringConflicts } from '../../shared/rename';
 import { checkName } from '../../shared/naming/name-checker';
 import { createSnapshot } from '../../agent/snapshot';
 import { syncFilesToDb } from '../../agent/artifacts';
+import { getActiveRunForProject } from '../../agent/run';
 
 const renameRouter = new Hono();
 
@@ -77,6 +78,16 @@ renameRouter.post('/', async (c) => {
       { error: 'oldName 必须是完整全名（至少 2 个字符），不接受单字替换以避免误伤' },
       400,
     );
+  }
+
+  // 项目串行锁：run 用旧名写入时执行改名会产生半改半不改的状态
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再改名',
+      runId: activeRun.id,
+    }, 409);
   }
 
   let projectDir: string;

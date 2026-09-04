@@ -6,6 +6,8 @@ import { db } from '../../db/drizzle';
 import { chapters } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { resolveNovelDir } from '../../shared/project-dir';
+import { getActiveRunForProject } from '../../agent/run';
+import { parseForeshadowFile, serializeForeshadows } from '../../shared/foreshadow';
 
 /** 章节状态枚举：草稿 / 审阅中 / 已修订 / 已定稿。 */
 export const CHAPTER_STATUSES = ['draft', 'review', 'revised', 'finalized'] as const;
@@ -177,6 +179,20 @@ chaptersRouter.post('/', async (c) => {
     status: body.status || 'draft',
   }).returning();
 
+  // 磁盘是事实源：同步创建空正文文件（含标题行），否则下一次 resync 会删除本行
+  // （POST 只写 DB 的幽灵章节）。文件已存在时不动，避免覆盖 agent 写好的正文。
+  try {
+    const novelDir = await resolveNovelDir(projectId);
+    const chaptersDir = path.join(novelDir, 'chapters');
+    await fs.mkdir(chaptersDir, { recursive: true });
+    const filePath = chapterFilePath(novelDir, body.number);
+    try {
+      await fs.access(filePath);
+    } catch {
+      await fs.writeFile(filePath, `# ${chapter.title}\n`, 'utf-8');
+    }
+  } catch { /* 项目目录不可用时忽略 */ }
+
   return c.json({ chapter }, 201);
 });
 
@@ -188,6 +204,15 @@ chaptersRouter.patch('/:num', async (c) => {
 
   // 正文落盘到 .novel/chapters/第{N}章.md（DB 不存正文列）
   if (typeof body.content === 'string') {
+    // 项目串行锁：run 正在写该章时，编辑器覆盖落盘会与 agent 写盘互踩
+    const activeRun = getActiveRunForProject(projectId);
+    if (activeRun) {
+      return c.json({
+        error: 'run-in-progress',
+        message: '该项目有正在运行的写作任务，请先等待完成或停止后再保存正文',
+        runId: activeRun.id,
+      }, 409);
+    }
     try {
       const novelDir = await resolveNovelDir(projectId);
       await fs.mkdir(path.join(novelDir, 'chapters'), { recursive: true });
@@ -229,6 +254,16 @@ chaptersRouter.delete('/:num', async (c) => {
   const num = parseInt(c.req.param('num'), 10);
   if (Number.isNaN(num)) return c.json({ error: 'Invalid chapter number' }, 400);
 
+  // 项目串行锁：run 写入途中删文件会让 agent 后续写入与上下文状态错位
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再删除章节',
+      runId: activeRun.id,
+    }, 409);
+  }
+
   const [deleted] = await db.delete(chapters)
     .where(and(eq(chapters.projectId, projectId), eq(chapters.number, num)))
     .returning();
@@ -236,14 +271,29 @@ chaptersRouter.delete('/:num', async (c) => {
   if (!deleted) return c.json({ error: 'Not found' }, 404);
 
   // 磁盘是事实来源：删除 DB 行后同步删除正文与摘要文件，避免 resync 把它加回来
+  let foreshadowRefsCleared = 0;
   try {
     const novelDir = await resolveNovelDir(projectId);
     await fs.unlink(chapterFilePath(novelDir, num)).catch(() => {});
     await fs.unlink(legacyChapterFilePath(novelDir, num)).catch(() => {});
     await fs.unlink(path.join(novelDir, 'chapters', `第${num}章.summary.md`)).catch(() => {});
+
+    // 清理伏笔悬挂引用：plantedIn/resolvedIn 指向被删章节的置空，避免债务视图误报
+    try {
+      const fp = path.join(novelDir, 'foreshadow.json');
+      const raw = await fs.readFile(fp, 'utf-8');
+      const parsed = parseForeshadowFile(raw);
+      for (const f of parsed.foreshadows) {
+        if (f.plantedIn === num) { f.plantedIn = null; foreshadowRefsCleared++; }
+        if (f.resolvedIn === num) { f.resolvedIn = null; foreshadowRefsCleared++; }
+      }
+      if (foreshadowRefsCleared > 0) {
+        await fs.writeFile(fp, serializeForeshadows(parsed.foreshadows), 'utf-8');
+      }
+    } catch { /* 无伏笔文件或解析失败，忽略 */ }
   } catch { /* 目录不可用时忽略 */ }
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, foreshadowRefsCleared });
 });
 
 export default chaptersRouter;

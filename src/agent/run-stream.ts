@@ -19,6 +19,9 @@ const FLUSH_INTERVAL_MS = 500;
 /** 每个运行中 run 保留在内存的滑动窗口大小（条）。 */
 const WINDOW_SIZE = 200;
 
+/** messages.content 列上限（varchar(100000)），固化前截断保护。 */
+const MAX_CONTENT_CHARS = 99_000;
+
 interface BufferedEvent {
   seq: number;
   type: string;
@@ -153,9 +156,13 @@ export class RunStream {
       .map((e) => e.data as Record<string, unknown>);
     const { content, events } = transform(agentEvents);
     if (content || events.length > 0) {
-      const finalContent = options.failed
+      let finalContent = options.failed
         ? `[执行异常${options.failLabel ? `(${options.failLabel})` : ''}] ${content || '(无文本输出)'}`
         : content || '(无文本输出)';
+      // varchar(100000) 上限保护：截断 content（events 保留完整流，可经 run_events 回溯）
+      if (finalContent.length > MAX_CONTENT_CHARS) {
+        finalContent = `${finalContent.slice(0, MAX_CONTENT_CHARS)}\n\n[内容过长已截断，完整事件流见 run_events]`;
+      }
       await db.insert(messages).values({
         id: generateId('msg_'),
         conversationId: this.conversationId,

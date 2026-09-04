@@ -274,6 +274,65 @@ function rebindInstance(): void {
 }
 
 /**
+ * Restore the data directory from a specific backup file (manual restore).
+ *
+ * Same pipeline as recoverWithBackup(), but for a user-chosen backup
+ * (validated against listBackups() — no arbitrary path access). The current
+ * data directory is moved aside (never deleted) before extraction; on
+ * extraction/boot failure a fresh empty instance is rebuilt so the server
+ * is never left with a dead database.
+ */
+export async function restoreFromBackup(filename: string): Promise<{ ok: boolean; error?: string }> {
+  if (!isPglite) return { ok: false, error: '备份恢复仅适用于 PGlite 模式' };
+
+  const { listBackups, getBackupDir, resetBackupChangeTracking } = await import('./backup');
+  const backups = await listBackups();
+  const backup = backups.find((b) => b.filename === filename);
+  if (!backup) return { ok: false, error: '备份文件不存在' };
+
+  const backupPath = path.join(getBackupDir(), filename);
+  const dataDir = getPgliteDataDir();
+  const currentVersion = await readDataDirPgVersion(dataDir);
+  const backupVersion = await readPgVersionFromTar(backupPath);
+  if (!isBackupVersionCompatible(backupVersion, currentVersion)) {
+    return {
+      ok: false,
+      error: `PG 主版本不兼容：备份 ${backupVersion ?? '未知'}，当前 ${currentVersion ?? '未知'}，拒绝恢复`,
+    };
+  }
+
+  try {
+    await closeBrokenInstance();
+    const aside = `${dataDir}.corrupted.${Date.now()}`;
+    await fsp.rename(dataDir, aside).catch(() => {});
+
+    await extractBackupTo(backupPath, dataDir);
+    cleanStaleLock(dataDir);
+    rebindInstance();
+    await initPgliteCore();
+    resetBackupChangeTracking();
+    ready = true;
+    console.info(`[db] restored from backup ${filename} (previous dir kept at ${aside})`);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[db] restore from ${filename} failed:`, msg);
+    // 恢复失败：移开半成品目录，重建空实例，保证服务不进入死库状态
+    try {
+      await fsp.rename(dataDir, `${dataDir}.corrupted.${Date.now()}`).catch(() => {});
+      await fsp.mkdir(dataDir, { recursive: true });
+      rebindInstance();
+      await initPgliteCore();
+      ready = true;
+    } catch (reinitErr) {
+      console.error('[db] reinit after failed restore failed:', reinitErr);
+      return { ok: false, error: `恢复失败，且重建空库也失败：${msg}` };
+    }
+    return { ok: false, error: `恢复失败，已重建空数据库（原目录已保留供排查）：${msg}` };
+  }
+}
+
+/**
  * Get the underlying PGlite instance (for backup, close, etc.).
  * Throws if using postgres-js instead of PGlite.
  */

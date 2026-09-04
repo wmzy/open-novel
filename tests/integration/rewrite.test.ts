@@ -37,6 +37,54 @@ describe('Rewrite & Chapter content API', () => {
     });
   });
 
+  it('POST /chapters 同步创建磁盘文件，resync 后不被删除（幽灵章节修复）', async () => {
+    // beforeAll 已 POST 第 1 章；GET 列表触发 resync（磁盘为事实源）
+    const listRes = await app.request(`/api/projects/${projectId}/chapters`);
+    expect(listRes.ok).toBe(true);
+    const { chapters } = await listRes.json();
+    expect(chapters.map((c: { number: number }) => c.number)).toContain(1);
+
+    // 磁盘文件已存在且含标题行
+    const onDisk = await fs.readFile(
+      path.join(projectDir, '.novel', 'chapters', '第1章.md'),
+      'utf-8',
+    );
+    expect(onDisk).toContain('# 开端');
+  });
+
+  it('DELETE /chapters/:num 清理伏笔悬挂引用（plantedIn/resolvedIn 置空）', async () => {
+    // 建立第 2 章
+    const createRes = await app.request(`/api/projects/${projectId}/chapters`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ number: 2, title: '第二章' }),
+    });
+    expect(createRes.ok).toBe(true);
+
+    // 写入伏笔文件：plantedIn=2、resolvedIn=2
+    const fp = path.join(projectDir, '.novel', 'foreshadow.json');
+    await fs.writeFile(
+      fp,
+      JSON.stringify({
+        foreshadows: [
+          { id: 1, content: '神秘信物', type: 'chekhov', status: 'resolved', plantedIn: 2, resolveDeadline: 5, resolvedIn: 2, dependsOn: [], weight: 'major' },
+          { id: 2, content: '无关伏笔', type: 'emotional', status: 'pending', plantedIn: null, resolveDeadline: 10, resolvedIn: null, dependsOn: [], weight: 'light' },
+        ],
+      }),
+      'utf-8',
+    );
+
+    const delRes = await app.request(`/api/projects/${projectId}/chapters/2`, { method: 'DELETE' });
+    expect(delRes.ok).toBe(true);
+    const data = await delRes.json();
+    expect(data.foreshadowRefsCleared).toBe(2);
+
+    const raw = JSON.parse(await fs.readFile(fp, 'utf-8'));
+    expect(raw.foreshadows[0].plantedIn).toBeNull();
+    expect(raw.foreshadows[0].resolvedIn).toBeNull();
+    expect(raw.foreshadows[1].plantedIn).toBeNull(); // 无关条目不受影响
+  });
+
   it('PATCH /chapters/:num 写入正文后落盘，GET 能读回', async () => {
     const content = '# 第 1 章\n\n夜色如墨，山道上只有一盏孤灯。';
     const patchRes = await app.request(`/api/projects/${projectId}/chapters/1`, {

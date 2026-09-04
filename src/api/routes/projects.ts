@@ -11,6 +11,7 @@ import { resolveSkillId } from '../../shared/skill-id';
 import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
+import { getActiveRunForProject } from '../../agent/run';
 import { buildIntentSkeleton, type IntentInput } from '../../shared/intent-card';
 import { detectChapters, type ChunkSource } from '../../shared/text-chunker';
 import { gitSync, ensureDraftBranch } from '../../agent/snapshot';
@@ -153,6 +154,16 @@ projectsRouter.post('/:id/import-source', async (c) => {
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) return c.json({ error: '项目不存在' }, 404);
 
+  // 项目串行锁：导入会覆盖正文章节文件，run 写入途中执行会互踩
+  const activeRun = getActiveRunForProject(id);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再导入',
+      runId: activeRun.id,
+    }, 409);
+  }
+
   const body = await c.req.json();
   const sourcePath = path.resolve(body.sourcePath);
 
@@ -204,12 +215,11 @@ projectsRouter.post('/:id/import-source', async (c) => {
     config = JSON.parse(readFileSync(configPath, 'utf-8'));
   } catch { /* noop */ }
   config.chapterCount = chapters.length;
-  config.targetWords = chapters.length * 5000;
   writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-  // 更新 DB
+  // 更新 DB：仅章节数（目标字数由用户设定，导入不得静默覆写）
   await db.update(projects)
-    .set({ chapterCount: chapters.length, targetWords: chapters.length * 5000 })
+    .set({ chapterCount: chapters.length })
     .where(eq(projects.id, id));
 
   // 同步 chapters 表：导入的章节立即可见于写作视图与样章门（磁盘为事实源）
@@ -272,6 +282,16 @@ projectsRouter.delete('/:id', async (c) => {
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) return c.json({ error: 'Not found' }, 404);
 
+  // 项目串行锁：run 存活时删除项目会让 close handler 写库报错、目录被 rm 后 agent 写入孤儿文件
+  const activeRun = getActiveRunForProject(id);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先停止任务后再删除项目',
+      runId: activeRun.id,
+    }, 409);
+  }
+
   // removeFiles=true：连同磁盘上的小说目录一起删除（用户显式确认的不可恢复操作）。
   // 默认仅移出列表——文件保留在磁盘，避免「以为删了数据」的隐私/清理预期落空。
   const removeFiles = c.req.query('removeFiles') === 'true';
@@ -314,6 +334,17 @@ projectsRouter.post('/:id/init', async (c) => {
 projectsRouter.post('/:id/sync', async (c) => {
   const projectId = c.req.param('id');
   const projectDir = await resolveProjectDir(projectId);
+
+  // 项目串行锁：run 写入途中 pull --rebase 会覆盖工作区
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再同步',
+      runId: activeRun.id,
+    }, 409);
+  }
+
   const result = await gitSync(projectDir);
   if (!result.success) return c.json({ error: result.message }, 400);
   return c.json({ ok: true, message: result.message });
@@ -431,6 +462,17 @@ projectsRouter.get('/:id/conversations', async (c) => {
 // Upload a file to the project
 projectsRouter.post('/:id/upload', async (c) => {
   const projectId = c.req.param('id');
+
+  // 项目串行锁：上传会写文件，与 agent 写盘互踩
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再上传',
+      runId: activeRun.id,
+    }, 409);
+  }
+
   const projectDir = await resolveNovelDir(projectId);
 
   const body = await c.req.parseBody();
@@ -499,6 +541,16 @@ projectsRouter.put('/:id/files', async (c) => {
   const content = body.content as string;
   if (!filePath || typeof content !== 'string') {
     return c.json({ error: 'path and content are required' }, 400);
+  }
+
+  // 项目串行锁：run 正在写设定/章节文件时，前端手写会与 agent 写盘互踩
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再保存文件',
+      runId: activeRun.id,
+    }, 409);
   }
 
   const projectDir = await resolveNovelDir(projectId);
@@ -608,6 +660,16 @@ projectsRouter.post('/:id/generate-templates', async (c) => {
   const id = c.req.param('id');
   const [project] = await db.select().from(projects).where(eq(projects.id, id)).limit(1);
   if (!project) return c.json({ error: 'Not found' }, 404);
+
+  // 项目串行锁：生成模板会覆盖/备份 .novel 下文件
+  const activeRun = getActiveRunForProject(id);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再生成模板',
+      runId: activeRun.id,
+    }, 409);
+  }
 
   const novelDir = path.join(project.path, '.novel');
   mkdirSync(novelDir, { recursive: true });

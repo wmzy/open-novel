@@ -650,6 +650,12 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   };
 
   const handleSelectConversation = (convId: string) => {
+    const conv = conversations?.find((c) => c.id === convId);
+    if (conv?.stage && conv.stage !== stage) {
+      toast.warning(`该会话创建于「${conv.stage}」阶段，切换后历史上下文将来自另一阶段`, {
+        description: '如继续对话，早期问答可能混入当前阶段上下文',
+      });
+    }
     setActiveConversationId(convId);
     loadConversation(convId);
   };

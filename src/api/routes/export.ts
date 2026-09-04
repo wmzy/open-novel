@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { projects, chapters } from '../../db/schema';
 import { resolveNovelDir } from '../../shared/project-dir';
+import { resyncChaptersFromDisk } from './chapters';
 
 /** 读取拆分文档目录（index.md + 全部卡片），合并为单个 markdown。目录不存在返回 null。 */
 async function readSplitDoc(docDir: string): Promise<string | null> {
@@ -48,6 +49,9 @@ exportRouter.get('/markdown', async (c) => {
   const projectId = c.req.param('projectId')!;
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  // 磁盘为事实源：先对齐 chapters 表，避免导出缺章或含幽灵章节
+  await resyncChaptersFromDisk(projectId).catch(() => {});
 
   const allChapters = await db.select().from(chapters)
     .where(eq(chapters.projectId, projectId))
@@ -123,6 +127,9 @@ exportRouter.get('/text', async (c) => {
   const projectId = c.req.param('projectId')!;
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) return c.json({ error: 'Project not found' }, 404);
+
+  // 磁盘为事实源：先对齐 chapters 表，避免导出缺章或含幽灵章节
+  await resyncChaptersFromDisk(projectId).catch(() => {});
 
   const allChapters = await db.select().from(chapters)
     .where(eq(chapters.projectId, projectId))
