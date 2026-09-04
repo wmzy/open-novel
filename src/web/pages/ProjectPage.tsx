@@ -17,6 +17,7 @@ import { useReview } from '@/web/hooks/useReview';
 import { useAgentSelection } from '@/web/hooks/useAgents';
 import { useChatPanelWidth } from '@/web/hooks/useChatPanelWidth';
 import { useDocSourceFile } from '@/web/hooks/useDocSourceFile';
+import { STAGES } from '@/shared/stages';
 
 // 视图组件懒加载 —— 只在切换到对应视图时下载
 const DashboardView = lazy(() => import('@/web/components/views/DashboardView'));
@@ -517,6 +518,30 @@ export default function ProjectPage() {
     }
   }, [viewToFile]);
 
+  /** 阶段切换（进度条 / ChatPanel 命令）：切视图之外还要 PATCH currentStage 落库，
+   * 否则「视图」与「阶段」脱钩——发消息仍走旧阶段的提示词（旧缺陷）。
+   * 写作子模式（drafting/revision/polish）不是主阶段，仅切视图不落库。 */
+  const handleStageChange = useCallback(async (stageId: string) => {
+    handleViewChange(stageId);
+    const isMainStage = STAGES.some((s) => s.id === stageId);
+    if (!isMainStage || stageId === project?.currentStage) return;
+    try {
+      const res = await fetch(`/api/projects/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentStage: stageId }),
+      });
+      if (res.ok) {
+        queryClient.invalidateQueries({ queryKey: ['project', id] });
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error((data as { error?: string }).error || '阶段切换失败');
+      }
+    } catch {
+      toast.error('阶段切换失败');
+    }
+  }, [handleViewChange, id, project?.currentStage, queryClient]);
+
   const handleExport = (format: 'markdown' | 'text') => {
     window.open(`/api/projects/${id}/export/${format}`, '_blank');
   };
@@ -597,7 +622,7 @@ export default function ProjectPage() {
         <div className={topBar}>
           <Link to="/" className={backLink}>← 首页</Link>
           <h2>{project.title}</h2>
-          <WorkflowProgress currentStage={project.currentStage} onStageClick={handleViewChange} />
+          <WorkflowProgress currentStage={project.currentStage} onStageClick={handleStageChange} />
           <div className={toolbarActions}>
             <button className={previewToggle} onClick={() => setShowReview(true)} title="审阅并合并 draft 到 main">
               审阅{review.pendingCount > 0 && <span className={reviewBadge}>{review.pendingCount}</span>}
@@ -646,7 +671,7 @@ export default function ProjectPage() {
         data-testid="chat-panel"
         data-resizing={isResizing ? 'true' : undefined}
       >
-        <ChatPanel key={id} projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleViewChange} />
+        <ChatPanel key={id} projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleStageChange} />
       </div>
       {showReview && (
         <ReviewPanel

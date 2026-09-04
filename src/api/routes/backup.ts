@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { backupDataDir, listBackups } from '../../db/backup';
 import { restoreFromBackup } from '../../db/drizzle';
+import { getAnyActiveRun } from '../../agent/run';
 
 const backupRouter = new Hono();
 
@@ -50,6 +51,16 @@ backupRouter.get('/', async (c) => {
  * 建议在所有写作任务结束后调用。
  */
 backupRouter.post('/restore', async (c) => {
+  // 全局排他：恢复会关闭并重建当前 PGlite 实例，任何活跃 run 的收尾写库都会
+  // 撞上已关闭的 DB——存在活跃 run 时直接拒绝（不能只靠文档提示）。
+  const active = getAnyActiveRun();
+  if (active) {
+    return c.json({
+      ok: false,
+      error: `有正在运行的写作任务（runId: ${active.id}），请先等待完成或停止后再恢复备份`,
+    }, 409);
+  }
+
   const body = await c.req.json().catch(() => ({}));
   const filename = typeof body?.filename === 'string' ? body.filename.trim() : '';
   if (!filename) return c.json({ ok: false, error: 'filename is required' }, 400);

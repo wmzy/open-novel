@@ -1,4 +1,8 @@
 import { RunStream } from './run-stream';
+import { db } from '../db/drizzle';
+import { runs as runsTable } from '../db/schema';
+import { inArray } from 'drizzle-orm';
+import { config } from '../config';
 
 export type RunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
@@ -26,6 +30,8 @@ export interface RunSession {
    * 调 resolveAsk 唤醒，handler 返回用户答案给 omp。
    */
   _pendingAsks: Map<string, (response: { action: 'accept' | 'cancel'; content?: unknown }) => void>;
+  /** 每个挂起提问的自动取消定时器（askTimeoutMs 到期自动 cancel，防死锁）。 */
+  _askTimers: Map<string, NodeJS.Timeout>;
   /**
    * ask 挂起/清空时的超时计时钩子（由 runs.ts launchAndTrack 注入）。
    * 提问挂起期间 run 处于暂停等待状态（agent 子进程阻塞在 stdin/协议上），
@@ -58,6 +64,7 @@ export function createRun(meta: { projectId: string; agentId: string; skillId: s
     finished,
     _finishResolve: finishResolve!,
     _pendingAsks: new Map(),
+    _askTimers: new Map(),
   };
   runs.set(id, run);
   return run;
@@ -81,6 +88,31 @@ export function getActiveRunForProject(projectId: string): RunSession | null {
   return null;
 }
 
+/** 任意项目存在活跃 run（供备份恢复等全局排他操作使用）。 */
+export function getAnyActiveRun(): RunSession | null {
+  for (const r of runs.values()) {
+    if (r.status === 'running' || r.status === 'queued') return r;
+  }
+  return null;
+}
+
+/**
+ * 启动对账：进程重启后内存 runs 全部丢失，DB 中滞留 queued/running 的 run
+ * 永远不会被 close handler 收尾。启动时统一置为 failed（幂等），
+ * 前端 active-run 不再返回僵尸 runId，retry 端点也可用。返回置失败的行数。
+ */
+export async function reconcileStaleRuns(): Promise<number> {
+  try {
+    const result = await db.update(runsTable)
+      .set({ status: 'failed', finishedAt: new Date() })
+      .where(inArray(runsTable.status, ['queued', 'running']))
+      .returning({ id: runsTable.id });
+    return result.length;
+  } catch {
+    return 0;
+  }
+}
+
 export function emitEvent(run: RunSession, event: string, data: unknown) {
   run.stream.push(event, data);
   run.updatedAt = Date.now();
@@ -90,6 +122,9 @@ export function finishRun(run: RunSession, status: RunStatus) {
   if (['succeeded', 'failed', 'canceled'].includes(run.status)) return;
   run.status = status;
   run.updatedAt = Date.now();
+  // 清理挂起提问的自动取消定时器：run 已终结，不再需要死锁保护
+  for (const t of run._askTimers.values()) clearTimeout(t);
+  run._askTimers.clear();
   emitEvent(run, 'end', { status });
   run._finishResolve();
   // RunStream 落盘由调用方在 close() 时完成；这里只清理 RunSession 注册。
@@ -118,8 +153,20 @@ export function registerAsk(
   return new Promise((resolve) => {
     const first = run._pendingAsks.size === 0;
     run._pendingAsks.set(askId, resolve);
-    // 提问挂起：暂停 run 超时计时，等待用户回答（不设 TTL）
+    // 提问挂起：暂停 run 超时计时，等待用户回答（用户思考时间不计入超时）
     if (first) run._pauseTimeout?.();
+    // 提问最长挂起：askTimeoutMs 到期自动取消，防止无人回答的提问让 run 与
+    // 项目串行锁被永久占用（用户关闭浏览器后无人回传答案的死锁场景）。
+    const timer = setTimeout(() => {
+      if (!run._pendingAsks.has(askId)) return;
+      emitEvent(run, 'agent', {
+        type: 'status',
+        label: `提问超过 ${Math.round(config.agent.askTimeoutMs / 3600000)} 小时无人回答，已自动取消并继续执行`,
+      });
+      resolveAsk(run, askId, { action: 'cancel' });
+    }, config.agent.askTimeoutMs);
+    timer.unref?.();
+    run._askTimers.set(askId, timer);
   });
 }
 
@@ -136,6 +183,11 @@ export function resolveAsk(
   const resolver = run._pendingAsks.get(askId);
   if (!resolver) return false;
   run._pendingAsks.delete(askId);
+  const timer = run._askTimers.get(askId);
+  if (timer) {
+    clearTimeout(timer);
+    run._askTimers.delete(askId);
+  }
   resolver(response);
   // 全部提问已答：恢复超时计时
   if (run._pendingAsks.size === 0) run._resumeTimeout?.();

@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { projects } from '../../db/schema';
 import { resolveProjectDir } from '../../shared/project-dir';
+import { getActiveRunForProject } from '../../agent/run';
 import {
   parseForeshadowFile,
   serializeForeshadows,
@@ -31,6 +32,21 @@ import {
 const foreshadowRouter = new Hono();
 
 const FORESHADOW_FILE = path.join('.novel', 'foreshadow.json');
+
+/** 项目串行锁：写 foreshadow.json 与 agent 写盘互斥（此前漏锁，run 中编辑会互相覆盖）。
+ * 命中锁时返回 409 Response，未命中返回 null——Hono 处理器必须 return 该 Response，
+ * 只调 c.json 后 return undefined 会被当作「未处理」落到 404。 */
+function rejectIfRunActive(c: { json: (body: Record<string, unknown>, status?: number) => Response }, projectId: string): Response | null {
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再修改伏笔',
+      runId: activeRun.id,
+    }, 409);
+  }
+  return null;
+}
 
 /** 读取项目根目录与章节数；项目不存在时抛出（由调用方转 404）。 */
 async function loadProject(projectId: string): Promise<{ projectDir: string; chapterCount: number }> {
@@ -150,6 +166,8 @@ foreshadowRouter.post('/', async (c) => {
   } catch {
     return c.json({ error: 'Project not found' }, 404);
   }
+  const locked = rejectIfRunActive(c, projectId);
+  if (locked) return locked;
 
   const body = await readBody(c);
   if (typeof body.content !== 'string' || body.content.trim() === '') {
@@ -202,6 +220,8 @@ foreshadowRouter.patch('/:fid', async (c) => {
   } catch {
     return c.json({ error: 'Project not found' }, 404);
   }
+  const locked = rejectIfRunActive(c, projectId);
+  if (locked) return locked;
 
   const { foreshadows } = await readForeshadows(projectDir);
   const target = foreshadows.find((f) => f.id === fid);
@@ -261,6 +281,8 @@ foreshadowRouter.delete('/:fid', async (c) => {
   } catch {
     return c.json({ error: 'Project not found' }, 404);
   }
+  const locked = rejectIfRunActive(c, projectId);
+  if (locked) return locked;
 
   const { foreshadows } = await readForeshadows(projectDir);
   if (!foreshadows.some((f) => f.id === fid)) {

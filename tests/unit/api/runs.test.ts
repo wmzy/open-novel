@@ -3,11 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { db, ensureDbReady } from '../../../src/db/drizzle';
-import { projects } from '../../../src/db/schema';
-import { eq } from 'drizzle-orm';
+import { projects, runs as runsTable } from '../../../src/db/schema';
+import { eq, inArray } from 'drizzle-orm';
 import apiApp from '../../../src/api-app';
 import { sanitizeStderr } from '../../../src/api/routes/runs';
-import { createRun, finishRun } from '../../../src/agent/run';
+import { createRun, finishRun, reconcileStaleRuns } from '../../../src/agent/run';
 
 // 仅用于 autonomous 透传测试：mock composePrompt 使其在被调用后即抛错，
 // 避免路由继续 launch 子进程；同时可断言传入参数。
@@ -233,6 +233,61 @@ describe('POST /api/runs — 样章门禁（sample-gate）', () => {
     expect(mockCompose).not.toHaveBeenCalled();
   });
 
+  it('stage=revision（/revision 命令）同样被样章门拦截（防旁路写新章）', async () => {
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'revision', message: '写第2章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toBe('sample-gate');
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('stage=polish（/polish 命令）同样被样章门拦截（防旁路写新章）', async () => {
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'polish', message: '写第2章' }),
+    });
+    expect(res.status).toBe(409);
+    const data = await res.json();
+    expect(data.error).toBe('sample-gate');
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('已有 ≥3 章正文时 revision/polish 正常放行', async () => {
+    await seedChapters(3);
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'revision', message: '修订第1章' }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+
+  it('未知 stage（typo）返回 400 invalid-stage', async () => {
+    const res = await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'writng', message: '写第1章' }),
+    });
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toBe('invalid-stage');
+    expect(mockCompose).not.toHaveBeenCalled();
+  });
+
+  it('隐藏阶段 decompose/enrich 通过 stage 校验', async () => {
+    await apiApp.request('/api/runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ projectId, agentId: 'claude', stage: 'decompose', message: '拆书' }),
+    });
+    expect(mockCompose).toHaveBeenCalled();
+  });
+
   it('stage=drafting 携带 force: true 时旁路门禁', async () => {
     await apiApp.request('/api/runs', {
       method: 'POST',
@@ -287,5 +342,106 @@ describe('写路径项目串行锁', () => {
     expect(res.status).toBe(500);
     const data = await res.json();
     expect(data.error).toBe('Rollback failed');
+  });
+
+  it('活跃 run 存在时 POST /chapters 创建章节被锁拒绝（409 run-in-progress）', async () => {
+    const run = createRun({ projectId, agentId: 'claude', skillId: 'novel', stage: 'writing', conversationId: 'conv_lock_ch' });
+    run.status = 'running';
+    try {
+      const res = await apiApp.request(`/api/projects/${projectId}/chapters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: 1, title: '第一章' }),
+      });
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.error).toBe('run-in-progress');
+    } finally {
+      finishRun(run, 'succeeded');
+    }
+  });
+
+  it('活跃 run 存在时 POST /api/backup/restore 被全局排他拒绝', async () => {
+    const run = createRun({ projectId, agentId: 'claude', skillId: 'novel', stage: 'writing', conversationId: 'conv_lock_bk' });
+    run.status = 'running';
+    try {
+      const res = await apiApp.request('/api/backup/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: 'whatever.tar.gz' }),
+      });
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.ok).toBe(false);
+      expect(data.error).toContain('正在运行的写作任务');
+    } finally {
+      finishRun(run, 'succeeded');
+    }
+  });
+});
+
+describe('启动对账 reconcileStaleRuns', () => {
+  it('把 DB 中滞留的 queued/running run 置为 failed，终态 run 不受影响', async () => {
+    await ensureDbReady();
+    const ids = ['recon_run_a', 'recon_run_b', 'recon_run_c', 'recon_run_d'];
+    try {
+      await db.insert(runsTable).values([
+        { id: 'recon_run_a', agent: 'claude', status: 'running', createdAt: new Date() },
+        { id: 'recon_run_b', agent: 'claude', status: 'queued', createdAt: new Date() },
+        { id: 'recon_run_c', agent: 'claude', status: 'succeeded', createdAt: new Date() },
+        { id: 'recon_run_d', agent: 'claude', status: 'failed', createdAt: new Date() },
+      ]);
+      const n = await reconcileStaleRuns();
+      expect(n).toBe(2);
+      const rows = await db.select().from(runsTable).where(inArray(runsTable.id, ids));
+      const byId = new Map(rows.map((r) => [r.id, r.status]));
+      expect(byId.get('recon_run_a')).toBe('failed');
+      expect(byId.get('recon_run_b')).toBe('failed');
+      expect(byId.get('recon_run_c')).toBe('succeeded');
+      expect(byId.get('recon_run_d')).toBe('failed');
+      // 幂等：再跑一次置 0 行
+      expect(await reconcileStaleRuns()).toBe(0);
+    } finally {
+      await db.delete(runsTable).where(inArray(runsTable.id, ids)).catch(() => {});
+    }
+  });
+});
+
+describe('导入项目阶段推断（inferStageFromDisk）', () => {
+  it('有 ≥3 章有效正文的目录导入后 currentStage=writing', async () => {
+    await ensureDbReady();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'import-infer-'));
+    await fs.mkdir(path.join(dir, '.novel', 'chapters'), { recursive: true });
+    for (let i = 1; i <= 3; i++) {
+      await fs.writeFile(path.join(dir, '.novel', 'chapters', `第${i}章.md`), `# 第${i}章\n\n${'这是正文内容。'.repeat(20)}`, 'utf-8');
+    }
+    const res = await apiApp.request('/api/projects/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: dir }),
+    });
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.project.currentStage).toBe('writing');
+    // 清理
+    await db.delete(projects).where(eq(projects.id, data.project.id)).catch(() => {});
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('有 1-2 章正文的目录导入后 currentStage=sample', async () => {
+    await ensureDbReady();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'import-infer2-'));
+    await fs.mkdir(path.join(dir, '.novel', 'chapters'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.novel', 'chapters', '第1章.md'), `# 第1章\n\n${'这是正文内容。'.repeat(20)}`, 'utf-8');
+    const res = await apiApp.request('/api/projects/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: dir }),
+    });
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.project.currentStage).toBe('sample');
+    await db.delete(projects).where(eq(projects.id, data.project.id)).catch(() => {});
+    await fs.rm(dir, { recursive: true, force: true });
   });
 });

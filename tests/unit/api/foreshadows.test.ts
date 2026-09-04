@@ -15,6 +15,7 @@ import apiApp from '../../../src/api-app';
 import foreshadowRouter from '../../../src/api/routes/foreshadows';
 import { db, ensureDbReady } from '../../../src/db/drizzle';
 import { projects } from '../../../src/db/schema';
+import { createRun, finishRun } from '../../../src/agent/run';
 
 // 与 api-app.ts 相同的挂载方式（:projectId 参数名一致）
 const app = new Hono();
@@ -47,6 +48,46 @@ describe('伏笔债务路由 /api/projects/:projectId/foreshadows', () => {
   afterEach(async () => {
     await db.delete(projects).where(eq(projects.id, projectId)).catch(() => {});
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('活跃 run 存在时 POST 创建伏笔被串行锁拒绝（409 run-in-progress）', async () => {
+    const run = createRun({ projectId, agentId: 'claude', skillId: 'novel', stage: 'writing', conversationId: 'conv_fs_lock' });
+    run.status = 'running';
+    try {
+      const res = await app.request(`/api/projects/${projectId}/foreshadows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: '锁测试伏笔' }),
+      });
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.error).toBe('run-in-progress');
+      expect(data.runId).toBe(run.id);
+    } finally {
+      finishRun(run, 'succeeded');
+    }
+  });
+
+  it('无活跃 run 时 POST 正常创建伏笔', async () => {
+    const res = await app.request(`/api/projects/${projectId}/foreshadows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '正常创建的伏笔', type: 'chekhov' }),
+    });
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.foreshadow.content).toBe('正常创建的伏笔');
+  });
+
+  it('活跃 run 存在时 GET 列表不受影响（只读放行）', async () => {
+    const run = createRun({ projectId, agentId: 'claude', skillId: 'novel', stage: 'writing', conversationId: 'conv_fs_lock_get' });
+    run.status = 'running';
+    try {
+      const res = await app.request(`/api/projects/${projectId}/foreshadows`);
+      expect(res.status).toBe(200);
+    } finally {
+      finishRun(run, 'succeeded');
+    }
   });
 
   it('GET：旧格式文件自动迁移并返回债务统计', async () => {

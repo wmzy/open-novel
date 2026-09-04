@@ -51,7 +51,7 @@ exportRouter.get('/markdown', async (c) => {
   if (!project) return c.json({ error: 'Project not found' }, 404);
 
   // 磁盘为事实源：先对齐 chapters 表，避免导出缺章或含幽灵章节
-  await resyncChaptersFromDisk(projectId).catch(() => {});
+  await resyncChaptersFromDisk(projectId, { force: true }).catch(() => {});
 
   const allChapters = await db.select().from(chapters)
     .where(eq(chapters.projectId, projectId))
@@ -129,7 +129,7 @@ exportRouter.get('/text', async (c) => {
   if (!project) return c.json({ error: 'Project not found' }, 404);
 
   // 磁盘为事实源：先对齐 chapters 表，避免导出缺章或含幽灵章节
-  await resyncChaptersFromDisk(projectId).catch(() => {});
+  await resyncChaptersFromDisk(projectId, { force: true }).catch(() => {});
 
   const allChapters = await db.select().from(chapters)
     .where(eq(chapters.projectId, projectId))

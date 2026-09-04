@@ -63,6 +63,17 @@ projectsRouter.post('/', async (c) => {
       message: '该目录已是 open-novel 项目（存在 .novel/ 结构），请使用「打开项目」导入',
     }, 409);
   }
+  // 非空目录警告：目录中已有 .novel 之外的文件时，git 快照会把它们卷入版本库，
+  // 且「删除项目-同时删除文件」只允许删除纯 open-novel 目录——提前告知而非事后踩坑。
+  let warning: string | undefined;
+  if (existsSync(userPath)) {
+    try {
+      const entries = readdirSync(userPath);
+      if (entries.length > 0) {
+        warning = `该目录已有 ${entries.length} 个文件（如 ${entries.slice(0, 3).join('、')}${entries.length > 3 ? '…' : ''}）。现有文件会被纳入项目版本管理；删除项目时仅允许删除纯 open-novel 目录。`;
+      }
+    } catch { /* 读取失败不阻断创建 */ }
+  }
   mkdirSync(userPath, { recursive: true });
   const [project] = await db.insert(projects).values({
     id,
@@ -95,8 +106,39 @@ projectsRouter.post('/', async (c) => {
     intent,
   });
 
-  return c.json({ project }, 201);
+  return c.json({ project, warning }, 201);
 });
+
+/**
+ * 按磁盘内容推断导入项目的当前阶段。
+ * 存量项目导入后进度条停在「概念」会让首条写作消息触发阶段错配提示——
+ * 这里按产出文件反推：≥3 章正文→writing；有正文→sample；有场景表→sample；
+ * 有大纲→scenes；有角色档案→outline；有世界观→characters；有概念→world。
+ */
+function inferStageFromDisk(novelDir: string): string {
+  const chaptersDir = path.join(novelDir, 'chapters');
+  let writtenCount = 0;
+  try {
+    for (const f of readdirSync(chaptersDir)) {
+      const m = f.match(/^第(\d+)章\.md$/) || f.match(/^chapter-(\d+)\.md$/i);
+      if (!m) continue;
+      try {
+        const content = readFileSync(path.join(chaptersDir, f), 'utf-8');
+        const stripped = content.replace(/^[#*>\-[\]()!|]+\s*/gm, '').trim();
+        const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+        if (cjk >= 100) writtenCount++;
+      } catch { /* skip unreadable */ }
+    }
+  } catch { /* no chapters dir */ }
+  if (writtenCount >= 3) return 'writing';
+  if (writtenCount >= 1) return 'sample';
+  if (existsSync(path.join(novelDir, 'scenes.md'))) return 'sample';
+  if (existsSync(path.join(novelDir, 'outline')) || existsSync(path.join(novelDir, 'outline-detailed.md'))) return 'scenes';
+  if (existsSync(path.join(novelDir, 'characters'))) return 'outline';
+  if (existsSync(path.join(novelDir, 'world')) || existsSync(path.join(novelDir, 'world-building.md'))) return 'characters';
+  if (existsSync(path.join(novelDir, 'concept')) || existsSync(path.join(novelDir, 'concept.md'))) return 'world';
+  return 'concept';
+}
 
 // Import an existing .novel/ directory
 projectsRouter.post('/import', async (c) => {
@@ -142,6 +184,8 @@ projectsRouter.post('/import', async (c) => {
     targetWords,
     chapterCount,
     perspective,
+    // 按磁盘产出反推阶段，避免存量项目导入后停在「概念」触发阶段错配提示
+    currentStage: inferStageFromDisk(novelDir),
   }).returning();
 
   return c.json({ project }, 201);
@@ -217,13 +261,21 @@ projectsRouter.post('/:id/import-source', async (c) => {
   config.chapterCount = chapters.length;
   writeFileSync(configPath, JSON.stringify(config, null, 2));
 
-  // 更新 DB：仅章节数（目标字数由用户设定，导入不得静默覆写）
+  // 更新 DB：章节数变化会摊薄每章字数目标（targetWords/chapterCount）。
+  // 保持「每章目标」语义不变：按新旧章数比例重算目标字数，避免后续写作
+  // run 的每章目标被导入章数稀释（如 20 章/8 万字导入 100 章后每章只剩 800 字）。
+  const oldPerChapter = project.targetWords > 0 && project.chapterCount > 0
+    ? project.targetWords / project.chapterCount
+    : 0;
+  const newTargetWords = oldPerChapter > 0
+    ? Math.round(oldPerChapter * chapters.length)
+    : project.targetWords;
   await db.update(projects)
-    .set({ chapterCount: chapters.length })
+    .set({ chapterCount: chapters.length, targetWords: newTargetWords })
     .where(eq(projects.id, id));
 
   // 同步 chapters 表：导入的章节立即可见于写作视图与样章门（磁盘为事实源）
-  await resyncChaptersFromDisk(id).catch(() => {});
+  await resyncChaptersFromDisk(id, { force: true }).catch(() => {});
 
   return c.json({ chapterCount: chapters.length, conflicts }, 200);
 });
@@ -300,6 +352,22 @@ projectsRouter.delete('/:id', async (c) => {
     const sensitive = ['/etc', '/proc', '/sys', '/dev', '/boot', '/usr', '/bin', '/sbin', '/lib'];
     if (sensitive.some((p) => userPath === p || userPath.startsWith(p + '/'))) {
       return c.json({ error: '拒绝删除系统目录下的项目文件' }, 400);
+    }
+    // 目录内容白名单：只允许删除 open-novel 自身的产物（.novel/、.git/、.gitignore）。
+    // 用户若把项目建在已有个人文件的目录里，rm -rf 会连坐删除——此处直接拒绝。
+    const ALLOWED_PROJECT_ENTRIES = new Set(['.novel', '.git', '.gitignore']);
+    try {
+      const entries = readdirSync(userPath);
+      const foreign = entries.filter((e) => !ALLOWED_PROJECT_ENTRIES.has(e));
+      if (foreign.length > 0) {
+        return c.json({
+          error: 'dir-not-exclusive',
+          message: `目录包含非 open-novel 内容（${foreign.slice(0, 5).join('、')}${foreign.length > 5 ? ' 等' : ''}），为避免误删已拒绝删除。请先手动移出这些文件，或改用「仅移出列表」。`,
+          foreign,
+        }, 409);
+      }
+    } catch {
+      return c.json({ error: '磁盘文件删除失败，项目记录未移除' }, 500);
     }
     try {
       rmSync(userPath, { recursive: true, force: true });

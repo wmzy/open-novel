@@ -255,6 +255,9 @@ export default function HomePage() {
         setIntentCharacterWeight('');
         setIntentForeshadowStyle('');
         setIntentStyleAnchor('');
+        if (data.warning) {
+          toast.warning(data.warning);
+        }
         navigate(`/projects/${data.project.id}`);
       },
       onError: (err) => {
@@ -331,6 +334,8 @@ export default function HomePage() {
                 <option value="scifi">科幻</option>
                 <option value="romance">言情</option>
                 <option value="mystery">悬疑</option>
+                <option value="horror">恐怖</option>
+                <option value="historical">历史</option>
                 <option value="reality">现实</option>
               </select>
               {pluginIds.length > 0 && !pluginIds.includes(genre) && (

@@ -13,6 +13,7 @@ import { Hono } from 'hono';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolveProjectDir } from '../../shared/project-dir';
+import { getActiveRunForProject } from '../../agent/run';
 import { buildEntityDict, type EntityRef } from '../../shared/entity-dict';
 import { splitTextByEntities } from '../../shared/entity-linker';
 import {
@@ -392,6 +393,16 @@ retroRouter.post('/retro', async (c) => {
 
   if (typeof body.file !== 'string' || body.file.trim() === '') {
     return c.json({ error: 'file is required' }, 400);
+  }
+
+  // 项目串行锁：retro 会扫描全部正文并写 .novel/retro/ 报告，与 agent 写盘互斥
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再执行回溯分析',
+      runId: activeRun.id,
+    }, 409);
   }
 
   let projectDir: string;

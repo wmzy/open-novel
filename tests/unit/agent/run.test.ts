@@ -10,6 +10,7 @@ import {
   resolveAsk,
 } from '../../../src/agent/run';
 import type { RunSession } from '../../../src/agent/run';
+import { config } from '../../../src/config';
 
 // Mock DB so RunStream's persistence layer doesn't interfere with state-machine tests.
 // run-stream.test.ts covers DB integration.
@@ -239,5 +240,49 @@ describe('registerAsk / resolveAsk', () => {
     const [r1, r2] = await Promise.all([p1, p2]);
     expect((r1.content as { value: number }).value).toBe(1);
     expect((r2.content as { value: number }).value).toBe(2);
+  });
+
+  it('askTimeoutMs 到期无人回答时自动 cancel（防项目死锁）', async () => {
+    vi.useFakeTimers();
+    try {
+      const run = createRun(META);
+      const promise = registerAsk(run, 'timeout_ask');
+      let settled: { action: string; content?: unknown } | null = null;
+      void promise.then((r) => { settled = r; });
+
+      // 到期前不应 resolve
+      vi.advanceTimersByTime(config.agent.askTimeoutMs - 1000);
+      await Promise.resolve();
+      expect(settled).toBeNull();
+      expect(run._pendingAsks.has('timeout_ask')).toBe(true);
+
+      // 到期：自动 cancel，挂起清除
+      vi.advanceTimersByTime(2000);
+      await Promise.resolve();
+      expect(settled).toEqual({ action: 'cancel' });
+      expect(run._pendingAsks.size).toBe(0);
+      expect(run._askTimers.size).toBe(0);
+      finishRun(run, 'succeeded');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('用户按时回答时清除自动取消定时器（不误杀）', async () => {
+    vi.useFakeTimers();
+    try {
+      const run = createRun(META);
+      const promise = registerAsk(run, 'answered_ask');
+      resolveAsk(run, 'answered_ask', { action: 'accept', content: { value: 'x' } });
+      expect(run._askTimers.size).toBe(0);
+      // 超过 askTimeoutMs 也不应有副作用（定时器已清除）
+      vi.advanceTimersByTime(config.agent.askTimeoutMs + 5000);
+      await Promise.resolve();
+      const response = await promise;
+      expect(response.action).toBe('accept');
+      finishRun(run, 'succeeded');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

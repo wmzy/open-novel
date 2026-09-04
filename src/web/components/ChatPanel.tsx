@@ -22,6 +22,7 @@ import {
   parseLatestScores,
   type DeepenToChatDetail,
 } from '../../shared/deepen';
+import { STAGES } from '../../shared/stages';
 import AgentMessage from './AgentMessage';
 import RevisionDiffPanel from './RevisionDiffPanel';
 import { css, cx } from '@linaria/core';
@@ -96,6 +97,13 @@ const errorRetryWrap = css`
   padding: 0.5rem 1rem;
 `;
 
+/** 提问挂起期间的锁影响提示。 */
+const askLockHint = css`
+  font-size: 0.75rem;
+  color: var(--haze-color-text-secondary);
+  margin-top: 0.25rem;
+`;
+
 /** 样章门提示条（sample-gate 409 后的引导操作） */
 const gateBanner = css`
   margin: 0 1rem 0.5rem;
@@ -161,6 +169,13 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   >(null);
   // Plan Mode（规划模式）：开启后发送的 run 携带 planMode=true，先分析规划不直接改文件
   const [planMode, setPlanMode] = useState(false);
+  // 阶段下拉本地覆盖：下拉切换后 PATCH 是异步的，prop 更新前发送消息须用新阶段，
+  // 否则「刚切到样章就发消息」仍走旧阶段提示词。prop 变化（PATCH 成功回刷）时清除。
+  const [stageOverride, setStageOverride] = useState<string | null>(null);
+  useEffect(() => {
+    setStageOverride(null);
+  }, [stage]);
+  const effectiveStage = stageOverride ?? stage;
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { targetFile: string; sectionTitle?: string };
@@ -184,6 +199,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     userHint?: string;
     latestScores?: string | null;
     customDimensions?: Record<string, string[]>;
+    /** 累计消耗（美元，累加每轮 run 的 usage.costUsd）。 */
+    totalCost: number;
   } | null>(null);
   const [pluginDimensions, setPluginDimensions] = useState<Record<string, string[]> | undefined>(undefined);
   const [showDeepenDialog, setShowDeepenDialog] = useState(false);
@@ -191,6 +208,22 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const [deadlineInput, setDeadlineInput] = useState('06:00');
   const [deepenHint, setDeepenHint] = useState('');
   const prevIsRunningRef = useRef(false);
+  // 深化循环倒计时：活跃时每 30s 刷新一次剩余时间显示
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!deepenMode?.active) return;
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, [deepenMode?.active]);
+
+  /** 剩余时间格式化：Xh Ym（不足 1 小时显示分钟）。 */
+  const fmtRemaining = (ms: number): string => {
+    if (ms <= 0) return '已到截止';
+    const totalMin = Math.ceil(ms / 60000);
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    return h > 0 ? `${h}时${m}分` : `${m}分钟`;
+  };
 
   useEffect(() => {
     const handler = async (e: Event) => {
@@ -224,13 +257,13 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         projectId,
         agentId,
         skillId,
-        stage,
+        stage: effectiveStage,
         message: detail.message,
       });
     };
     window.addEventListener(INSPIRE_TO_CHAT_EVENT, handler);
     return () => window.removeEventListener(INSPIRE_TO_CHAT_EVENT, handler);
-  }, [sendMessage, projectId, agentId, skillId, stage]);
+  }, [sendMessage, projectId, agentId, skillId, effectiveStage]);
 
   // pendingAsk 变化时重置临时状态
   useEffect(() => {
@@ -283,15 +316,21 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     const hint = deepenHint.trim() || undefined;
 
     // 创建里程碑快照：深化前的回滚点，用户审核后可 restore
-    fetch(`/api/projects/${projectId}/snapshots/user`, {
+    fetch(`/api/runs/projects/${projectId}/snapshot`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: `deepen-${ds}-start` }),
-    }).then((r) => r.ok ? r.json() : null).then((data) => {
-      if (data?.hash) toast.success(`已创建回滚点 deepen-${ds}-start`);
-    }).catch(() => {});
+    }).then((r) => r.json()).then((data) => {
+      if (data?.hash) {
+        toast.success(`已创建回滚点 deepen-${ds}-start`);
+      } else {
+        toast.error(data?.error || '深化回滚点创建失败，请手动「存版本」');
+      }
+    }).catch(() => {
+      toast.error('深化回滚点创建失败，请手动「存版本」');
+    });
 
-    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, consecutiveNoImprovement: 0, converged: false, userHint: hint, customDimensions: pluginDimensions });
+    setDeepenMode({ active: true, stage: ds, deadline, round: 1, consecutiveFailures: 0, consecutiveNoImprovement: 0, converged: false, userHint: hint, customDimensions: pluginDimensions, totalCost: 0 });
     setShowDeepenDialog(false);
     sendMessage({
       projectId,
@@ -325,6 +364,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       const lastMsg = chatMessages[chatMessages.length - 1];
       const succeeded = !lastMsg?.error;
       const consecutiveFailures = succeeded ? 0 : deepenMode.consecutiveFailures + 1;
+      // 累加本轮消耗（usage.costUsd 由 run 的 usage 事件填充）
+      const roundCost = lastMsg?.usage?.costUsd ?? 0;
+      const totalCost = deepenMode.totalCost + roundCost;
 
       // 停止条件 1：连续 2 轮失败
       if (consecutiveFailures >= 2) {
@@ -409,7 +451,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         }
         // 收敛后（含冻结轮重试）的 revise 轮均按冻结轮发送：P2 入 backlog，禁止改产出
         const converged = deepenMode.converged || critiqueConvergedNow;
-        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures, consecutiveNoImprovement, latestScores, converged });
+        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures, consecutiveNoImprovement, latestScores, converged, totalCost });
         sendMessage({
           projectId,
           agentId,
@@ -519,7 +561,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       projectId,
       agentId,
       skillId,
-      stage,
+      stage: effectiveStage,
       message: input.trim(),
       model: selectedModel !== 'default' ? selectedModel : undefined,
       planMode,
@@ -550,7 +592,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
             projectId,
             agentId,
             skillId,
-            stage: data.stage || stage,
+            stage: data.stage || effectiveStage,
             message: data.message,
             interruptedResume: data.interruptedResume,
             model: selectedModel !== 'default' ? selectedModel : undefined,
@@ -567,7 +609,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
         projectId,
         agentId,
         skillId,
-        stage,
+        stage: effectiveStage,
         message: lastUserMsg.content,
         model: selectedModel !== 'default' ? selectedModel : undefined,
       });
@@ -609,9 +651,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     { name: '/new', description: '开始新对话', source: 'app', action: () => { setActiveConversationId(null); resetConversation(); setPendingRevise(null); } },
     { name: '/import', description: '导入源文本并逆向拆书（/import <文件或目录路径>）', source: 'app' },
     { name: '/enrich', description: '补全缺失的结构化数据（state/outline-meta/关系图，只增不覆盖）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage: 'enrich', message: '扫描并补全缺失的结构化数据' }); } },
-    { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage, message: last.content }); } },
-    { name: '/explore', description: '自治推进当前阶段（不提问，AI 自主决策并落盘）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage, message: '自治推进当前阶段，所有创作决策自主做出', autonomous: true, model: selectedModel !== 'default' ? selectedModel : undefined }); } },
-  ], [onStageChange, sendMessage, projectId, agentId, skillId, stage, resetConversation, chatMessages, selectedModel]);
+    { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage: effectiveStage, message: last.content }); } },
+    { name: '/explore', description: '自治推进当前阶段（不提问，AI 自主决策并落盘）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage: effectiveStage, message: '自治推进当前阶段，所有创作决策自主做出', autonomous: true, model: selectedModel !== 'default' ? selectedModel : undefined }); } },
+  ], [onStageChange, sendMessage, projectId, agentId, skillId, effectiveStage, resetConversation, chatMessages, selectedModel]);
 
   // Agent 端 slash command（omp 经 ACP available_commands_update 推送，无 action → 填入输入框发给 agent）
   const agentCommands: Command[] = effectiveCommands.map((c) => ({
@@ -686,6 +728,22 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
             <option key={conv.id} value={conv.id}>
               {conv.stage ? `[${conv.stage}] ` : ''}{new Date(conv.createdAt).toLocaleString()}
             </option>
+          ))}
+        </select>
+
+        <select
+          className={select}
+          value={effectiveStage}
+          onChange={(e) => {
+            const v = e.target.value;
+            setStageOverride(v);
+            onStageChange?.(v);
+          }}
+          disabled={isRunning}
+          title="当前创作阶段"
+        >
+          {STAGES.map((s) => (
+            <option key={s.id} value={s.id}>{s.label}</option>
           ))}
         </select>
 
@@ -863,6 +921,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       {pendingAsk && (
         <div className={askBox} data-testid="ask-prompt">
           <div className={askMessage}>{pendingAsk.message}</div>
+          <div className={askLockHint}>回答前，该项目的其他写操作处于锁定状态</div>
           {pendingAsk.kind === 'select' && pendingAsk.options && (
             <div className={askOptions}>
               {pendingAsk.options.map((opt) => (
@@ -979,6 +1038,8 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           <div className={deepenBanner}>
             <span>
               🔁 深化中 · 第 {deepenMode.round} 轮{isCritiqueRound(deepenMode.round) ? '（审查）' : '（修订）'} · 截止 {new Date(deepenMode.deadline).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+              {' · '}剩余 {fmtRemaining(deepenMode.deadline - now)}
+              {deepenMode.totalCost > 0 && <> · 累计 ${deepenMode.totalCost.toFixed(4)}</>}
             </span>
             {deepenMode.latestScores && (
               <span className={deepenScores}>📊 {deepenMode.latestScores}</span>

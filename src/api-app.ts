@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ensureDbReady } from './db/drizzle';
 import { initPlugins } from './plugins/registry';
 import { onError } from './api/middleware/error-handler';
+import { reconcileStaleRuns } from './agent/run';
 import { config } from './config';
 import { requestLogger } from './api/middleware/logger';
 import { securityHeaders, rateLimit, maxBodySize } from './api/middleware/security';
@@ -44,6 +45,9 @@ app.use('/api/*', async (_c, next) => {
     await ensureDbReady();
     initPlugins();
     dbReady = true;
+    // 启动对账：上次进程遗留的 queued/running run 置为 failed（幂等）。
+    // 放在 dbReady 之后、首个请求处理之前，保证 active-run/retry 口径一致。
+    void reconcileStaleRuns();
   }
   return next();
 });

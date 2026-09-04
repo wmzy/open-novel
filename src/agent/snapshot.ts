@@ -149,10 +149,42 @@ export async function listSnapshots(projectDir: string, limit = 20): Promise<Sna
 
 /**
  * Restore project to a specific snapshot.
+ *
+ * `git checkout <hash> -- .` 只更新该 commit 中存在的路径，不会删除快照之后
+ * 新增的文件——回滚到早期里程碑时后续章节会残留在磁盘并被 resync 加回。
+ * 因此：先做安全提交（当前状态可找回），再 checkout，最后按 diff 删除
+ * hash..HEAD 中 status=A 的路径（含快照之后的章节/设定文件）。
  */
 export async function restoreSnapshot(projectDir: string, commitHash: string): Promise<boolean> {
   try {
+    await ensureGitInit(projectDir);
+
+    // 1. 安全提交：回滚前把当前状态（含未提交改动）落成一个 commit，
+    //    回滚后仍可从快照列表找回——回滚本身不可逆但要有后悔药。
+    await createSnapshot(projectDir, `pre-rollback safety (target ${commitHash.slice(0, 8)})`);
+
+    // 2. 收集快照之后新增的文件（checkout 不会删除它们）
+    const { stdout: diffOut } = await execFileAsync('git', [
+      'diff', '--name-status', commitHash, 'HEAD', '--no-color',
+    ], { cwd: projectDir });
+    const addedPaths: string[] = [];
+    for (const line of diffOut.split('\n')) {
+      if (!line) continue;
+      const [code, filePath] = line.split('\t');
+      if (code === 'A' && filePath) addedPaths.push(filePath);
+    }
+
+    // 3. 恢复快照内容
     await execFileAsync('git', ['checkout', commitHash, '--', '.'], { cwd: projectDir });
+
+    // 4. 删除快照之后新增的文件（限定项目目录内，防御异常路径）
+    const { rm } = await import('node:fs/promises');
+    for (const rel of addedPaths) {
+      const full = path.resolve(projectDir, rel);
+      if (!full.startsWith(path.resolve(projectDir) + path.sep)) continue;
+      await rm(full, { recursive: true, force: true }).catch(() => {});
+    }
+
     return true;
   } catch {
     return false;

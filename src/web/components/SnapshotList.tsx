@@ -128,7 +128,8 @@ export default function SnapshotList({ projectId }: Props) {
   const loadSnapshots = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/runs/projects/${projectId}/snapshots`);
+      // limit=200：早期里程碑也可达（默认 20 会把旧版本挡在 UI 之外）
+      const res = await fetch(`/api/runs/projects/${projectId}/snapshots?limit=200`);
       if (res.ok) {
         const data = await res.json();
         setSnapshots(data.snapshots || []);

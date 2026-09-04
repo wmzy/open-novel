@@ -44,6 +44,9 @@ export function useRun(conversationId?: string) {
   const assistantContentRef = useRef<string>('');
   const assistantEventsRef = useRef<AgentEvent[] | null>(null);
   const assistantArtifactsRef = useRef<{ count: number; paths: string[] } | null>(null);
+  // 刷新桥接模式：conversation 流先把活跃 run 的 delta 累计成占位 assistant 消息，
+  // run 结束后后端又推固化的完整消息——内容一致时合并而非追加（避免重复显示）。
+  const bridgePlaceholderRef = useRef(false);
 
   // mount/刷新时连 conversation 流——一次性排空历史 messages + 活跃 run 事件。
   // 刷新后自动追回错过的响应内容，无需轮询。
@@ -69,14 +72,31 @@ export function useRun(conversationId?: string) {
           switch (frame.event) {
             case 'message': {
               // 历史/固化的完整消息
-              setMessages((prev) => [...prev, {
+              const incoming = {
                 id: String(msgIdCounter++),
                 role: data.role as 'user' | 'assistant',
                 content: data.content as string,
                 events: data.events as AgentEvent[] | undefined,
                 artifacts: data.artifacts as { count: number; paths: string[] } | undefined,
                 endedAt: data.role === 'assistant' ? Date.now() : undefined,
-              }]);
+              };
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                // 刷新桥接去重：活跃 run 的 delta 已累计成占位 assistant 消息，
+                // run 结束后后端推固化的完整消息——与占位合并（保留 startedAt），
+                // 而不是追加一条重复消息。
+                if (
+                  bridgePlaceholderRef.current
+                  && incoming.role === 'assistant'
+                  && last?.role === 'assistant'
+                ) {
+                  bridgePlaceholderRef.current = false;
+                  const updated = [...prev];
+                  updated[updated.length - 1] = { ...incoming, startedAt: last.startedAt };
+                  return updated;
+                }
+                return [...prev, incoming];
+              });
               break;
             }
             case 'agent': {
@@ -84,6 +104,7 @@ export function useRun(conversationId?: string) {
               setMessages((prev) => {
                 const last = prev[prev.length - 1];
                 if (last?.role !== 'assistant') {
+                  bridgePlaceholderRef.current = true;
                   return [...prev, { id: String(msgIdCounter++), role: 'assistant', content: '', events: [], startedAt: Date.now() }];
                 }
                 return prev;

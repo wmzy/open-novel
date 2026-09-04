@@ -45,6 +45,12 @@ async function readChapterContent(novelDir: string, num: number): Promise<string
   }
 }
 
+/** resync 节流窗口（ms）：run 期间每个 file-changed 事件都会触发 GET /chapters 全量
+ * 磁盘扫描，大书（100+ 章）性能随规模退化。窗口内重复调用直接跳过。 */
+const RESYNC_COOLDOWN_MS = 2000;
+/** 各项目最近一次 resync 时间戳（内存级节流，重启即清零，无副作用）。 */
+const lastResyncAt = new Map<string, number>();
+
 /**
  * 扫描 .novel/chapters/ 目录，将 chapters 表与磁盘全量对齐：
  * - 磁盘有、DB 缺失的章节补入
@@ -52,8 +58,17 @@ async function readChapterContent(novelDir: string, num: number): Promise<string
  * - DB 有、磁盘缺失的章节删除（幽灵章节：退化归档改名/回滚/手动删除文件后 DB 滞留）
  * 解决 DB 数据丢失（如 PGlite 重建）后写作视图为空的问题，
  * 也解决回滚后 DB 与磁盘脱节的问题。文件系统是事实来源，DB 仅缓存元数据。
+ *
+ * 节流：默认 2s 冷却，窗口内的重复调用跳过（GET /chapters 高频触发场景）；
+ * force=true 绕过冷却（回滚/导入源等必须立即对齐的显式操作）。
  */
-export async function resyncChaptersFromDisk(projectId: string): Promise<void> {
+export async function resyncChaptersFromDisk(projectId: string, opts?: { force?: boolean }): Promise<void> {
+  if (!opts?.force) {
+    const now = Date.now();
+    const last = lastResyncAt.get(projectId) ?? 0;
+    if (now - last < RESYNC_COOLDOWN_MS) return;
+    lastResyncAt.set(projectId, now);
+  }
   const novelDir = await resolveNovelDir(projectId);
   const chaptersDir = path.join(novelDir, 'chapters');
   let files: string[];
@@ -128,7 +143,7 @@ chaptersRouter.get('/', async (c) => {
 chaptersRouter.post('/resync', async (c) => {
   const projectId = c.req.param('projectId')!;
   try {
-    await resyncChaptersFromDisk(projectId);
+    await resyncChaptersFromDisk(projectId, { force: true });
   } catch {
     return c.json({ error: 'Project not found' }, 404);
   }
@@ -162,6 +177,17 @@ chaptersRouter.post('/', async (c) => {
   const body = await c.req.json();
 
   if (!body.number) return c.json({ error: 'number is required' }, 400);
+
+  // 项目串行锁：POST 会同步创建磁盘空正文文件，与 agent 写盘互踩
+  // （其余写路径均已锁，此端点此前漏锁）。
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({
+      error: 'run-in-progress',
+      message: '该项目有正在运行的写作任务，请先等待完成或停止后再创建章节',
+      runId: activeRun.id,
+    }, 409);
+  }
 
   // Check for duplicate
   const existing = await db.select().from(chapters)

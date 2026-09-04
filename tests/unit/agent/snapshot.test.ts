@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ensureGitInit, createSnapshot, ensureDraftBranch, reviewDiff, mergeDraft, discardDraft } from '../../../src/agent/snapshot';
+import { ensureGitInit, createSnapshot, ensureDraftBranch, reviewDiff, mergeDraft, discardDraft, restoreSnapshot } from '../../../src/agent/snapshot';
 
 const execFileAsync = promisify(execFile);
 
@@ -126,6 +126,46 @@ async function draftHash(dir: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['rev-parse', 'draft'], { cwd: dir });
   return stdout.trim();
 }
+
+describe('restoreSnapshot', () => {
+  let dir: string;
+  let baseHash: string;
+
+  beforeEach(async () => {
+    dir = await makeRepo();
+    await ensureDraftBranch(dir);
+    // 里程碑：README.md（makeRepo 已有 init commit）
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: dir });
+    baseHash = stdout.trim();
+    // 快照之后新增章节文件
+    await fs.writeFile(path.join(dir, 'ch1.md'), '第一章\n');
+    await createSnapshot(dir, '写第一章');
+    await fs.writeFile(path.join(dir, 'ch2.md'), '第二章\n');
+    await createSnapshot(dir, '写第二章');
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('回滚到早期快照后，快照之后新增的文件被删除（不再残留幽灵章节）', async () => {
+    const ok = await restoreSnapshot(dir, baseHash);
+    expect(ok).toBe(true);
+    // 新增文件已删除
+    await expect(fs.access(path.join(dir, 'ch1.md'))).rejects.toThrow();
+    await expect(fs.access(path.join(dir, 'ch2.md'))).rejects.toThrow();
+    // 快照内文件保留（README.md 是 init commit 内容）
+    expect(await fs.readFile(path.join(dir, 'README.md'), 'utf-8')).toBe('init\n');
+  });
+
+  it('回滚前创建安全提交，当前状态可找回', async () => {
+    // 未提交改动：回滚前安全提交应把它落盘（全部已提交时无需安全提交）
+    await fs.writeFile(path.join(dir, 'ch3.md'), '第三章（未提交）\n');
+    await restoreSnapshot(dir, baseHash);
+    const { stdout } = await execFileAsync('git', ['log', '--format=%s', '-3'], { cwd: dir });
+    expect(stdout).toContain('pre-rollback safety');
+    // 安全提交可检出：ch3 内容在历史中找回
+    const { stdout: safetyHash } = await execFileAsync('git', ['log', '--format=%H', '--grep=pre-rollback safety', '-1'], { cwd: dir });
+    expect(safetyHash.trim()).toBeTruthy();
+  });
+});
 
 describe('mergeDraft', () => {
   let dir: string;

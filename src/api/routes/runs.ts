@@ -99,12 +99,16 @@ function hasMetaNarrativeLeak(content: string): boolean {
   return /第\d+章|第[一二三四五六七八九十百]+章/.test(bodyLines.join('\n'));
 }
 
-/** 写后质检门禁：对新章节正文跑全文退化终检 + detectAiPatterns + 元叙事泄漏检测。 */
+/** 写后质检门禁：对新章节正文跑全文退化终检 + detectAiPatterns + 元叙事泄漏检测。
+ * canArchive 控制「退化归档为 .degraded.md」是否允许——仅写作产出阶段允许，
+ * 其余阶段（revision/polish/decompose 等改写已有内容）只告警不归档，
+ * 避免把用户导入/修订的原文误伤。 */
 async function qualityGateCheck(
   run: ReturnType<typeof createRun>,
   projectDir: string,
   writtenPaths: Set<string>,
   excludeGrams: string[],
+  canArchive: boolean,
 ): Promise<void> {
   for (const p of writtenPaths) {
     const chapterNum = isChapterBody(p);
@@ -118,37 +122,57 @@ async function qualityGateCheck(
     // 流式 watchdog 需积满 2000 字符才检测，短章节（<2000字）从未触发
     const degradation = detectDegradation(content, { excludeGrams });
     if (degradation.detected) {
-      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
-      // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节（wordCount 为退化文本）
-      await db.delete(chapters)
-        .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
-        .catch(() => {});
-      emitEvent(run, 'agent', {
-        type: 'quality-rejected',
-        chapter: chapterNum,
-        score: 100,
-        reason: 'degradation',
-        phrase: degradation.repeatedPhrase,
-        count: degradation.count,
-        ratio: Math.round(degradation.ratio * 100),
-      });
-      continue; // 已归档，不再检测 AI 味
+      if (canArchive) {
+        try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
+        // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节（wordCount 为退化文本）
+        await db.delete(chapters)
+          .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
+          .catch(() => {});
+        emitEvent(run, 'agent', {
+          type: 'quality-rejected',
+          chapter: chapterNum,
+          score: 100,
+          reason: 'degradation',
+          phrase: degradation.repeatedPhrase,
+          count: degradation.count,
+          ratio: Math.round(degradation.ratio * 100),
+        });
+      } else {
+        emitEvent(run, 'agent', {
+          type: 'quality-warning',
+          chapter: chapterNum,
+          reason: 'degradation',
+          phrase: degradation.repeatedPhrase,
+          count: degradation.count,
+        });
+      }
+      continue; // 退化章节不再检测 AI 味
     }
 
     const report = detectAiPatterns(content);
     if (report.score >= QUALITY_REJECT_SCORE) {
-      // 退化严重：归档为 .degraded.md，通知前端
-      try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
-      // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节
-      await db.delete(chapters)
-        .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
-        .catch(() => {});
-      emitEvent(run, 'agent', {
-        type: 'quality-rejected',
-        chapter: chapterNum,
-        score: report.score,
-        topIssues: report.issues.slice(0, 3).map((i) => i.suggestion),
-      });
+      if (canArchive) {
+        // 退化严重：归档为 .degraded.md，通知前端
+        try { await rename(fullPath, fullPath.replace(/\.md$/, '.degraded.md')); } catch { /* noop */ }
+        // 磁盘改名后同步删除 DB 行，避免写作视图显示幽灵章节
+        await db.delete(chapters)
+          .where(and(eq(chapters.projectId, run.projectId), eq(chapters.number, chapterNum)))
+          .catch(() => {});
+        emitEvent(run, 'agent', {
+          type: 'quality-rejected',
+          chapter: chapterNum,
+          score: report.score,
+          topIssues: report.issues.slice(0, 3).map((i) => i.suggestion),
+        });
+      } else {
+        // 非写作产出阶段：高 AI 味只告警不归档（如 decompose 导入原文、revision 改写稿）
+        emitEvent(run, 'agent', {
+          type: 'quality-warning',
+          chapter: chapterNum,
+          score: report.score,
+          topIssues: report.issues.slice(0, 3).map((i) => i.suggestion),
+        });
+      }
     } else if (report.score >= QUALITY_WARN_SCORE) {
       emitEvent(run, 'agent', {
         type: 'quality-warning',
@@ -281,6 +305,16 @@ runsRouter.post('/', async (c) => {
   const def = getAgentDef(agentId);
   if (!def) return c.json({ error: 'Agent not found' }, 404);
 
+  // stage 枚举校验：拒绝 typo/未知阶段——未知 stage 会静默走通用指令且不注入
+  // 写作上下文，浪费一次 agent 调用。合法集 = 7 主阶段 + 写作子模式 + 隐藏阶段。
+  const VALID_RUN_STAGES = new Set([
+    'concept', 'world', 'characters', 'outline', 'scenes', 'sample', 'writing',
+    'drafting', 'revision', 'polish', 'decompose', 'enrich',
+  ]);
+  if (stage !== undefined && !VALID_RUN_STAGES.has(stage)) {
+    return c.json({ error: 'invalid-stage', message: `未知阶段：${stage}` }, 400);
+  }
+
   const agents = await detectAgents();
   const detected = agents.find((a) => a.id === agentId);
   if (!detected?.available) return c.json({ error: 'Agent not available' }, 400);
@@ -299,17 +333,19 @@ runsRouter.post('/', async (c) => {
     }, 409);
   }
 
-  // 样章门禁：进入 writing 阶段前须完成 3 章有效正文。
+  // 样章门禁：任何会写正文章件的阶段（writing/drafting/revision/polish 共用）
+  // 在正文不足 3 章时拦截——revision/polish 同样能写新章节，只拦 writing/drafting
+  // 会被「/revision 写第2章」旁路。
   // 以磁盘为事实源（import-source 写盘不入库、退化归档改名、回滚都会让 DB 行失真）。
   // - stage==='sample' 放行（样章阶段本身就是写正文）
   // - 已有 ≥3 章正文的存量项目不受影响
   // - 请求显式携带 force: true 时旁路（用户明确强制开始正式写作）
-  if ((stage === 'writing' || stage === 'drafting') && body.force !== true) {
+  if ((stage === 'writing' || stage === 'drafting' || stage === 'revision' || stage === 'polish') && body.force !== true) {
     const written = await countWrittenChaptersFromDisk(projectDir);
     if (written < SAMPLE_GATE_REQUIRED) {
       return c.json({
         error: 'sample-gate',
-        message: `需先完成样章阶段：writing/drafting 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
+        message: `需先完成样章阶段：writing/drafting/revision/polish 阶段要求至少 ${SAMPLE_GATE_REQUIRED} 章正文（当前 ${written} 章）。请切换到 sample 阶段完成 3 章样章后再开始正式写作，或携带 force: true 强制开始。`,
         completedSamples: written,
         required: SAMPLE_GATE_REQUIRED,
       }, 409);
@@ -638,12 +674,16 @@ runsRouter.post('/', async (c) => {
 
     // P1-b: 写后质检门禁 — 退化分高的章节自动归档为 .degraded.md
     // 失败 run 同样执行：watchdog 中断前已落盘的退化章节不能逃过归档。
+    // 仅写作产出阶段（writing/sample/drafting）允许归档；revision/polish/decompose
+    // 改写已有内容，高 AI 味/退化只告警不归档，避免误伤导入原文与修订稿。
+    const canArchive = stage === 'writing' || stage === 'sample' || stage === 'drafting';
     if (writtenPaths.size > 0) {
-      await qualityGateCheck(run, projectDir, writtenPaths, excludeGrams).catch(() => {});
+      await qualityGateCheck(run, projectDir, writtenPaths, excludeGrams, canArchive).catch(() => {});
     }
 
     // P2: 字数校验 — 偏差超阈值的章节通知前端
-    if (code === 0 && writtenPaths.size > 0) {
+    // decompose（逆向拆书）的章节字数由导入源决定，跳过校验避免全程误报。
+    if (code === 0 && writtenPaths.size > 0 && stage !== 'decompose') {
       await wordCountCheck(run, projectDir, writtenPaths, perChapterTarget).catch(() => {});
     }
 
@@ -976,7 +1016,14 @@ runsRouter.post('/:id/retry', async (c) => {
 runsRouter.get('/projects/:projectId/snapshots', async (c) => {
   const projectId = c.req.param('projectId');
   const projectDir = await resolveProjectDir(projectId);
-  const snapshots = await listSnapshots(projectDir);
+  // 支持 ?limit= 提升返回条数（默认 20）；前端快照列表传 200 让早期里程碑可达
+  const rawLimit = c.req.query('limit');
+  let limit = 20;
+  if (rawLimit) {
+    const parsed = parseInt(rawLimit, 10);
+    if (Number.isFinite(parsed)) limit = Math.min(500, Math.max(1, parsed));
+  }
+  const snapshots = await listSnapshots(projectDir, limit);
   return c.json({ snapshots });
 });
 
@@ -1001,7 +1048,7 @@ runsRouter.post('/projects/:projectId/rollback', async (c) => {
   if (!success) return c.json({ error: 'Rollback failed' }, 500);
 
   // 磁盘回滚后按磁盘重建 chapters 表：避免写作视图显示幽灵章节与过期字数
-  await resyncChaptersFromDisk(projectId).catch(() => {});
+  await resyncChaptersFromDisk(projectId, { force: true }).catch(() => {});
 
   return c.json({ ok: true });
 });
