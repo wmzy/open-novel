@@ -19,9 +19,39 @@ export interface ChatMessage {
   errorCode?: string;
   /** 该消息所属的 runId（失败消息用于重试端点）。 */
   runId?: string;
+  /** 发送该消息的原始参数（仅内存，不落库）——样章门拦截后「仍要继续」按原意图重发。 */
+  retryParams?: SendMessageParams;
   artifacts?: { count: number; paths: string[] };
   /** revise run 成功后携带的修订 diff（由 revision-applied 事件填充）。 */
   revisionDiff?: { targetFile: string; diff: string; addedLines: number; removedLines: number };
+}
+
+/** sendMessage 参数（导出供 ChatPanel 在 force 旁路时按原意图重发）。 */
+export interface SendMessageParams {
+  projectId: string;
+  agentId: string;
+  skillId: string;
+  stage: string;
+  message: string;
+  model?: string;
+  /** 自治模式：跳过采访式协议，前期阶段改为自主决策。 */
+  autonomous?: boolean;
+  /** Plan Mode：先分析规划再执行，不直接修改文件。 */
+  planMode?: boolean;
+  /** 运行模式：generate（默认，生成全新）或 revise（修订已有文件）。 */
+  mode?: 'generate' | 'revise';
+  /** revise 模式：目标文件相对 .novel/ 的路径。 */
+  targetFile?: string;
+  /** revise 模式：用户修订意见（后端注入 prompt）。 */
+  revisionNote?: string;
+  /** Deepen 循环：启用对话历史滑动窗口截断（仅 Deepen 续轮用）。 */
+  trimHistory?: boolean;
+  /** Deepen 循环：当前轮次号（用于后端注入 stage 产出文件 + critique）。 */
+  deepenRound?: number;
+  /** 强制开始正式写作：旁路样章门（样章门 409 后的「仍要开始」按钮）。 */
+  force?: boolean;
+  /** 异常中断恢复：上一轮中断现场（超时/看门狗/崩溃），由重试端点返回。 */
+  interruptedResume?: { userMessage: string; assistantContent: string; reason: string };
 }
 
 
@@ -167,32 +197,7 @@ export function useRun(conversationId?: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  const sendMessage = useCallback(async (params: {
-    projectId: string;
-    agentId: string;
-    skillId: string;
-    stage: string;
-    message: string;
-    model?: string;
-    /** 自治模式：跳过采访式协议，前期阶段改为自主决策。 */
-    autonomous?: boolean;
-    /** Plan Mode：先分析规划再执行，不直接修改文件。 */
-    planMode?: boolean;
-    /** 运行模式：generate（默认，生成全新）或 revise（修订已有文件）。 */
-    mode?: 'generate' | 'revise';
-    /** revise 模式：目标文件相对 .novel/ 的路径。 */
-    targetFile?: string;
-    /** revise 模式：用户修订意见（后端注入 prompt）。 */
-    revisionNote?: string;
-    /** Deepen 循环：启用对话历史滑动窗口截断（仅 Deepen 续轮用）。 */
-    trimHistory?: boolean;
-    /** Deepen 循环：当前轮次号（用于后端注入 stage 产出文件 + critique）。 */
-    deepenRound?: number;
-    /** 强制开始正式写作：旁路样章门（样章门 409 后的「仍要开始」按钮）。 */
-    force?: boolean;
-    /** 异常中断恢复：上一轮中断现场（超时/看门狗/崩溃），由重试端点返回。 */
-    interruptedResume?: { userMessage: string; assistantContent: string; reason: string };
-  }) => {
+  const sendMessage = useCallback(async (params: SendMessageParams) => {
     // Add user message
     setMessages((prev) => [...prev, { id: String(msgIdCounter++), role: 'user', content: params.message }]);
     setIsRunning(true);
@@ -224,9 +229,10 @@ export function useRun(conversationId?: string) {
           if (last?.role === 'assistant') {
             last.error = errorMsg;
             last.errorCode = errorCode;
+            last.retryParams = params;
             last.endedAt = Date.now();
           } else {
-            updated.push({ id: String(msgIdCounter++), role: 'assistant', content: '', error: errorMsg, errorCode, endedAt: Date.now() });
+            updated.push({ id: String(msgIdCounter++), role: 'assistant', content: '', error: errorMsg, errorCode, retryParams: params, endedAt: Date.now() });
           }
           return updated;
         });

@@ -109,8 +109,9 @@ projectsRouter.post('/', async (c) => {
     title: body.title || '未命名项目',
     path: userPath,
     genre: body.genre || 'general',
-    targetWords: body.targetWords || 100000,
-    chapterCount: body.chapterCount || 20,
+    // 下限钳制：0/负数/非法值会使每章字数目标失真（0 → Infinity，字数校验静默失效）
+    targetWords: Math.max(1, Number(body.targetWords) || 100000),
+    chapterCount: Math.max(1, Number(body.chapterCount) || 20),
     theme: body.theme || null,
     perspective: body.perspective || 'third-person',
   }).returning();

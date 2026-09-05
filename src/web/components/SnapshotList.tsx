@@ -149,19 +149,31 @@ export default function SnapshotList({ projectId }: Props) {
       '回滚前会自动保存当前状态，可从快照列表找回。',
     )) return;
 
+    // 定稿镜像（main）跟随回退：否则顶部审阅面板出现「反向差异」，
+    // 逐文件接受会把刚回滚掉的内容重新写回
+    const resetMain = confirm(
+      '是否同时回退「定稿镜像」（main 分支）？\n\n' +
+      '确定 = 镜像一并回到快照（推荐，审阅面板不再出现反向差异）\n' +
+      '取消 = 仅回退工作草稿（审阅面板会显示镜像与草稿的差异）',
+    );
+
     setRollingBack(hash);
     try {
       const res = await fetch(`/api/runs/projects/${projectId}/rollback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ commitHash: hash }),
+        body: JSON.stringify({ commitHash: hash, resetMain }),
       });
       if (res.ok) {
-        toast.success('已回滚到所选快照，正在刷新...');
+        const data = await res.json().catch(() => ({}));
+        const mainNote = data.mainReset ? '（含定稿镜像）' : (data.mainResetRequested ? '（镜像回退未生效，审阅面板可能显示差异）' : '');
+        // 回滚只改文件不改对话：旧会话历史仍引用已回滚的内容，继续对话会让 agent 困惑
+        toast.success(`已回滚到所选快照${mainNote}。建议用「新对话」（/new）继续创作，旧对话上下文引用的是回滚前内容。正在刷新...`);
         // 回滚后后端已按磁盘重建 chapters 表，整页刷新让所有视图一致
         window.location.reload();
       } else {
-        toast.error('回滚失败');
+        const data = await res.json().catch(() => ({}));
+        toast.error((data as { error?: string }).error || '回滚失败');
         setRollingBack(null);
       }
     } catch {

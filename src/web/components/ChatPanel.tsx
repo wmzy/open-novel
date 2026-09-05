@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useRun } from '@/web/hooks/useRun';
+import type { SendMessageParams } from '@/web/hooks/useRun';
 import { useModels, useModelSelection } from '@/web/hooks/useModels';
 import { useConversations } from '@/web/hooks/useConversations';
 import { useAgents } from '@/web/hooks/useAgents';
@@ -55,6 +56,25 @@ interface Props {
   stage: string;
   onStageChange?: (stage: string) => void;
   onAgentChange?: (agentId: string) => void;
+}
+
+/** 深化循环状态机（可 JSON 序列化——落 localStorage 供刷新后恢复）。 */
+interface DeepenModeState {
+  active: boolean;
+  stage: string;
+  deadline: number;
+  round: number;
+  consecutiveFailures: number;
+  consecutiveNoImprovement: number;
+  /** 收敛标记：最新 critique 无 P0/P1，随后的 revise 轮为冻结轮（P2 入 backlog，不改产出）。 */
+  converged?: boolean;
+  userHint?: string;
+  latestScores?: string | null;
+  customDimensions?: Record<string, string[]>;
+  /** 可选预算上限（美元）：累计消耗达到即停，防无人值守循环烧穿额度。 */
+  budget?: number;
+  /** 累计消耗（美元，累加每轮 run 的 usage.costUsd）。 */
+  totalCost: number;
 }
 
 /** 按 projectId 持久化当前会话 id，刷新后恢复上次会话内容。 */
@@ -187,23 +207,34 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   }, []);
 
   // 深化模式状态机：来自视图 🔁 按钮 dispatch 的事件，弹出截止时间输入，进入循环
-  const [deepenMode, setDeepenMode] = useState<{
-    active: boolean;
-    stage: string;
-    deadline: number;
-    round: number;
-    consecutiveFailures: number;
-    consecutiveNoImprovement: number;
-    /** 收敛标记：最新 critique 无 P0/P1，随后的 revise 轮为冻结轮（P2 入 backlog，不改产出）。 */
-    converged?: boolean;
-    userHint?: string;
-    latestScores?: string | null;
-    customDimensions?: Record<string, string[]>;
-    /** 可选预算上限（美元）：累计消耗达到即停，防无人值守循环烧穿额度。 */
-    budget?: number;
-    /** 累计消耗（美元，累加每轮 run 的 usage.costUsd）。 */
-    totalCost: number;
-  } | null>(null);
+  const [deepenMode, setDeepenMode] = useState<DeepenModeState | null>(null);
+  // 深化循环持久化：循环由前端驱动（每轮 run 结束后续轮），刷新/崩溃会静默中断。
+  // deepenMode 落 localStorage，重载后提示继续或放弃。
+  const deepenKey = `open-novel:deepen:${projectId}`;
+  const [pendingDeepenResume, setPendingDeepenResume] = useState<DeepenModeState | null>(() => {
+    try {
+      const raw = localStorage.getItem(deepenKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as DeepenModeState;
+        if (parsed?.active) return parsed;
+      }
+    } catch { /* 损坏数据按无循环处理 */ }
+    return null;
+  });
+  // 首次挂载跳过持久化 effect：挂载时 deepenMode 恒为 null，立即清除会把
+  // 待恢复的循环状态抹掉（用户刷新两次即丢失恢复入口）。只有 deepenMode
+  // 发生真实变化（启动循环/退出循环）才写/清 localStorage。
+  const deepenPersistInitialized = useRef(false);
+  useEffect(() => {
+    if (!deepenPersistInitialized.current) {
+      deepenPersistInitialized.current = true;
+      return;
+    }
+    try {
+      if (deepenMode?.active) localStorage.setItem(deepenKey, JSON.stringify(deepenMode));
+      else localStorage.removeItem(deepenKey);
+    } catch { /* 存储不可用不影响循环本身 */ }
+  }, [deepenMode, deepenKey]);
   const [pluginDimensions, setPluginDimensions] = useState<Record<string, string[]> | undefined>(undefined);
   const [showDeepenDialog, setShowDeepenDialog] = useState(false);
   const [deepenDialogStage, setDeepenDialogStage] = useState('');
@@ -359,6 +390,116 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     });
   }, []);
 
+  /** 深化循环续轮：推进下一轮（或按停止条件结束）。
+   * 抽取为独立回调：既在 run 完成（isRunning true→false）时由 effect 调用，
+   * 也供「恢复挂起循环且当前无 run 在途」时直接调用（刷新发生在两轮之间）。 */
+  const advanceDeepen = useCallback((mode: DeepenModeState) => {
+    const lastMsg = chatMessages[chatMessages.length - 1];
+    const succeeded = !lastMsg?.error;
+    const consecutiveFailures = succeeded ? 0 : mode.consecutiveFailures + 1;
+    // 累加本轮消耗（usage.costUsd 由 run 的 usage 事件填充）
+    const roundCost = lastMsg?.usage?.costUsd ?? 0;
+    const totalCost = mode.totalCost + roundCost;
+
+    // 停止条件 1：连续 2 轮失败
+    if (consecutiveFailures >= 2) {
+      exitDeepen('连续 2 轮失败，疑似额度耗尽');
+      return;
+    }
+
+    // 停止条件 2：收敛冻结轮完成——上一轮 critique 无 P0/P1（仅 P2），
+    // 随后的 revise 冻结轮（P2 入 backlog、不改产出）成功完成即结束循环
+    if (mode.converged && !isCritiqueRound(mode.round) && succeeded) {
+      exitDeepen('收敛：审查无 P0/P1 问题，产出已冻结（P2 已记入 backlog）');
+      return;
+    }
+
+    // 饱和检测 + 时间检查是异步的（需 fetch deepen-critique.md）
+    void (async () => {
+      // 收敛判定（任何轮次都检查）：审查无 P0/P1（仅 P2）→ 下一轮 revise 为冻结轮。
+      // 不再受 DEEPEN_MIN_ROUNDS 限制——审查报告客观无 P0/P1 就该收敛，不强制凑轮数。
+      let consecutiveNoImprovement = mode.consecutiveNoImprovement;
+      let critiqueConvergedNow = false;
+      let critiqueContent = '';
+      if (isCritiqueRound(mode.round)) {
+        try {
+          const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-critique.md')}`);
+          if (res.ok) {
+            const data = await res.json();
+            critiqueContent = data.content || '';
+            critiqueConvergedNow = critiqueConverged(critiqueContent);
+          }
+        } catch { /* 读文件失败不阻断 */ }
+      }
+
+      // 获取 deepen-log.md（评分轨迹展示 + 停滞检测共用一次读取）
+      let logContent = '';
+      try {
+        const logRes = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-log.md')}`);
+        if (logRes.ok) {
+          const logData = await logRes.json();
+          logContent = logData.content || '';
+        }
+      } catch { /* 读文件失败不阻断 */ }
+
+      // 停止条件 3：改进验证饱和——仅在超过最低轮数后检查（防止早期偶然命中）。
+      // 信号 = 审查报告标记串 或 最近两轮维度评分完全停滞（不依赖 agent 逐字写标记）。
+      if (mode.round >= DEEPEN_MIN_ROUNDS && isCritiqueRound(mode.round)) {
+        const saturated = detectNoImprovement(critiqueContent) || detectScoreStagnation(logContent);
+        if (saturated) {
+          consecutiveNoImprovement++;
+        } else {
+          consecutiveNoImprovement = 0;
+        }
+        // 连续 2 个 Critique 轮饱和 → 真正停滞
+        if (consecutiveNoImprovement >= 2) {
+          exitDeepen('改进验证：连续 2 轮审查无实质改进');
+          return;
+        }
+      }
+
+      // 获取最新评分轨迹用于状态条展示
+      let latestScores = mode.latestScores;
+      if (logContent) {
+        latestScores = parseLatestScores(logContent);
+      }
+
+      // 停止条件 4：截止时间到
+      if (Date.now() >= mode.deadline) {
+        exitDeepen('截止时间到');
+        return;
+      }
+
+      // 停止条件 5：预算上限（美元）——防止无人值守循环烧穿额度
+      if (mode.budget != null && totalCost >= mode.budget) {
+        exitDeepen(`达到预算上限 $${mode.budget.toFixed(2)}（累计 $${totalCost.toFixed(4)}）`);
+        return;
+      }
+
+      // 继续下一轮（失败时重试当前轮，不跳过）
+      const nextRound = succeeded ? mode.round + 1 : mode.round;
+      // 停止条件 6：达到最大轮数（兜底防止无限循环）
+      if (nextRound > DEEPEN_MAX_ROUNDS) {
+        exitDeepen(`达到最大轮数（${DEEPEN_MAX_ROUNDS}）`);
+        return;
+      }
+      // 收敛后（含冻结轮重试）的 revise 轮均按冻结轮发送：P2 入 backlog，禁止改产出
+      const converged = mode.converged || critiqueConvergedNow;
+      setDeepenMode({ ...mode, round: nextRound, consecutiveFailures, consecutiveNoImprovement, latestScores, converged, totalCost });
+      sendMessage({
+        projectId,
+        agentId,
+        skillId,
+        stage: mode.stage,
+        message: buildDeepenMessage(mode.stage, nextRound, mode.userHint, mode.customDimensions, converged),
+        autonomous: true,
+        trimHistory: true,
+        deepenRound: nextRound,
+        model: selectedModel !== 'default' ? selectedModel : undefined,
+      });
+    })();
+  }, [chatMessages, exitDeepen, projectId, agentId, skillId, selectedModel, sendMessage]);
+
   // 深化循环续轮：run 完成后（isRunning true→false）触发下一轮
   useEffect(() => {
     if (!deepenMode?.active) {
@@ -367,122 +508,23 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     }
     // 检测 isRunning 从 true→false（run 刚完成）
     if (prevIsRunningRef.current && !isRunning) {
-      const lastMsg = chatMessages[chatMessages.length - 1];
-      const succeeded = !lastMsg?.error;
-      const consecutiveFailures = succeeded ? 0 : deepenMode.consecutiveFailures + 1;
-      // 累加本轮消耗（usage.costUsd 由 run 的 usage 事件填充）
-      const roundCost = lastMsg?.usage?.costUsd ?? 0;
-      const totalCost = deepenMode.totalCost + roundCost;
-
-      // 停止条件 1：连续 2 轮失败
-      if (consecutiveFailures >= 2) {
-        exitDeepen('连续 2 轮失败，疑似额度耗尽');
-        prevIsRunningRef.current = isRunning;
-        return;
-      }
-
-      // 停止条件 2：收敛冻结轮完成——上一轮 critique 无 P0/P1（仅 P2），
-      // 随后的 revise 冻结轮（P2 入 backlog、不改产出）成功完成即结束循环
-      if (deepenMode.converged && !isCritiqueRound(deepenMode.round) && succeeded) {
-        exitDeepen('收敛：审查无 P0/P1 问题，产出已冻结（P2 已记入 backlog）');
-        prevIsRunningRef.current = isRunning;
-        return;
-      }
-
-      // 饱和检测 + 时间检查是异步的（需 fetch deepen-critique.md）
-      (async () => {
-        // 收敛判定（任何轮次都检查）：审查无 P0/P1（仅 P2）→ 下一轮 revise 为冻结轮。
-        // 不再受 DEEPEN_MIN_ROUNDS 限制——审查报告客观无 P0/P1 就该收敛，不强制凑轮数。
-        let consecutiveNoImprovement = deepenMode.consecutiveNoImprovement;
-        let critiqueConvergedNow = false;
-        let critiqueContent = '';
-        if (isCritiqueRound(deepenMode.round)) {
-          try {
-            const res = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-critique.md')}`);
-            if (res.ok) {
-              const data = await res.json();
-              critiqueContent = data.content || '';
-              critiqueConvergedNow = critiqueConverged(critiqueContent);
-            }
-          } catch { /* 读文件失败不阻断 */ }
-        }
-
-        // 获取 deepen-log.md（评分轨迹展示 + 停滞检测共用一次读取）
-        let logContent = '';
-        try {
-          const logRes = await fetch(`/api/projects/${projectId}/files?path=${encodeURIComponent('deepen-log.md')}`);
-          if (logRes.ok) {
-            const logData = await logRes.json();
-            logContent = logData.content || '';
-          }
-        } catch { /* 读文件失败不阻断 */ }
-
-        // 停止条件 3：改进验证饱和——仅在超过最低轮数后检查（防止早期偶然命中）。
-        // 信号 = 审查报告标记串 或 最近两轮维度评分完全停滞（不依赖 agent 逐字写标记）。
-        if (deepenMode.round >= DEEPEN_MIN_ROUNDS && isCritiqueRound(deepenMode.round)) {
-          const saturated = detectNoImprovement(critiqueContent) || detectScoreStagnation(logContent);
-          if (saturated) {
-            consecutiveNoImprovement++;
-          } else {
-            consecutiveNoImprovement = 0;
-          }
-          // 连续 2 个 Critique 轮饱和 → 真正停滞
-          if (consecutiveNoImprovement >= 2) {
-            exitDeepen('改进验证：连续 2 轮审查无实质改进');
-            prevIsRunningRef.current = isRunning;
-            return;
-          }
-        }
-
-        // 获取最新评分轨迹用于状态条展示
-        let latestScores = deepenMode.latestScores;
-        if (logContent) {
-          latestScores = parseLatestScores(logContent);
-        }
-
-        // 停止条件 4：截止时间到
-        if (Date.now() >= deepenMode.deadline) {
-          exitDeepen('截止时间到');
-          prevIsRunningRef.current = isRunning;
-          return;
-        }
-
-        // 停止条件 5：预算上限（美元）——防止无人值守循环烧穿额度
-        if (deepenMode.budget != null && totalCost >= deepenMode.budget) {
-          exitDeepen(`达到预算上限 $${deepenMode.budget.toFixed(2)}（累计 $${totalCost.toFixed(4)}）`);
-          prevIsRunningRef.current = isRunning;
-          return;
-        }
-
-        // 继续下一轮（失败时重试当前轮，不跳过）
-        const nextRound = succeeded ? deepenMode.round + 1 : deepenMode.round;
-        // 停止条件 5：达到最大轮数（兜底防止无限循环）
-        if (nextRound > DEEPEN_MAX_ROUNDS) {
-          exitDeepen(`达到最大轮数（${DEEPEN_MAX_ROUNDS}）`);
-          prevIsRunningRef.current = isRunning;
-          return;
-        }
-        // 收敛后（含冻结轮重试）的 revise 轮均按冻结轮发送：P2 入 backlog，禁止改产出
-        const converged = deepenMode.converged || critiqueConvergedNow;
-        setDeepenMode({ ...deepenMode, round: nextRound, consecutiveFailures, consecutiveNoImprovement, latestScores, converged, totalCost });
-        sendMessage({
-          projectId,
-          agentId,
-          skillId,
-          stage: deepenMode.stage,
-          message: buildDeepenMessage(deepenMode.stage, nextRound, deepenMode.userHint, deepenMode.customDimensions, converged),
-          autonomous: true,
-          trimHistory: true,
-          deepenRound: nextRound,
-          model: selectedModel !== 'default' ? selectedModel : undefined,
-        });
-      })();
+      advanceDeepen(deepenMode);
     }
     prevIsRunningRef.current = isRunning;
-  }, [isRunning, deepenMode, chatMessages, exitDeepen, projectId, agentId, skillId, selectedModel, sendMessage]);
+  }, [isRunning, deepenMode, advanceDeepen]);
 
   // Fetch conversations for this project
   const { data: conversations } = useConversations(projectId);
+
+  // run 结束后失效审阅查询：run 进行中 GET /review 返回占位（后端不做 git/不
+  // checkpoint 半成品），结束后重拉真实待审阅改动，审阅面板与徽标同步更新。
+  const runWasActiveRef = useRef(false);
+  useEffect(() => {
+    if (runWasActiveRef.current && !isRunning) {
+      queryClient.invalidateQueries({ queryKey: ['review', projectId] });
+    }
+    runWasActiveRef.current = isRunning;
+  }, [isRunning, projectId, queryClient]);
 
   // 校验恢复的会话 id 仍存在；已被删除则回退到最新会话或清空
   useEffect(() => {
@@ -641,23 +683,36 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     }
   };
 
-  /** 样章门被拦后「仍要开始正式写作」：显式确认后 force 旁路。 */
+  /** 样章门被拦后「仍要继续」：按被拦截消息的原始意图（stage/mode）携带 force 重发。
+   *  旧实现硬编码 stage:'writing'——用户在校样章阶段用「✎修订」被门拦时，
+   *  唯一的逃生口却是「开始正式写作」，与用户意图错位。 */
   const handleForceWriting = () => {
     const lastUserMsg = [...chatMessages].reverse().find((m) => m.role === 'user');
     if (!lastUserMsg) return;
-    toast('跳过样章直接开始正式写作？', {
+    const blockedMsg = [...chatMessages].reverse().find((m) => m.role === 'assistant' && m.errorCode === 'sample-gate');
+    const retryParams = (blockedMsg?.retryParams ?? null) as SendMessageParams | null;
+    const isRevise = retryParams?.mode === 'revise' && !!retryParams.targetFile;
+    toast(`跳过样章门${isRevise ? '继续本次修订' : '直接开始正式写作'}？`, {
       description: '样章用于检验声口与节奏，跳过后大纲问题会在正文中直接暴露',
       action: {
-        label: '确认开始',
+        label: `确认${isRevise ? '修订' : '开始'}`,
         onClick: () => {
           sendMessage({
             projectId,
             agentId,
             skillId,
-            stage: 'writing',
+            // 按原意图重发；刷新后 retryParams 丢失时回退当前阶段（而非硬编码 writing）
+            stage: retryParams?.stage ?? effectiveStage,
             message: lastUserMsg.content,
             force: true,
             model: selectedModel !== 'default' ? selectedModel : undefined,
+            ...(isRevise
+              ? {
+                  mode: 'revise' as const,
+                  targetFile: retryParams!.targetFile,
+                  revisionNote: retryParams!.revisionNote,
+                }
+              : {}),
           });
         },
       },
@@ -716,6 +771,23 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     resetConversation();
   };
 
+  /** 删除当前会话：后端 DELETE /conversations/:id（含消息），文件产出不受影响。 */
+  const handleDeleteConversation = async () => {
+    const convId = activeConversationId;
+    if (!convId) return;
+    if (!window.confirm('删除当前会话及其全部消息？（章节与设定文件不受影响）')) return;
+    try {
+      const res = await fetch(`/api/conversations/${convId}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      queryClient.invalidateQueries({ queryKey: ['conversations', projectId] });
+      setActiveConversationId(null);
+      resetConversation();
+      toast.success('会话已删除');
+    } catch {
+      toast.error('删除会话失败');
+    }
+  };
+
   const handleSelectConversation = (convId: string) => {
     const conv = conversations?.find((c) => c.id === convId);
     if (conv?.stage && conv.stage !== stage) {
@@ -755,6 +827,20 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
             </option>
           ))}
         </select>
+
+        <button
+          className={iconBtn}
+          onClick={handleDeleteConversation}
+          disabled={isRunning || !activeConversationId}
+          title="删除当前会话（文件产出不受影响）"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <line x1="10" y1="11" x2="10" y2="17" />
+            <line x1="14" y1="11" x2="14" y2="17" />
+          </svg>
+        </button>
 
         <select
           className={select}
@@ -1080,6 +1166,36 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
               <span className={deepenScores}>📊 {deepenMode.latestScores}</span>
             )}
             <button className={reviseBannerClose} onClick={() => exitDeepen('手动停止')} title="停止深化循环">✕</button>
+          </div>
+        )}
+        {pendingDeepenResume && !deepenMode && (
+          <div className={deepenBanner}>
+            <span>
+              ⏸ 检测到未完成的深化循环（{pendingDeepenResume.stage} 阶段 · 第 {pendingDeepenResume.round} 轮 · 截止 {new Date(pendingDeepenResume.deadline).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}）
+            </span>
+            <button
+              className={deepenConfirmBtn}
+              onClick={() => {
+                const mode = pendingDeepenResume;
+                setPendingDeepenResume(null);
+                setDeepenMode(mode);
+                // 无 run 在途（刷新发生在两轮之间）：直接推进下一轮，
+                // 否则等待当前 run 结束后由续轮 effect 接管。
+                if (!isRunning) advanceDeepen(mode);
+              }}
+            >
+              继续深化
+            </button>
+            <button
+              className={deepenCancelBtn}
+              onClick={() => {
+                setPendingDeepenResume(null);
+                // 显式放弃：清除持久化状态（挂载 effect 不代劳，避免误清）
+                try { localStorage.removeItem(deepenKey); } catch { /* ignore */ }
+              }}
+            >
+              放弃
+            </button>
           </div>
         )}
         {showCommands && filteredCommands.length > 0 && (

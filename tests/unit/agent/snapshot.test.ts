@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ensureGitInit, createSnapshot, ensureDraftBranch, reviewDiff, mergeDraft, discardDraft, restoreSnapshot } from '../../../src/agent/snapshot';
+import { ensureGitInit, createSnapshot, ensureDraftBranch, reviewDiff, mergeDraft, discardDraft, restoreSnapshot, resetMainBranch } from '../../../src/agent/snapshot';
 
 const execFileAsync = promisify(execFile);
 
@@ -174,6 +174,46 @@ describe('restoreSnapshot', () => {
     // 工作区干净：回滚已提交
     const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: dir });
     expect(statusOut.trim()).toBe('');
+  });
+});
+
+describe('resetMainBranch', () => {
+  let dir: string;
+  let baseHash: string;
+
+  beforeEach(async () => {
+    dir = await makeRepo();
+    await ensureDraftBranch(dir);
+    const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: dir });
+    baseHash = stdout.trim();
+    await fs.writeFile(path.join(dir, 'ch1.md'), '第一章\n');
+    await createSnapshot(dir, '写第一章');
+    // main 前移到 ch1（模拟「审阅合并」后的镜像状态）
+    await mergeDraft(dir);
+    // 回滚点之后又写了 ch2
+    await fs.writeFile(path.join(dir, 'ch2.md'), '第二章\n');
+    await createSnapshot(dir, '写第二章');
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('回滚后重置 main 到快照：反向审阅 diff 消除，ff 不变量保持', async () => {
+    const ok = await restoreSnapshot(dir, baseHash);
+    expect(ok).toBe(true);
+    const reset = await resetMainBranch(dir, baseHash);
+    expect(reset).toBe(true);
+    expect(await mainHash(dir)).toBe(baseHash);
+    // main 是 draft（回滚提交）的祖先 → 后续「合并」的 ff-only 依然可行
+    await execFileAsync('git', ['merge-base', '--is-ancestor', 'main', 'HEAD'], { cwd: dir });
+    // 反向 diff 消除：审阅面板无待审阅
+    const r = await reviewDiff(dir);
+    expect(r.files).toHaveLength(0);
+  });
+
+  it('非法快照 hash（防御路径）返回 false，不改动 main', async () => {
+    const beforeMain = await mainHash(dir);
+    const reset = await resetMainBranch(dir, 'deadbeef'.repeat(5));
+    expect(reset).toBe(false);
+    expect(await mainHash(dir)).toBe(beforeMain);
   });
 });
 

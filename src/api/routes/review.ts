@@ -29,6 +29,13 @@ reviewRouter.get('/', async (c) => {
   } catch {
     return c.json({ error: '项目不存在' }, 404);
   }
+  // run 进行中不跑 reviewDiff：reviewDiff 会把工作区未提交改动 checkpoint
+  // 成 commit（agent 写盘途中的半成品文件会被提交进审阅队列），且 ensureDraftBranch
+  // 的 checkout 可能与 agent 写盘互踩。返回空占位，run 结束后前端失效本查询重拉。
+  const activeRun = getActiveRunForProject(projectId);
+  if (activeRun) {
+    return c.json({ commits: [], files: [], totalAdded: 0, totalRemoved: 0, runInProgress: true, runId: activeRun.id });
+  }
   try {
     const result = await reviewDiff(projectDir);
     return c.json(result);

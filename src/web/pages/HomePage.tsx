@@ -243,8 +243,9 @@ export default function HomePage() {
       title: title.trim(),
       path: projectPath.trim(),
       genre,
-      targetWords: parseInt(targetWords) || 100000,
-      chapterCount: parseInt(chapterCount) || 20,
+      // 下限钳制：0/负数会导致每章字数目标 Infinity（字数校验静默失效）
+      targetWords: Math.max(1, parseInt(targetWords) || 100000),
+      chapterCount: Math.max(1, parseInt(chapterCount) || 20),
       ...(intent ? { intent } : {}),
     }, {
       onSuccess: (data) => {
@@ -344,11 +345,11 @@ export default function HomePage() {
             </div>
             <div>
               <label className={fieldLabel}>目标字数</label>
-              <input className={cx(input, inputFull)} type="number" value={targetWords} onChange={(e) => setTargetWords(e.target.value)} />
+              <input className={cx(input, inputFull)} type="number" min={1} value={targetWords} onChange={(e) => setTargetWords(e.target.value)} />
             </div>
             <div>
               <label className={fieldLabel}>章节数</label>
-              <input className={cx(input, inputFull)} type="number" value={chapterCount} onChange={(e) => setChapterCount(e.target.value)} />
+              <input className={cx(input, inputFull)} type="number" min={1} value={chapterCount} onChange={(e) => setChapterCount(e.target.value)} />
             </div>
             <div className={fullWidth}>
               <label className={fieldLabel}>

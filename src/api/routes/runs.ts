@@ -14,7 +14,7 @@ import type { AgentEvent, StreamEvent } from '../../agent/types';
 import { ensureContextArtifacts, getStateTable } from '../../agent/context-manager';
 import { readFile, readdir, rename, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot } from '../../agent/snapshot';
+import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot, resetMainBranch } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
 import { trimHistory, extractScoreTrajectory, estimateTokens } from '../../shared/deepen';
 import { parseChapterNumber } from '../../shared/chapter-names';
@@ -525,9 +525,19 @@ runsRouter.post('/', async (c) => {
         if (feedbackRequired) {
           const feedbackCount = await countSampleFeedback(projectDir);
           if (feedbackCount < SAMPLE_GATE_REQUIRED) {
+            // 计数按「声口落地」节标题识别，agent 格式漂移会误判为 0 篇——
+            // 附上文件内容节选，让用户自证「我明明写了复盘」并对照修正格式。
+            let excerpt = '';
+            if (feedbackFileExists) {
+              const raw = await readFile(path.join(projectDir, '.novel', 'sample-feedback.md'), 'utf-8').catch(() => '');
+              const trimmed = raw.trim();
+              if (trimmed) {
+                excerpt = `\n\n当前复盘文件内容开头（供核对格式）：\n${trimmed.slice(0, 300)}${trimmed.length > 300 ? '…' : ''}`;
+              }
+            }
             return c.json({
               error: 'sample-gate',
-              message: `样章复盘不足：需在 sample-feedback.md 中完成至少 ${SAMPLE_GATE_REQUIRED} 篇复盘（当前 ${feedbackCount} 篇${feedbackFileExists ? '' : '，复盘文件缺失'}）。请回到样章阶段完成复盘并修订大纲后再开始正式写作，或携带 force: true 强制开始。`,
+              message: `样章复盘不足：需在 sample-feedback.md 中完成至少 ${SAMPLE_GATE_REQUIRED} 篇结构化复盘（按「声口落地」等节标题识别，当前识别到 ${feedbackCount} 篇${feedbackFileExists ? '' : '，复盘文件缺失'}）。请回到样章阶段完成复盘并修订大纲后再开始正式写作，或携带 force: true 强制开始。${excerpt}`,
               completedSamples: written,
               feedbackCount,
               required: SAMPLE_GATE_REQUIRED,
@@ -1303,10 +1313,17 @@ runsRouter.post('/projects/:projectId/rollback', async (c) => {
   const success = await restoreSnapshot(projectDir, body.commitHash);
   if (!success) return c.json({ error: 'Rollback failed' }, 500);
 
+  // resetMain：main（定稿镜像）随快照一并回退，消除回滚后的「反向审阅 diff」。
+  // 失败（快照非 HEAD 祖先等异常）不阻断回滚本身，如实告知前端。
+  let mainReset = false;
+  if (body.resetMain === true) {
+    mainReset = await resetMainBranch(projectDir, body.commitHash);
+  }
+
   // 磁盘回滚后按磁盘重建 chapters 表：避免写作视图显示幽灵章节与过期字数
   await resyncChaptersFromDisk(projectId, { force: true }).catch(() => {});
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, mainReset, mainResetRequested: body.resetMain === true });
 });
 
 // Create a user milestone snapshot (commit pending changes + tag)

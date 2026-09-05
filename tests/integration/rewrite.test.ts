@@ -109,6 +109,10 @@ describe('Rewrite & Chapter content API', () => {
     }
     await fs.mkdir(path.join(projectDir, '.novel', 'outline', 'chapters'), { recursive: true });
     await fs.writeFile(path.join(projectDir, '.novel', 'outline', 'chapters', '第4章.md'), '大纲第4章', 'utf-8');
+    // 质检归档章节：重编号必须同步前移，否则恢复时与正文撞号
+    await fs.mkdir(path.join(projectDir, '.novel', 'degraded'), { recursive: true });
+    await fs.writeFile(path.join(projectDir, '.novel', 'degraded', '第4章.md'), '归档第4章', 'utf-8');
+    await fs.writeFile(path.join(projectDir, '.novel', 'degraded', '第4章.summary.md'), '归档第4章摘要', 'utf-8');
     await fs.writeFile(
       path.join(projectDir, '.novel', 'foreshadow.json'),
       JSON.stringify({
@@ -136,6 +140,10 @@ describe('Rewrite & Chapter content API', () => {
     // 摘要与大纲卡片同步平移
     await expect(fs.access(path.join(projectDir, '.novel', 'chapters', '第3章.summary.md'))).resolves.toBeUndefined();
     await expect(fs.access(path.join(projectDir, '.novel', 'outline', 'chapters', '第3章.md'))).resolves.toBeUndefined();
+    // 质检归档章节同步平移
+    await expect(fs.access(path.join(projectDir, '.novel', 'degraded', '第3章.md'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(projectDir, '.novel', 'degraded', '第4章.md'))).rejects.toThrow();
+    await expect(fs.access(path.join(projectDir, '.novel', 'degraded', '第3章.summary.md'))).resolves.toBeUndefined();
     // 伏笔引用前移：plantedIn 4 → 3，resolveDeadline 8 → 7
     const raw = JSON.parse(await fs.readFile(path.join(projectDir, '.novel', 'foreshadow.json'), 'utf-8'));
     expect(raw.foreshadows[0].plantedIn).toBe(3);

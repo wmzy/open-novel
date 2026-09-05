@@ -611,6 +611,20 @@ chaptersRouter.delete('/:num', async (c) => {
             path.join(novelDir, 'outline', 'chapters', `第${m}章.md`),
             path.join(novelDir, 'outline', 'chapters', `第${m - 1}章.md`),
           ).catch(() => {});
+          // 质检归档章节同步前移：否则归档章号与正文体系脱节，
+          // 恢复时会撞上已前移的正文（目标存在即拒绝，用户拿到错误而非正确行为）
+          await fs.rename(
+            path.join(novelDir, 'degraded', `第${m}章.md`),
+            path.join(novelDir, 'degraded', `第${m - 1}章.md`),
+          ).catch(() => {});
+          await fs.rename(
+            path.join(novelDir, 'degraded', `第${m}章.summary.md`),
+            path.join(novelDir, 'degraded', `第${m - 1}章.summary.md`),
+          ).catch(() => {});
+          await fs.rename(
+            path.join(novelDir, 'degraded', `chapter-${m}.md`),
+            path.join(novelDir, 'degraded', `chapter-${m - 1}.md`),
+          ).catch(() => {});
           // DB 行前移（降序处理避免唯一索引冲突）
           await db.update(chapters)
             .set({ number: m - 1, updatedAt: new Date() })

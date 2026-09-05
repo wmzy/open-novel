@@ -46,6 +46,15 @@ const statLabel = css`
   margin-top: 0.25rem;
 `;
 
+/** 统计口径注脚：归档章节不计入正文统计（与样章门计数口径不同）。 */
+const statNote = css`
+  display: block;
+  font-size: 0.68rem;
+  color: var(--haze-color-text-secondary);
+  opacity: 0.85;
+  margin-top: 0.15rem;
+`;
+
 const chapterList = css`
   display: flex;
   flex-direction: column;
@@ -206,8 +215,16 @@ export default function WritingView({
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       queryClient.invalidateQueries({ queryKey: ['chapters', projectId] });
+      // 定稿只记录单章成熟度；与顶部「审阅」（批次合并 draft→main 定稿镜像）独立，
+      // 提示用户两处都需操作，避免「标了定稿却以为已发布」
+      if (status === 'finalized') {
+        toast.info('已标记为定稿（章节成熟度）', {
+          description: '如需将改动同步到定稿镜像（main），请点击顶部「审阅」按钮合并',
+        });
+      }
     } catch {
-      // 状态更新失败静默回滚下拉值（查询缓存未变，重渲染即恢复）
+      // 状态更新失败：toast 提示（下拉值随查询缓存自动回滚）
+      toast.error('章节状态更新失败');
     }
   };
   const { data: chapters } = useQuery<ChapterRow[]>({
@@ -340,11 +357,19 @@ export default function WritingView({
       <div className={statsRow}>
         <div className={statCard}>
           <div className={statValue}>{list.length}</div>
-          <div className={statLabel}>已写章节</div>
+          <div className={statLabel}>
+            已写章节
+            {(degradedChapters?.length ?? 0) > 0 && (
+              <span className={statNote}>另有 {degradedChapters!.length} 章归档未计入</span>
+            )}
+          </div>
         </div>
         <div className={statCard}>
           <div className={statValue}>{totalWords.toLocaleString()}</div>
-          <div className={statLabel}>总字数</div>
+          <div className={statLabel}>
+            总字数
+            {(degradedChapters?.length ?? 0) > 0 && <span className={statNote}>仅计正文，归档除外</span>}
+          </div>
         </div>
         <div className={statCard}>
           <div className={statValue}>{list.length > 0 ? Math.round(totalWords / list.length).toLocaleString() : 0}</div>

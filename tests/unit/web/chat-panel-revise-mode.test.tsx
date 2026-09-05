@@ -240,3 +240,113 @@ describe('ChatPanel 会话切换不闪烁', () => {
     });
   });
 });
+
+/**
+ * 会话删除入口测试。
+ *
+ * 来源：PM 审查——DELETE /conversations/:id 端点存在但 UI 无入口，
+ * 会话列表无限增长且 localStorage 会恢复已失效会话。
+ */
+describe('ChatPanel 会话删除', () => {
+  const fetchSpy = vi.fn();
+
+  beforeEach(() => {
+    fetchSpy.mockReset();
+    fetchSpy.mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    useRunMock.isRunning = false;
+    useRunMock.conversationId = null;
+    useRunMock.messages = [];
+    localStorage.clear();
+    conversationsMock.data = [
+      { id: 'conv-1', stage: 'concept', createdAt: '2025-01-01T00:00:00.000Z' },
+    ];
+    localStorage.setItem('open-novel:active-conversation:p1', 'conv-1');
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    cleanup();
+  });
+
+  it('删除按钮：确认后调用 DELETE /api/conversations/:id 并清空会话', async () => {
+    renderPanel();
+    const delBtn = await screen.findByTitle('删除当前会话（文件产出不受影响）');
+    expect(delBtn).not.toBeDisabled();
+    fireEvent.click(delBtn);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('/api/conversations/conv-1', { method: 'DELETE' });
+    });
+    expect(useRunMock.resetConversation).toHaveBeenCalled();
+    // 会话 id 持久化清除
+    await waitFor(() => {
+      expect(localStorage.getItem('open-novel:active-conversation:p1')).toBeNull();
+    });
+  });
+
+  it('无活跃会话时删除按钮禁用', () => {
+    localStorage.removeItem('open-novel:active-conversation:p1');
+    renderPanel();
+    const delBtn = screen.getByTitle('删除当前会话（文件产出不受影响）');
+    expect(delBtn).toBeDisabled();
+  });
+});
+
+/**
+ * 深化循环持久化测试。
+ *
+ * 来源：PM 审查——循环由前端驱动，刷新/崩溃即静默中断。
+ * 修复：deepenMode 落 localStorage，重载后横幅提示继续/放弃。
+ */
+describe('ChatPanel 深化循环恢复', () => {
+  beforeEach(() => {
+    sendMessageSpy.mockReset();
+    useRunMock.isRunning = false;
+    useRunMock.conversationId = null;
+    useRunMock.messages = [];
+    localStorage.clear();
+    conversationsMock.data = [];
+  });
+  afterEach(() => cleanup());
+
+  const storedLoop = () => ({
+    active: true,
+    stage: 'writing',
+    deadline: Date.now() + 3600_000,
+    round: 2,
+    consecutiveFailures: 0,
+    consecutiveNoImprovement: 0,
+    converged: false,
+    totalCost: 0,
+  });
+
+  it('刷新后发现挂起循环：显示恢复横幅，「继续」直接推进下一轮', async () => {
+    localStorage.setItem('open-novel:deepen:p1', JSON.stringify(storedLoop()));
+    renderPanel();
+
+    expect(await screen.findByText(/检测到未完成的深化循环/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText('继续深化'));
+
+    await waitFor(() => expect(sendMessageSpy).toHaveBeenCalled());
+    const arg = sendMessageSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.stage).toBe('writing');
+    expect(arg.deepenRound).toBe(3);
+    expect(arg.autonomous).toBe(true);
+    expect(arg.trimHistory).toBe(true);
+    // 恢复后循环状态重新落盘
+    await waitFor(() => {
+      expect(localStorage.getItem('open-novel:deepen:p1')).not.toBeNull();
+    });
+  });
+
+  it('「放弃」清除持久化循环状态', async () => {
+    localStorage.setItem('open-novel:deepen:p1', JSON.stringify(storedLoop()));
+    renderPanel();
+
+    fireEvent.click(await screen.findByText('放弃'));
+    expect(screen.queryByText(/检测到未完成的深化循环/)).not.toBeInTheDocument();
+    expect(localStorage.getItem('open-novel:deepen:p1')).toBeNull();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+});

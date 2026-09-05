@@ -19,6 +19,8 @@ export interface ReviewResult {
   files: ReviewFile[];
   totalAdded: number;
   totalRemoved: number;
+  /** run 进行中时后端返回占位（不跑 git/不做 checkpoint），任务结束后失效重拉。 */
+  runInProgress?: boolean;
 }
 
 /**
@@ -92,7 +94,8 @@ export function useReview(projectId: string) {
   return {
     review: query.data,
     isLoading: query.isLoading,
-    pendingCount: query.data?.commits.length ?? 0,
+    // run 进行中占位不计入待审阅数（否则徽标闪现）
+    pendingCount: query.data && !query.data.runInProgress ? query.data.commits.length : 0,
     merge: mergeMut.mutateAsync,
     discard: discardMut.mutateAsync,
     merging: mergeMut.isPending,

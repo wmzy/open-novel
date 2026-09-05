@@ -146,6 +146,43 @@ const previewToggle = css`
   &:hover { background: var(--haze-color-bg-secondary); }
 `;
 
+/** 导出下拉菜单容器（details/summary 复用工具栏按钮样式）。 */
+const exportMenu = css`
+  position: relative;
+  & summary {
+    list-style: none;
+    &::-webkit-details-marker { display: none; }
+  }
+`;
+
+/** 导出下拉面板：绝对定位悬浮，不挤动工具栏。 */
+const exportMenuItems = css`
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 50;
+  background: var(--haze-color-bg);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  padding: 0.25rem;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  & button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+    color: var(--haze-color-text);
+    text-align: left;
+    white-space: nowrap;
+    border-radius: 4px;
+    &:hover { background: var(--haze-color-bg-secondary); }
+  }
+`;
+
 const reviewBadge = css`
   margin-left: 0.25rem;
   background: var(--haze-color-primary);
@@ -661,9 +698,28 @@ export default function ProjectPage() {
             <button className={previewToggle} onClick={() => setShowReview(true)} title="审阅并合并 draft 到 main">
               审阅{review.pendingCount > 0 && <span className={reviewBadge}>{review.pendingCount}</span>}
             </button>
-            <button className={previewToggle} onClick={() => handleExport('markdown')} title="导出 Markdown（含设定）">MD</button>
-            <button className={previewToggle} onClick={() => handleExport('markdown', 'manuscript')} title="导出纯正文 Markdown（投稿用）">MD稿</button>
-            <button className={previewToggle} onClick={() => handleExport('text')} title="导出 TXT">TXT</button>
+            <details className={exportMenu}>
+              <summary className={previewToggle} title="导出">导出 ▾</summary>
+              <div
+                className={exportMenuItems}
+                onClick={(e) => {
+                  // 点击菜单项后收起下拉（details 默认只在 summary 上切换）
+                  if ((e.target as HTMLElement).tagName === 'BUTTON') {
+                    e.currentTarget.closest('details')?.removeAttribute('open');
+                  }
+                }}
+              >
+                <button onClick={() => handleExport('markdown')} title="导出 Markdown（含概念/世界观/角色设定）">
+                  Markdown（含设定）
+                </button>
+                <button onClick={() => handleExport('markdown', 'manuscript')} title="导出纯正文 Markdown（投稿用）">
+                  正文稿 Markdown
+                </button>
+                <button onClick={() => handleExport('text')} title="导出 TXT">
+                  TXT
+                </button>
+              </div>
+            </details>
             <button className={previewToggle} onClick={handleUndo} title="回滚到历史快照（快照之后产生的文件将被删除）">回滚</button>
             <button className={previewToggle} onClick={handleSaveSnapshot} disabled={snapshotSaving} title="保存当前状态为版本标记">
               {snapshotSaving ? '保存中...' : '存版本'}

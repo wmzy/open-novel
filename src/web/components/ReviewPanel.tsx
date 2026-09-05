@@ -193,6 +193,17 @@ const rejectBtn = css`
 const statusLabel = (s: string): string =>
   ({ added: '新增', modified: '修改', deleted: '删除' } as Record<string, string>)[s] || s;
 
+/** run 进行中占位横幅。 */
+const runBanner = css`
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--haze-color-primary);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text-secondary);
+  font-size: 0.85rem;
+  line-height: 1.5;
+`;
+
 /**
  * 审阅面板：列出 draft 相对 main 的待审阅改动，复用 RevisionDiffPanel 展示逐文件 diff。
  * 合并 = ff main 到 draft；丢弃 = reset draft 到 main（需二次确认）；
@@ -220,7 +231,11 @@ export default function ReviewPanel({ review, onMerge, onDiscard, merging, disca
           <button className={closeBtn} onClick={onClose}>✕</button>
         </div>
         <div className={body}>
-          {empty ? (
+          {review?.runInProgress ? (
+            <div className={runBanner}>
+              写作任务进行中，暂不可审阅。任务完成后待审阅改动会自动出现在这里。
+            </div>
+          ) : empty ? (
             <div>无待审阅</div>
           ) : (
             review!.files.map((f) => (

@@ -240,6 +240,37 @@ export async function restoreSnapshot(projectDir: string, commitHash: string): P
 }
 
 /**
+ * 回滚配套：把 main（审阅定稿镜像）强制指向快照 commit。
+ *
+ * 仅回滚 draft 会让 main 停在回滚前的内容——审阅面板随即出现「反向 diff」
+ * （main 相对 draft 的新内容），用户逐文件「接受」会把刚回滚掉的内容重新
+ * 写回。本函数把 main 与快照对齐，消除该语义混乱。
+ *
+ * 安全约束：快照必须是当前 HEAD 的祖先（main 被 branch -f 后仍需满足
+ * 「main 是 draft 祖先」的 ff 不变量）。listSnapshots 只列当前分支可达的
+ * commit，正常场景必然满足；merge-base 检查是防御，不满足时拒绝并返回 false。
+ * 应在 restoreSnapshot 之后调用（此时 HEAD 为回滚提交，快照为其祖先）。
+ */
+export async function resetMainBranch(projectDir: string, commitHash: string): Promise<boolean> {
+  if (inflightGitOps.has(projectDir)) return false;
+  inflightGitOps.add(projectDir);
+  try {
+    await ensureDraftBranch(projectDir);
+    try {
+      await execFileAsync('git', ['merge-base', '--is-ancestor', commitHash, 'HEAD'], { cwd: projectDir });
+    } catch {
+      return false;
+    }
+    await execFileAsync('git', ['branch', '-f', 'main', commitHash], { cwd: projectDir });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    inflightGitOps.delete(projectDir);
+  }
+}
+
+/**
  * Check if a git remote is configured.
  */
 export async function hasRemote(projectDir: string): Promise<boolean> {
@@ -267,7 +298,12 @@ export async function gitSync(projectDir: string): Promise<{ success: boolean; m
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       if (!message.includes('no tracking information')) {
-        return { success: false, message: `拉取失败: ${message}` };
+        // rebase 冲突会把工作区留在中断态：.md 文件带 <<<<<<< 冲突标记，
+        // 下一次 agent run 会读入并继续写这些标记，污染正文；且后续同步持续失败。
+        // 失败即恢复原状——本地创作内容分毫不动，用户可重试或手动处理远程分歧。
+        await execFileAsync('git', ['rebase', '--abort'], { cwd: projectDir, timeout: 10000 }).catch(() => {});
+        await execFileAsync('git', ['merge', '--abort'], { cwd: projectDir, timeout: 10000 }).catch(() => {});
+        return { success: false, message: `拉取失败，本地已保留原状态未做改动: ${message}` };
       }
     }
 

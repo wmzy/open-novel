@@ -7,6 +7,7 @@ import { projects } from '../../../src/db/schema';
 import { eq } from 'drizzle-orm';
 import apiApp from '../../../src/api-app';
 import { ensureGitInit, createSnapshot, ensureDraftBranch } from '../../../src/agent/snapshot';
+import { createRun, finishRun } from '../../../src/agent/run';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
@@ -54,6 +55,32 @@ describe('review API', () => {
     const data = await res.json();
     expect(data.commits.length).toBeGreaterThanOrEqual(1);
     expect(data.files.some((f: { path: string }) => f.path === 'ch1.md')).toBe(true);
+  });
+
+  it('GET /review run 进行中返回占位且不 checkpoint 半成品', async () => {
+    // agent 写盘途中的半成品文件（未提交）
+    await fs.writeFile(path.join(tempDir, 'half.md'), '半成品\n');
+    const run = createRun({
+      projectId,
+      agentId: 'claude',
+      skillId: 'novel',
+      stage: 'writing',
+      conversationId: 'test_conv_1',
+    });
+    run.status = 'running';
+    try {
+      const res = await apiApp.request(`/api/projects/${projectId}/review`);
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.runInProgress).toBe(true);
+      expect(data.commits).toHaveLength(0);
+      expect(data.files).toHaveLength(0);
+      // 半成品未被 checkpoint 提交进审阅队列
+      const { stdout } = await execFileAsync('git', ['log', '--format=%s', '-1'], { cwd: tempDir });
+      expect(stdout.trim()).not.toContain('review checkpoint');
+    } finally {
+      finishRun(run, 'canceled');
+    }
   });
 
   it('POST /review/merge 把 main ff 到 draft', async () => {
