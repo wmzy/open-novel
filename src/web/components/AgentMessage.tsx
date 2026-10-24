@@ -270,6 +270,10 @@ export function buildBlocks(events: AgentEvent[]): Block[] {
 
 export default memo(function AgentMessage({ role, content, events, startedAt, endedAt, usage, contextSize, error, artifacts, onResend, onReply, projectId }: Props) {
   const { a: mdLinkA, dialog: mdFileDialog } = useMdFilePreview(projectId);
+  const blocks = useMemo(
+    () => events?.length ? buildBlocks(events) : (content ? [{ kind: 'text' as const, text: content }] : []),
+    [events, content],
+  );
   if (role === 'user') {
     return (
       <div className={messageBlock}>
@@ -289,10 +293,6 @@ export default memo(function AgentMessage({ role, content, events, startedAt, en
     );
   }
 
-  const blocks = useMemo(
-    () => events?.length ? buildBlocks(events) : (content ? [{ kind: 'text' as const, text: content }] : []),
-    [events, content],
-  );
   const hasContent = blocks.length > 0 || content;
 
   return (
