@@ -55,6 +55,27 @@ const RECONNECT_QUERY_FAMILIES = [
   'state-characters',
 ] as const;
 
+type ExportFormat = 'markdown' | 'text' | 'epub' | 'docx';
+
+const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
+  markdown: 'md',
+  text: 'txt',
+  epub: 'epub',
+  docx: 'docx',
+};
+
+/** 解析 Content-Disposition：优先 RFC 5987 filename*（UTF-8），回退 filename。 */
+function parseExportFilename(disposition: string): string | null {
+  const star = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const raw = star?.[1] ?? disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 const layout = css`
   display: flex;
   height: 100%;
@@ -368,7 +389,7 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: {
         </details>
         <details className={rewriteDetails}>
           <summary className={rewriteSummary}>🔍 质量检查面板</summary>
-          <QualityCheckPanel projectId={projectId} chapterNum={num} />
+          <QualityCheckPanel key={num} projectId={projectId} chapterNum={num} agentId={agentId} />
         </details>
       </div>
     );
@@ -624,8 +645,8 @@ export default function ProjectPage() {
     }
   }, [handleViewChange, id, project?.currentStage, queryClient]);
 
-  const handleExport = async (format: 'markdown' | 'text', scope?: 'full' | 'manuscript') => {
-    const qs = format === 'markdown' && scope === 'manuscript' ? '?scope=manuscript' : '';
+  const handleExport = async (format: ExportFormat, scope?: 'full' | 'manuscript') => {
+    const qs = scope ? `?scope=${scope}` : '';
     try {
       const res = await fetch(`/api/projects/${id}/export/${format}${qs}`);
       if (!res.ok) {
@@ -641,9 +662,8 @@ export default function ProjectPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       const disposition = res.headers.get('content-disposition') ?? '';
-      const m = disposition.match(/filename="?([^";]+)"?/);
       a.href = url;
-      a.download = m ? decodeURIComponent(m[1]) : `${project?.title ?? 'novel'}.${format === 'markdown' ? 'md' : 'txt'}`;
+      a.download = parseExportFilename(disposition) ?? `${project?.title ?? 'novel'}.${EXPORT_EXTENSIONS[format]}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -754,6 +774,12 @@ export default function ProjectPage() {
                 </button>
                 <button onClick={() => handleExport('text')} title="导出 TXT">
                   TXT
+                </button>
+                <button onClick={() => handleExport('epub')} title="导出 EPUB 3 电子书（正文稿）">
+                  EPUB
+                </button>
+                <button onClick={() => handleExport('docx')} title="导出 Word 文档（正文稿）">
+                  DOCX
                 </button>
               </div>
             </details>

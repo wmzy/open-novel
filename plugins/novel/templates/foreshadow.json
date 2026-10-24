@@ -8,6 +8,7 @@
       "plantedIn": 1,
       "resolveDeadline": 12,
       "resolvedIn": null,
+      "progressedIn": [],
       "dependsOn": [],
       "weight": "major"
     },
@@ -19,6 +20,7 @@
       "plantedIn": 3,
       "resolveDeadline": 18,
       "resolvedIn": null,
+      "progressedIn": [],
       "dependsOn": [1],
       "weight": "light"
     },
@@ -30,6 +32,7 @@
       "plantedIn": 5,
       "resolveDeadline": null,
       "resolvedIn": null,
+      "progressedIn": [],
       "dependsOn": [],
       "weight": "light"
     }

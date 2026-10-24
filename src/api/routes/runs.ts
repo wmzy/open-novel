@@ -18,12 +18,16 @@ import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot, res
 import { resolveProjectDir } from '../../shared/project-dir';
 import { trimHistory, extractScoreTrajectory, estimateTokens } from '../../shared/deepen';
 import { parseChapterNumber } from '../../shared/chapter-names';
+import { isWritingStage } from '../../shared/stages';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { conversations, messages, projects, runs as runsTable, chapters } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { eq, desc, and } from 'drizzle-orm';
 import { resyncChaptersFromDisk } from './chapters';
+import { evaluateMilestones } from '../../agent/milestones';
+import { advanceBatch, readBatchState } from '../../agent/batch';
+import { scheduleSemanticIndexing } from '../../agent/semantic-index';
 
 // ===== 流层 watchdog 配置 =====
 /** 滑动窗口大小（字符数）。窗口内统计 2-gram 重复率。 */
@@ -464,7 +468,7 @@ runsRouter.post('/', async (c) => {
   // 写作上下文，浪费一次 agent 调用。合法集 = 7 主阶段 + 写作子模式 + 隐藏阶段。
   const VALID_RUN_STAGES = new Set([
     'concept', 'world', 'characters', 'outline', 'scenes', 'sample', 'writing',
-    'drafting', 'revision', 'polish', 'decompose', 'enrich',
+    'drafting', 'revision', 'polish', 'decompose', 'enrich', 'retro',
   ]);
   if (stage !== undefined && !VALID_RUN_STAGES.has(stage)) {
     return c.json({ error: 'invalid-stage', message: `未知阶段：${stage}` }, 400);
@@ -987,6 +991,42 @@ runsRouter.post('/', async (c) => {
     });
 
     finishRun(run, code === 0 ? 'succeeded' : 'failed');
+
+    // 批量写作：本章 run 若已由前端登记（lastRunId），服务端在结束时自行推进
+    // 状态机——成功→下一章/暂停/完成，失败→resumeChapter。前端也会调用
+    // /batch/advance（幂等，重复回报不跳章），因此刷新/关闭页面不会丢进度。
+    try {
+      const batchState = await readBatchState(projectDir);
+      if (
+        batchState?.status === 'running'
+        && batchState.lastRunId === run.id
+        && batchState.lastRunChapter !== null
+      ) {
+        // 用 run 启动时登记的章节号推进（不能用 currentChapter：前端可能
+        // 已经先调用 /batch/advance 指向下一章，否则会误跳一章）。
+        await advanceBatch(
+          projectDir,
+          batchState.lastRunChapter,
+          code === 0,
+          code === 0 ? null : 'run failed',
+        );
+      }
+    } catch { /* 批量状态推进失败不阻断 run 收尾 */ }
+
+    // run 已释放项目锁；写作型 run 调度一次后台增量语义索引（未配置时为空操作）。
+    // 不依赖前端随后拉取 chapters——关闭页面也能补齐索引。
+    if (isWritingStage(stage)) scheduleSemanticIndexing(projectId);
+
+    // 自动里程碑：成功写章后评估 K 章/卷末边界。延迟到 run 状态落定之后，
+    // 让批量写作的下一章有机会先拿到串行锁（此时评估会推迟/跳过回顾并记录
+    // note），也避免把收尾中的半成品写进里程碑快照。retro run 自身不写正文，
+    // 跳过以免递归。
+    if (code === 0 && stage !== 'retro') {
+      const timer = setTimeout(() => {
+        void evaluateMilestones(projectDir, projectId, { agentId, skillId }).catch(() => {});
+      }, 1500);
+      timer.unref?.();
+    }
   });
 
   return run;

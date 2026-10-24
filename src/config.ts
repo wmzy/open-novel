@@ -5,11 +5,16 @@
 export const config = {
   // Server
   port: parseInt(process.env.PORT || '3006', 10),
-  // TODO(security): 当前无任何认证，HOST 默认 0.0.0.0 意味着局域网内任意主机可
-  // 读写全部项目文件、触发 AI 调用（消耗 API 额度）、删除项目/恢复备份。
-  // 产品上线前必须加访问控制（认证或默认绑定 127.0.0.1）；本地单机使用期间
-  // 建议显式设置 HOST=127.0.0.1。
-  host: process.env.HOST || '0.0.0.0',
+  // 默认只监听回环地址：本应用可读写项目文件、触发 AI 调用、删除项目/恢复备份，
+  // 暴露到局域网等于把这些能力交给任何能连上端口的人。需要局域网访问时显式
+  // 设置 HOST=0.0.0.0，并强烈建议同时设置 AUTH_TOKEN（见 src/api/middleware/auth.ts）。
+  host: process.env.HOST || '127.0.0.1',
+
+  // 可选访问令牌。设置后所有 /api/*（含 SSE）都需要 Bearer / 登录 Cookie / 一次性 ?token=。
+  // 未设置时保持本地单机使用的旧行为；HOST 非回环且未设置时启动会打印安全警告。
+  auth: {
+    token: process.env.AUTH_TOKEN?.trim() || undefined,
+  },
 
   // Agent paths
   agentPaths: {

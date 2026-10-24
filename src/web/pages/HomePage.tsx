@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useProjects, useCreateProject, useDeleteProject } from '@/hooks/useProject';
 import { pageContainer, pageTitle, card, primaryBtn, input, emptyState } from '@/styles/shared';
 import NavHeader from '@/web/components/NavHeader';
+import ImportManuscriptDialog from '@/web/components/ImportManuscriptDialog';
 
 const grid = css`
   display: grid;
@@ -203,6 +204,7 @@ export default function HomePage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [showImport, setShowImport] = useState(false);
+  const [showManuscriptImport, setShowManuscriptImport] = useState(false);
   const [importPath, setImportPath] = useState('');
   const [intentPacing, setIntentPacing] = useState('');
   const [intentCharacterWeight, setIntentCharacterWeight] = useState('');
@@ -324,6 +326,7 @@ export default function HomePage() {
           <input className={input} placeholder="搜索项目..." value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }} />
         </div>
         <button className={primaryBtn} onClick={() => setShowCreate(true)}>新建项目</button>
+        <button className={cx(primaryBtn, secondaryBtn)} onClick={() => setShowManuscriptImport(true)}>导入手稿</button>
         <button className={cx(primaryBtn, secondaryBtn)} onClick={() => setShowImport(true)}>打开项目</button>
       </div>
 
@@ -479,6 +482,12 @@ export default function HomePage() {
             </div>
           )}
         </>
+      )}
+      {showManuscriptImport && (
+        <ImportManuscriptDialog
+          onClose={() => setShowManuscriptImport(false)}
+          onImported={(projectId) => navigate(`/projects/${projectId}`)}
+        />
       )}
       {deleteTarget && (
         <div className={deleteOverlay} onClick={() => setDeleteTarget(null)}>

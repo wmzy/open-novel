@@ -83,6 +83,38 @@ describe('buildForeshadowGantt', () => {
     expect(gantt).toContain('section 已放弃');
   });
 
+  it('progressing 状态进入「推进中」分区，条形止于最近推进章', () => {
+    const items: ForeshadowItem[] = [
+      { id: 1, content: '推进中的伏笔', status: 'progressing', plantedIn: 2, progressedIn: [4, 7] },
+    ];
+    const gantt = buildForeshadowGantt(items)!;
+    expect(gantt).toContain('section 推进中');
+    // start=2, end=最近推进章 7 → dur=5
+    expect(gantt).toContain('f1, 2, 5');
+  });
+
+  it('传入 currentChapter 时逾期条目带 ⚠ 标记；deadline == currentChapter 不标记', () => {
+    const overdueItems: ForeshadowItem[] = [
+      { id: 1, content: '逾期伏笔', status: 'planted', plantedIn: 2, resolveDeadline: 9 },
+    ];
+    const overdueGantt = buildForeshadowGantt(overdueItems, 10)!;
+    expect(overdueGantt).toContain('⚠逾期');
+    expect(overdueGantt).toContain('⚠逾期伏笔期限');
+
+    const boundaryItems: ForeshadowItem[] = [
+      { id: 2, content: '本章到期', status: 'progressing', plantedIn: 2, resolveDeadline: 10, progressedIn: [5] },
+    ];
+    expect(buildForeshadowGantt(boundaryItems, 10)).not.toContain('⚠');
+  });
+
+  it('显式 overdue 字段优先于 currentChapter 计算', () => {
+    const items: ForeshadowItem[] = [
+      { id: 1, content: '显式逾期', status: 'planted', plantedIn: 2, resolveDeadline: 30, overdue: true },
+    ];
+    const gantt = buildForeshadowGantt(items, 10)!;
+    expect(gantt).toContain('⚠逾期');
+  });
+
   it('期限参与最大章计算（无回收章的条形止于期限）', () => {
     const items: ForeshadowItem[] = [
       { id: 1, content: '甲', status: 'planted', plantedIn: 2, resolveDeadline: 30 },

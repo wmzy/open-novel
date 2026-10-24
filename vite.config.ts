@@ -148,7 +148,9 @@ export default defineConfig({
   },
   server: {
     port: 3006,
-    host: true,
+    // 安全默认：只监听回环地址。需要局域网/容器访问时显式改为 '0.0.0.0'，
+    // 并建议同时设置 AUTH_TOKEN（生产入口 HOST 默认同样是 127.0.0.1）。
+    host: '127.0.0.1',
   },
   ssr: {
     noExternal: ['hono'],

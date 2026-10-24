@@ -118,7 +118,7 @@ describe('伏笔债务路由 /api/projects/:projectId/foreshadows', () => {
     expect(data.stats.overdue.map((f: { id: number }) => f.id)).toEqual([2]);
     // 未结清 2 条（#1 light + #2 light）→ 债务分 2
     expect(data.stats.debtScore).toBe(2);
-    expect(data.stats.byStatus).toEqual({ pending: 0, planted: 2, resolved: 0, dropped: 0 });
+    expect(data.stats.byStatus).toEqual({ pending: 0, planted: 2, progressing: 0, resolved: 0, dropped: 0 });
     expect(data.chapterCount).toBe(20);
   });
 
@@ -172,6 +172,7 @@ describe('伏笔债务路由 /api/projects/:projectId/foreshadows', () => {
       weight: 'light',       // 默认权重
       plantedIn: 5,          // "第5章" → 5
       resolveDeadline: 12,
+      progressedIn: [],      // 未显式提供时的默认值
       dependsOn: [],
     });
 
@@ -231,6 +232,151 @@ describe('伏笔债务路由 /api/projects/:projectId/foreshadows', () => {
       body: JSON.stringify({ status: 'dropped' }),
     });
     expect(missing.status).toBe(404);
+  });
+
+  it('GET：逾期边界（期限=当前章不算逾期，< 当前章才算）并暴露顶层 overdue', async () => {
+    writeNovelFile(tmpDir, 'state.json', {
+      characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 10, updatedAt: '',
+    });
+    writeNovelFile(tmpDir, 'foreshadow.json', {
+      foreshadows: [
+        // 期限 10 == 当前章 10 → 本章到期，不算逾期
+        { id: 1, content: '本章到期', type: 'chekhov', status: 'planted', plantedIn: 2, resolveDeadline: 10, resolvedIn: null },
+        // 期限 9 < 10 → 逾期；progressing 同样计入；旧数据无 progressedIn → 默认 []
+        { id: 2, content: '推进中逾期', type: 'identity', status: 'progressing', plantedIn: 3, resolveDeadline: 9, resolvedIn: null, progressedIn: [6] },
+        // 已回收的旧期限不报警
+        { id: 3, content: '已回收', type: 'world', status: 'resolved', plantedIn: 1, resolveDeadline: 5, resolvedIn: 6 },
+      ],
+    });
+
+    const res = await app.request(`/api/projects/${projectId}/foreshadows`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.currentChapter).toBe(10);
+    expect(data.overdue.map((f: { id: number }) => f.id)).toEqual([2]);
+    expect(data.overdueIds).toEqual([2]);
+    expect(data.stats.overdue.map((f: { id: number }) => f.id)).toEqual([2]);
+    expect(data.dueSoon).toEqual([]);
+    expect(data.foreshadows[0].progressedIn).toEqual([]);
+    expect(data.foreshadows[1].progressedIn).toEqual([6]);
+    expect(data.stats.byStatus.progressing).toBe(1);
+    // 债务分：planted light(1) + progressing identity light(1) = 2
+    expect(data.stats.debtScore).toBe(2);
+  });
+
+  it('PATCH：状态机前向迁移生效，回退/跨级返回 400 且不落盘', async () => {
+    writeNovelFile(tmpDir, 'state.json', {
+      characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 5, updatedAt: '',
+    });
+    writeNovelFile(tmpDir, 'foreshadow.json', {
+      foreshadows: [{ id: 1, content: '状态机', type: 'chekhov', status: 'planted', plantedIn: 2, resolveDeadline: 9, resolvedIn: null, dependsOn: [], weight: 'light' }],
+    });
+
+    // planted → progressing：记录当前章号
+    const forward = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'progressing' }),
+    });
+    expect(forward.status).toBe(200);
+    expect((await forward.json()).foreshadow).toMatchObject({ status: 'progressing', progressedIn: [5] });
+
+    // progressing → planted（回退）→ 400
+    const backward = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'planted' }),
+    });
+    expect(backward.status).toBe(400);
+    expect((await backward.json()).error).toBe('invalid-status-transition');
+
+    const saved = JSON.parse(fs.readFileSync(path.join(tmpDir, '.novel', 'foreshadow.json'), 'utf-8'));
+    expect(saved.foreshadows[0].status).toBe('progressing'); // 非法请求未写盘
+
+    // planted → pending（回退）同样 400
+    const backToPending = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'pending' }),
+    });
+    expect(backToPending.status).toBe(400);
+
+    // progressing → resolved 合法；resolved → planted 默认 400，reopen=true 放行并清空 resolvedIn
+    const resolve = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'resolved', resolvedIn: 8 }),
+    });
+    expect(resolve.status).toBe(200);
+
+    const reopenDenied = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'planted' }),
+    });
+    expect(reopenDenied.status).toBe(400);
+
+    const reopened = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'planted', reopen: true }),
+    });
+    expect(reopened.status).toBe(200);
+    expect((await reopened.json()).foreshadow).toMatchObject({ status: 'planted', resolvedIn: null });
+  });
+
+  it('PATCH：progressing 重复推进追加 progressedIn 并去重（可显式指定 chapter）', async () => {
+    writeNovelFile(tmpDir, 'state.json', {
+      characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 5, updatedAt: '',
+    });
+    writeNovelFile(tmpDir, 'foreshadow.json', {
+      foreshadows: [{ id: 1, content: '推进记录', type: 'emotional', status: 'planted', plantedIn: 1, resolveDeadline: 12, resolvedIn: null, dependsOn: [], weight: 'major' }],
+    });
+
+    const first = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'progressing', chapter: 3 }),
+    });
+    expect(first.status).toBe(200);
+    expect((await first.json()).foreshadow.progressedIn).toEqual([3]);
+
+    const second = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'progressing', chapter: 7 }),
+    });
+    expect(second.status).toBe(200);
+    expect((await second.json()).foreshadow.progressedIn).toEqual([3, 7]);
+
+    const duplicate = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'progressing', chapter: 7 }),
+    });
+    expect(duplicate.status).toBe(200);
+    expect((await duplicate.json()).foreshadow.progressedIn).toEqual([3, 7]);
+  });
+
+  it('PATCH：活跃 run 存在时状态迁移返回 409 run-in-progress', async () => {
+    writeNovelFile(tmpDir, 'foreshadow.json', {
+      foreshadows: [{ id: 1, content: '锁下迁移', type: 'chekhov', status: 'planted', plantedIn: 2, resolveDeadline: 9, resolvedIn: null, dependsOn: [], weight: 'light' }],
+    });
+    const run = createRun({ projectId, agentId: 'claude', skillId: 'novel', stage: 'writing', conversationId: 'conv_fs_patch_lock' });
+    run.status = 'running';
+    try {
+      const res = await app.request(`/api/projects/${projectId}/foreshadows/1`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'progressing' }),
+      });
+      expect(res.status).toBe(409);
+      const data = await res.json();
+      expect(data.error).toBe('run-in-progress');
+      expect(data.runId).toBe(run.id);
+    } finally {
+      finishRun(run, 'succeeded');
+    }
   });
 
   it('DELETE：删除条目并清理其余条目的 dependsOn 引用', async () => {

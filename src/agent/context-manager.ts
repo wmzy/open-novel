@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseOutlineMeta, defaultOutlineMeta } from '../shared/outline-meta';
 import { parseChapterNumber } from '../shared/chapter-names';
+import { readEmbeddingConfig } from './embeddings';
+import { searchSemanticChunks } from './semantic-index';
 
 /**
  * 章节滚动摘要 + 状态追踪表管理。
@@ -20,8 +22,11 @@ const CHAPTERS_DIR = 'chapters';
 const STATE_FILE = 'state.json';
 const INTENT_FILE = 'state-intent.json';
 const PROFILES_FILE = path.join('characters', 'profiles.md');
+const PROFILES_DIR = path.join('characters', 'profiles');
 const PROGRESS_FILE = 'progress.md';
 const CHARACTER_STATES_FILE = 'character-states.md';
+/** POV 知情边界表：每个角色已知/明确不知道的事实（与 state.json 的 knows 互补）。 */
+export const CHARACTER_KNOWLEDGE_FILE = 'character-knowledge.json';
 
 /** 滚动摘要：最近若干章使用详摘，其余压缩为简摘。 */
 const RECENT_CHAPTER_COUNT = 3;
@@ -36,6 +41,15 @@ const COPY_FRAGMENT_LEN = 30;
 
 /** 章节摘要文件名，例如 `.novel/chapters/第3章.summary.md`。 */
 const SUMMARY_FILE_RE = /^第(\d+)章\.summary\.md$/;
+
+/** 语义回忆：最多注入几个更早章节（按相似度取每章最佳块）。 */
+const SEMANTIC_RECALL_TOP_CHAPTERS = 3;
+/** 语义回忆：每个片段的最大展示字数。 */
+const SEMANTIC_RECALL_SNIPPET_CHARS = 320;
+/** 语义回忆：整个注入块的最大字数（上下文预算上限）。 */
+const SEMANTIC_RECALL_MAX_CHARS = 1500;
+/** 语义回忆：构造查询时使用的当前章大纲/上一章摘要最大字数。 */
+const SEMANTIC_RECALL_QUERY_MAX_CHARS = 2000;
 
 // ===== 类型定义 =====
 
@@ -180,6 +194,137 @@ export async function readCharacterNames(projectDir: string): Promise<string[]> 
   }
 
   return names;
+}
+
+// ===== 角色名册（姓名 + 别名） =====
+
+/** 名册条目：规范角色名 + 其别名。 */
+export interface CharacterRosterEntry {
+  name: string;
+  aliases: string[];
+}
+
+/** 括号内不属于别名的角色定位标注。 */
+const ROLE_LABELS = new Set([
+  '主角', '配角', '反派', '大反派', '男主', '女主', '男二', '女二', '主要角色',
+  '次要角色', '重要角色', '支线角色', '路人', '群像', '少年', '少女', '老人',
+]);
+
+/** 非角色名的文档标题与角色档案小节标题。 */
+const GENERIC_HEADINGS = new Set([
+  '角色', '人物', '角色档案', '人物档案', '角色列表', '人物列表', '角色总览',
+  '人物总览', '角色设定', '人物设定', '角色关系', '人物关系', '角色关系图',
+  '性格', '外貌', '语言', '出身', '经历', '出身与经历', '时间线', '驱动力',
+  '驱动力三角', '基本信息', '关系', '动机', '弧光', '备注', '简介', '档案',
+  '背景', '能力', '技能', '弱点', '目标', '成长弧线', '声口', '声口样本',
+]);
+
+/** 清理姓名：去 markdown 强调、序号前缀与首尾标点。 */
+function cleanRosterName(raw: string): string {
+  return raw
+    .replace(/\*\*/g, '')
+    .replace(/^[一二三四五六七八九十百\d]+[、.．]\s*/, '')
+    .trim()
+    .replace(/^[「『“"'【[]+|[」』”"'】\]]+$/g, '')
+    .trim();
+}
+
+/** 角色名有效性：至少 2 字、非定位标签/通用标题。 */
+function isRosterName(name: string): boolean {
+  if (!name || name.length < 2 || name.length > 20) return false;
+  if (ROLE_LABELS.has(name) || GENERIC_HEADINGS.has(name)) return false;
+  if (/[|#\n]/.test(name)) return false;
+  return true;
+}
+
+/** 提取括号内的别名标注：「林青（青哥/青刀）」→ [青哥, 青刀]。 */
+function extractParenLabels(text: string): string[] {
+  const labels: string[] = [];
+  for (const m of text.matchAll(/[（(]([^）)]+)[）)]/g)) {
+    for (const part of m[1].split(/[、，,/／|]/)) {
+      const label = part.trim();
+      if (label && !ROLE_LABELS.has(label)) labels.push(label);
+    }
+  }
+  return labels;
+}
+
+/** 解析别名字段值（支持顿号/逗号分隔与括号补充）。 */
+function parseAliasValue(value: string): string[] {
+  const outer = value.replace(/[（(][^）)]*[）)]/g, '');
+  const parts = outer.split(/[、，,/／|]/).map((s) => s.trim()).filter(Boolean);
+  return [...parts, ...extractParenLabels(value)];
+}
+
+/**
+ * 读取角色名册（姓名 + 别名）。
+ * 覆盖 profiles.md 的标题式/字段式/表格式档案、characters/profiles/*.md 文件名，
+ * 以及 character-knowledge.json 中登记的角色名。
+ */
+export async function readCharacterRoster(projectDir: string): Promise<CharacterRosterEntry[]> {
+  const map = new Map<string, Set<string>>();
+  const add = (rawName: string, aliases: string[] = []) => {
+    const name = cleanRosterName(rawName);
+    if (!isRosterName(name)) return;
+    let set = map.get(name);
+    if (!set) {
+      set = new Set<string>();
+      map.set(name, set);
+    }
+    for (const rawAlias of aliases) {
+      const alias = cleanRosterName(rawAlias);
+      if (isRosterName(alias) && alias !== name) set.add(alias);
+    }
+  };
+
+  const raw = await readNovelFile(projectDir, PROFILES_FILE);
+  if (raw) {
+    // 顺序扫描：标题式（## 林青（青哥））与字段式（- 姓名：… / - 别名：…）
+    // 共用「最近一个角色名」上下文，使标题下的别名字段也能归属到该角色。
+    let pendingName = '';
+    for (const line of raw.split('\n')) {
+      const heading = line.match(/^##(?!#)\s+(.+?)\s*$/);
+      if (heading) {
+        const title = heading[1];
+        const name = cleanRosterName(title.replace(/[（(][^）)]*[）)]/g, ''));
+        pendingName = isRosterName(name) ? name : '';
+        add(name, extractParenLabels(title));
+        continue;
+      }
+
+      const field = line.match(/^[-*]\s*\*{0,2}(姓名|别名|外号|绰号|人称|代号|又名)\*{0,2}\s*[:：]\s*(.+?)\s*$/);
+      if (!field) continue;
+      const [, label, value] = field;
+      if (label === '姓名') {
+        pendingName = cleanRosterName(value.replace(/[（(][^）)]*[）)]/g, ''));
+        add(pendingName, extractParenLabels(value));
+      } else if (pendingName) {
+        add(pendingName, parseAliasValue(value));
+      }
+    }
+
+    // 表格索引式：| 林青（青哥） | [档案](profiles/林青.md) |
+    for (const m of raw.matchAll(/^\|\s*([^[|]+?)\s*\|\s*\[.+?\]\([^)]+\)\s*\|/gm)) {
+      const cell = m[1].replace(/^[\p{Emoji}\uFE0F\s]+/u, '').trim();
+      if (!cell || cell === '角色') continue;
+      add(cleanRosterName(cell.replace(/[（(][^）)]*[）)]/g, '')), extractParenLabels(cell));
+    }
+  }
+
+  // 4. 独立档案文件名：characters/profiles/林青.md
+  try {
+    const entries = await fs.readdir(path.join(projectDir, NOVEL_DIR, PROFILES_DIR));
+    for (const entry of entries) {
+      if (entry.endsWith('.md')) add(entry.slice(0, -3));
+    }
+  } catch {
+    // 目录不存在：跳过
+  }
+
+  // 5. 知情边界表中登记的角色
+  for (const entry of await readCharacterKnowledge(projectDir)) add(entry.name);
+
+  return [...map.entries()].map(([name, aliases]) => ({ name, aliases: [...aliases] }));
 }
 
 // ===== 文风参考索引 =====
@@ -452,6 +597,108 @@ export async function buildRollingSummaryContext(projectDir: string): Promise<st
   return lines.join('\n');
 }
 
+/**
+ * 语义回忆层（可选，默认关闭）：检索与当前章节大纲语义最相近的**更早章节**
+ * 片段，补足滚动摘要压缩后丢失的细节（设定、物件、伏笔措辞）。
+ *
+ * - 未配置嵌入服务时直接返回空串，不读文件、不发请求；
+ * - 检索/嵌入失败静默返回空串（语义检索只做增强，绝不阻断写作）；
+ * - 注入量受 SEMANTIC_RECALL_MAX_CHARS 限制，避免挤占上下文预算；
+ * - 只取当前章之前的章节，避免把正在写的本章半成品注入。
+ */
+export async function buildSemanticRecallContext(
+  projectId: string,
+  projectDir: string,
+  currentChapter: number,
+  options?: { maxChapters?: number; maxChars?: number },
+): Promise<string> {
+  try {
+    const config = await readEmbeddingConfig();
+    if (!config) return '';
+
+    const query = await buildSemanticRecallQuery(projectDir, currentChapter);
+    if (!query) return '';
+
+    const search = await searchSemanticChunks(projectId, query, {
+      config,
+      topK: 12,
+      minScore: 0.1,
+      maxChapter: currentChapter,
+    });
+    if (!search.configured || search.reason || search.results.length === 0) return '';
+
+    // 每个更早章节只保留相似度最高的块，避免同一章多块挤占名额。
+    const bestByChapter = new Map<number, (typeof search.results)[number]>();
+    for (const hit of search.results) {
+      if (hit.chapterNumber >= currentChapter) continue;
+      const prev = bestByChapter.get(hit.chapterNumber);
+      if (!prev || hit.score > prev.score) bestByChapter.set(hit.chapterNumber, hit);
+    }
+    const picked = [...bestByChapter.values()]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, options?.maxChapters ?? SEMANTIC_RECALL_TOP_CHAPTERS);
+    if (picked.length === 0) return '';
+
+    const maxChars = options?.maxChars ?? SEMANTIC_RECALL_MAX_CHARS;
+    const lines: string[] = [];
+    let used = 0;
+    for (const hit of picked) {
+      const label = hit.source === 'summary' ? '摘要' : '正文';
+      const snippet = hit.content.replace(/\s+/g, ' ').trim().slice(0, SEMANTIC_RECALL_SNIPPET_CHARS);
+      if (!snippet) continue;
+      const header = `- 第${hit.chapterNumber}章（${label}，相似度 ${hit.score.toFixed(2)}）：`;
+      const line = `${header}${snippet}`;
+      if (used + line.length > maxChars) {
+        const remaining = maxChars - used - header.length;
+        if (remaining < 40) break;
+        lines.push(`${header}${snippet.slice(0, remaining)}`);
+        break;
+      }
+      lines.push(line);
+      used += line.length;
+    }
+    return lines.join('\n');
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 用当前章大纲 + 上一章摘要/正文尾部构造检索查询。
+ * 大纲最能代表“本章要写什么”，上一章内容补充承接语境。
+ */
+async function buildSemanticRecallQuery(
+  projectDir: string,
+  currentChapter: number,
+): Promise<string> {
+  const parts: string[] = [];
+
+  const outline = await readNovelFile(
+    projectDir,
+    path.join('outline', 'chapters', `第${currentChapter}章.md`),
+  );
+  if (outline) parts.push(outline);
+
+  if (currentChapter > 1) {
+    const prevSummary = await readNovelFile(
+      projectDir,
+      path.join(CHAPTERS_DIR, `第${currentChapter - 1}章.summary.md`),
+    );
+    if (prevSummary && !prevSummary.includes('[自动生成]')) {
+      parts.push(prevSummary);
+    } else {
+      const prevBody = await readNovelFile(
+        projectDir,
+        path.join(CHAPTERS_DIR, `第${currentChapter - 1}章.md`),
+      );
+      if (prevBody) parts.push(prevBody.slice(-1200));
+    }
+  }
+
+  const query = parts.join('\n\n').replace(/\s+/g, ' ').trim();
+  return query.slice(0, SEMANTIC_RECALL_QUERY_MAX_CHARS);
+}
+
 // ===== 状态追踪表 =====
 
 /**
@@ -522,6 +769,156 @@ export async function initStateTable(projectDir: string): Promise<void> {
   const novelDir = path.join(projectDir, NOVEL_DIR);
   await fs.mkdir(novelDir, { recursive: true });
   await fs.writeFile(statePath, JSON.stringify(state, null, 2), 'utf-8');
+}
+
+// ===== POV 知情边界表 =====
+
+/** 单条已知事实；learnedIn 为获知章号，用于事实核查中的「提前知情」判定。 */
+export interface KnowledgeFact {
+  fact: string;
+  learnedIn?: number;
+}
+
+/** 单个角色的知情边界：已知事实 + 明确不知道的事。 */
+export interface CharacterKnowledge {
+  name: string;
+  knows: KnowledgeFact[];
+  doesNotKnow: string[];
+  updatedChapter?: number;
+}
+
+/** 单角色事实数上限（防止 agent 写入失控增长）。 */
+const MAX_KNOWLEDGE_FACTS = 100;
+/** 单条事实字符上限。 */
+const MAX_KNOWLEDGE_FACT_CHARS = 300;
+
+/** 归一化单条已知事实：接受字符串或 { fact, learnedIn }。 */
+function normalizeKnowledgeFact(input: unknown): KnowledgeFact | null {
+  let fact = '';
+  let learnedIn: number | undefined;
+  if (typeof input === 'string') {
+    fact = input;
+  } else if (input && typeof input === 'object') {
+    const o = input as Record<string, unknown>;
+    if (typeof o.fact === 'string') fact = o.fact;
+    else if (typeof o.content === 'string') fact = o.content;
+    if (typeof o.learnedIn === 'number' && Number.isFinite(o.learnedIn)) {
+      learnedIn = Math.trunc(o.learnedIn);
+    }
+  }
+  fact = fact.trim().slice(0, MAX_KNOWLEDGE_FACT_CHARS);
+  if (!fact) return null;
+  return learnedIn === undefined ? { fact } : { fact, learnedIn };
+}
+
+/** 归一化「尚不知」条目：接受字符串或 { fact }。 */
+function normalizeUnknownFact(input: unknown): string | null {
+  const fact = typeof input === 'string'
+    ? input
+    : input && typeof input === 'object' && typeof (input as Record<string, unknown>).fact === 'string'
+      ? String((input as Record<string, unknown>).fact)
+      : '';
+  const trimmed = fact.trim().slice(0, MAX_KNOWLEDGE_FACT_CHARS);
+  return trimmed || null;
+}
+
+/** 归一化单角色条目，数据不合法时返回 null。 */
+function normalizeKnowledgeEntry(input: unknown, fallbackName = ''): CharacterKnowledge | null {
+  if (!input || typeof input !== 'object') return null;
+  const o = input as Record<string, unknown>;
+  const rawName = typeof o.name === 'string' ? o.name : fallbackName;
+  const name = rawName.trim().slice(0, 40);
+  if (!name) return null;
+
+  const knowsByFact = new Map<string, KnowledgeFact>();
+  for (const raw of Array.isArray(o.knows) ? o.knows : []) {
+    const fact = normalizeKnowledgeFact(raw);
+    if (!fact) continue;
+    const existing = knowsByFact.get(fact.fact);
+    if (!existing || (existing.learnedIn === undefined && fact.learnedIn !== undefined)) {
+      knowsByFact.set(fact.fact, fact);
+    }
+    if (knowsByFact.size >= MAX_KNOWLEDGE_FACTS) break;
+  }
+  const knows = [...knowsByFact.values()];
+
+  const rawUnknown = Array.isArray(o.doesNotKnow)
+    ? o.doesNotKnow
+    : Array.isArray(o.unknown) ? o.unknown : [];
+  const doesNotKnow: string[] = [];
+  for (const raw of rawUnknown) {
+    const fact = normalizeUnknownFact(raw);
+    if (!fact || doesNotKnow.includes(fact)) continue;
+    doesNotKnow.push(fact);
+    if (doesNotKnow.length >= MAX_KNOWLEDGE_FACTS) break;
+  }
+
+  const entry: CharacterKnowledge = { name, knows, doesNotKnow };
+  if (typeof o.updatedChapter === 'number' && Number.isFinite(o.updatedChapter)) {
+    entry.updatedChapter = Math.trunc(o.updatedChapter);
+  }
+  return entry;
+}
+
+/**
+ * 归一化知情边界表。兼容三种文件形态：
+ * - `{ characters: [...] }`（推荐）
+ * - 裸数组 `[...]`
+ * - 角色名映射 `{ "林青": { knows, doesNotKnow } }`（name 由键补全）
+ */
+export function normalizeKnowledgeTable(input: unknown): CharacterKnowledge[] {
+  const rawEntries: Array<{ value: unknown; fallbackName: string }> = [];
+  if (Array.isArray(input)) {
+    for (const value of input) rawEntries.push({ value, fallbackName: '' });
+  } else if (input && typeof input === 'object') {
+    const obj = input as Record<string, unknown>;
+    if (Array.isArray(obj.characters)) {
+      for (const value of obj.characters) rawEntries.push({ value, fallbackName: '' });
+    } else {
+      for (const [name, value] of Object.entries(obj)) {
+        if (name === 'updatedAt' || name === 'version') continue;
+        rawEntries.push({ value, fallbackName: name });
+      }
+    }
+  }
+
+  const merged = new Map<string, CharacterKnowledge>();
+  for (const { value, fallbackName } of rawEntries) {
+    const entry = normalizeKnowledgeEntry(value, fallbackName);
+    if (!entry) continue;
+    const existing = merged.get(entry.name);
+    if (!existing) {
+      merged.set(entry.name, entry);
+      continue;
+    }
+    for (const fact of entry.knows) {
+      if (existing.knows.length >= MAX_KNOWLEDGE_FACTS) break;
+      if (!existing.knows.some((k) => k.fact === fact.fact)) existing.knows.push(fact);
+    }
+    for (const fact of entry.doesNotKnow) {
+      if (existing.doesNotKnow.length >= MAX_KNOWLEDGE_FACTS) break;
+      if (!existing.doesNotKnow.includes(fact)) existing.doesNotKnow.push(fact);
+    }
+    if (entry.updatedChapter !== undefined) {
+      existing.updatedChapter = Math.max(existing.updatedChapter ?? 0, entry.updatedChapter);
+    }
+  }
+  return [...merged.values()];
+}
+
+/** 解析 `character-knowledge.json`；损坏时返回空表。 */
+export function parseKnowledgeFile(raw: string): CharacterKnowledge[] {
+  if (!raw) return [];
+  try {
+    return normalizeKnowledgeTable(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+/** 读取 `.novel/character-knowledge.json`；文件缺失/损坏返回空表。 */
+export async function readCharacterKnowledge(projectDir: string): Promise<CharacterKnowledge[]> {
+  return parseKnowledgeFile(await readNovelFile(projectDir, CHARACTER_KNOWLEDGE_FILE));
 }
 
 // ===== 规划态/运行态分离 =====

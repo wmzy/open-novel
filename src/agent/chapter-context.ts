@@ -1,6 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseOutlineMeta, parseChapterCard, type CommitmentLevel } from '../shared/outline-meta';
+import {
+  getStateTable,
+  readCharacterKnowledge,
+  type KnowledgeFact,
+} from './context-manager';
 
 const NOVEL_DIR = '.novel';
 const OUTLINE_CHAPTERS_DIR = path.join('outline', 'chapters');
@@ -229,4 +234,147 @@ export async function buildCastLayer(projectDir: string, cast: Cast): Promise<st
   }
 
   return sections.join('\n\n');
+}
+
+// ===== POV 知情边界注入 =====
+
+/** 已知事实注入条数上限（保留最近获知的 N 条）。 */
+const POV_KNOWLEDGE_KNOWN_LIMIT = 8;
+/** 「尚不知」注入条数上限。 */
+const POV_KNOWLEDGE_UNKNOWN_LIMIT = 8;
+/** 单条事实注入字符上限。 */
+const POV_KNOWLEDGE_FACT_MAX_CHARS = 120;
+/** 整块注入字符预算。 */
+const POV_KNOWLEDGE_BUDGET = 1400;
+
+function clipFactText(fact: string): string {
+  const text = fact.replace(/\s+/g, ' ').trim();
+  if (text.length <= POV_KNOWLEDGE_FACT_MAX_CHARS) return text;
+  return text.slice(0, POV_KNOWLEDGE_FACT_MAX_CHARS) + '…';
+}
+
+/** 按事实文本去重；同文本优先保留带 learnedIn 的版本。 */
+function dedupeKnowledgeFacts(facts: KnowledgeFact[]): KnowledgeFact[] {
+  const map = new Map<string, KnowledgeFact>();
+  for (const raw of facts) {
+    const fact = raw?.fact?.trim();
+    if (!fact) continue;
+    const existing = map.get(fact);
+    if (!existing || (existing.learnedIn === undefined && typeof raw.learnedIn === 'number')) {
+      map.set(fact, typeof raw.learnedIn === 'number' ? { fact, learnedIn: raw.learnedIn } : { fact });
+    }
+  }
+  return [...map.values()];
+}
+
+/**
+ * 将 POV 知情边界格式化为提示词区块。
+ * 无任何已知/尚不知数据时返回空串（调用方据此保持原提示词不变）。
+ */
+export function formatPovKnowledgeSection(
+  pov: string,
+  knows: KnowledgeFact[],
+  doesNotKnow: string[],
+): string {
+  const name = (pov ?? '').trim();
+  if (!name) return '';
+
+  const known = dedupeKnowledgeFacts(knows)
+    .sort((a, b) => {
+      if (a.learnedIn === undefined && b.learnedIn === undefined) return 0;
+      if (a.learnedIn === undefined) return -1;
+      if (b.learnedIn === undefined) return 1;
+      return a.learnedIn - b.learnedIn;
+    })
+    .slice(-POV_KNOWLEDGE_KNOWN_LIMIT);
+  const unknown = [...new Set(
+    (doesNotKnow ?? [])
+      .map((f) => clipFactText(String(f ?? '')))
+      .filter((f) => f.length > 0),
+  )].slice(0, POV_KNOWLEDGE_UNKNOWN_LIMIT);
+  if (known.length === 0 && unknown.length === 0) return '';
+
+  const lines: string[] = [`### POV 知情边界（${name}）`];
+  if (known.length > 0 && unknown.length > 0) {
+    lines.push('> 本章只能使用下列「已知」信息；「尚不知」中的内容不得作为该角色的行动依据或内心认知。');
+  } else if (known.length > 0) {
+    // 没有「尚不知」登记时不要凭空提到它，否则模型会自行猜测禁区。
+    lines.push('> 本章只能使用下列「已知」信息，不得据此推断未登记的内容。');
+  } else {
+    lines.push('> 该角色暂无已登记的已知信息；下列内容不得作为该角色的行动依据或内心认知。');
+  }
+  let size = lines.join('\n').length;
+
+  const push = (line: string): boolean => {
+    // +1 为换行符
+    if (size + line.length + 1 > POV_KNOWLEDGE_BUDGET) return false;
+    lines.push(line);
+    size += line.length + 1;
+    return true;
+  };
+
+  if (known.length > 0) {
+    push('**已知**');
+    for (const fact of known) {
+      const learned = typeof fact.learnedIn === 'number' ? `（第${fact.learnedIn}章获知）` : '';
+      if (!push(`- ${clipFactText(fact.fact)}${learned}`)) break;
+    }
+  }
+
+  if (unknown.length > 0) {
+    push('**尚不知（禁止以此行动）**');
+    for (const fact of unknown) {
+      if (!push(`- ${fact}`)) break;
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 构建 POV 知情边界层：
+ * - 优先读取 `.novel/character-knowledge.json` 的专属条目；
+ * - 与 state.json 的 `characters[].knows` 合并（兼容旧项目，不重复存储）；
+ * - currentChapter 传入时只注入该章之前已获知的事实（learnedIn ≤ 当前章）；
+ * - 无任何数据时返回空串，保证提示词组成不变。
+ */
+export async function buildPovKnowledgeLayer(
+  projectDir: string,
+  pov: string,
+  currentChapter?: number,
+): Promise<string> {
+  const name = (pov ?? '').trim();
+  if (!name) return '';
+
+  const table = await readCharacterKnowledge(projectDir);
+  const entry = table.find((k) => k.name === name);
+  const entryFacts = entry?.knows ?? [];
+  const knows: KnowledgeFact[] = entryFacts.filter((fact) =>
+    typeof currentChapter !== 'number'
+    || !Number.isFinite(currentChapter)
+    || fact.learnedIn === undefined
+    || fact.learnedIn <= currentChapter,
+  );
+
+  // 专属表明确标注「未来才获知」的事实，不能被 state.json 的旧 knows 提前放回来
+  const futureFacts = new Set(
+    typeof currentChapter === 'number'
+      ? entryFacts
+          .filter((fact) => typeof fact.learnedIn === 'number' && fact.learnedIn > currentChapter)
+          .map((fact) => fact.fact)
+      : [],
+  );
+
+  const state = await getStateTable(projectDir);
+  const stateChar = state.characters.find((c) => c.name === name);
+  for (const fact of stateChar?.knows ?? []) {
+    if (futureFacts.has(fact)) continue;
+    if (!knows.some((k) => k.fact === fact)) knows.push({ fact });
+  }
+
+  const doesNotKnow = (entry?.doesNotKnow ?? []).filter(
+    (fact) => !knows.some((known) => known.fact === fact),
+  );
+  if (knows.length === 0 && doesNotKnow.length === 0) return '';
+  return formatPovKnowledgeSection(name, knows, doesNotKnow);
 }

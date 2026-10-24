@@ -4,6 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { chapters } from '../db/schema';
 import type { AgentEvent } from './types';
+import { parseChapterNumber } from '../shared/chapter-names';
 
 // Tool names that write or edit files (Claude + Codex + MCP variants)
 const WRITE_OR_EDIT_TOOL_NAMES = new Set([
@@ -135,22 +136,16 @@ export function deriveFileOps(events: AgentEvent[]): FileOpEntry[] {
 
 // --- File-to-DB sync ---
 
-const CHAPTER_PATTERN = /(\d+)/;
-
 /**
  * Sync chapter files back to DB after agent writes.
  */
 export async function syncFilesToDb(projectId: string, paths: Set<string>, projectDir: string): Promise<void> {
   for (const filePath of paths) {
-    // Only process .md files that look like chapters
-    if (!filePath.endsWith('.md')) continue;
-    const basename = path.basename(filePath, '.md');
-    // 跳过章节摘要文件（第N章.summary.md），避免把摘要误当作章节正文同步
-    if (basename.endsWith('.summary')) continue;
-    const match = basename.match(CHAPTER_PATTERN);
-    if (!match) continue;
-
-    const chapterNum = parseInt(match[1], 10);
+    // Only process .md files that use the canonical chapter naming
+    // （第N章.md / chapter-N.md，排除摘要/退化文件）。此前用 /(\d+)/ 宽松匹配，
+    // 会把 .novel/retro/里程碑-chapter-50.md 等含数字的报告误同步为章节。
+    const chapterNum = parseChapterNumber(path.basename(filePath));
+    if (chapterNum === null) continue;
     // Agent (e.g. claude code) writes with absolute paths since its cwd is the
     // project dir; path.join would double the prefix. Use the path as-is when absolute.
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(projectDir, filePath);

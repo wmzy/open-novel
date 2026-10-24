@@ -117,7 +117,7 @@ describe('Rewrite & Chapter content API', () => {
       path.join(projectDir, '.novel', 'foreshadow.json'),
       JSON.stringify({
         foreshadows: [
-          { id: 9, content: '伏笔A', type: 'chekhov', status: 'planted', plantedIn: 4, resolveDeadline: 8, resolvedIn: null, dependsOn: [], weight: 'major' },
+          { id: 9, content: '伏笔A', type: 'chekhov', status: 'progressing', plantedIn: 4, resolveDeadline: 8, resolvedIn: null, progressedIn: [5], dependsOn: [], weight: 'major' },
         ],
       }),
       'utf-8',
@@ -144,10 +144,11 @@ describe('Rewrite & Chapter content API', () => {
     await expect(fs.access(path.join(projectDir, '.novel', 'degraded', '第3章.md'))).resolves.toBeUndefined();
     await expect(fs.access(path.join(projectDir, '.novel', 'degraded', '第4章.md'))).rejects.toThrow();
     await expect(fs.access(path.join(projectDir, '.novel', 'degraded', '第3章.summary.md'))).resolves.toBeUndefined();
-    // 伏笔引用前移：plantedIn 4 → 3，resolveDeadline 8 → 7
+    // 伏笔引用前移：plantedIn 4 → 3，resolveDeadline 8 → 7，progressedIn 5 → 4
     const raw = JSON.parse(await fs.readFile(path.join(projectDir, '.novel', 'foreshadow.json'), 'utf-8'));
     expect(raw.foreshadows[0].plantedIn).toBe(3);
     expect(raw.foreshadows[0].resolveDeadline).toBe(7);
+    expect(raw.foreshadows[0].progressedIn).toEqual([4]);
   });
 
   it('#9: DELETE 不重编号时返回 holeAt 提示', async () => {

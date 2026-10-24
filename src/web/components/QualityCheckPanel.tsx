@@ -61,6 +61,34 @@ interface OocReport {
   oocIssues: OocIssue[];
 }
 
+/** 事实核查问题类型（与后端 FactIssueType 对齐）。 */
+type FactIssueType = 'pov-leakage' | 'name-inconsistency' | 'canon-contradiction';
+
+/** 事实核查严重度。 */
+type FactSeverity = 'blocker' | 'major' | 'minor';
+
+/** 统一的事实核查条目（镜像后端 FactCheckFinding）。 */
+interface FactCheckFinding {
+  type: FactIssueType;
+  severity: FactSeverity;
+  chapter: number;
+  character?: string;
+  quote: string;
+  detail: string;
+  suggestion?: string;
+  source: 'mechanical' | 'semantic';
+}
+
+/** 事实核查报告：机械 + 语义结果。 */
+interface FactCheckReport {
+  chapter: number;
+  pov?: string | null;
+  findings: FactCheckFinding[];
+  mechanical: FactCheckFinding[];
+  semantic: FactCheckFinding[];
+  semanticError?: string;
+}
+
 /** 单项检查的运行态。 */
 type CheckStatus = 'idle' | 'loading' | 'success' | 'error';
 
@@ -202,6 +230,17 @@ const issueType = css`
   margin-bottom: 0.25rem;
 `;
 
+const severityTag = css`
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 600;
+  padding: 0.0625rem 0.45rem;
+  border-radius: 10px;
+  color: #fff;
+  margin-left: 0.375rem;
+  vertical-align: middle;
+`;
+
 const snippet = css`
   font-size: 0.8rem;
   line-height: 1.6;
@@ -278,12 +317,16 @@ function scoreText(score: number): string {
 interface Props {
   projectId: string;
   chapterNum: number;
+  /** 当前选择的 agent，用于「AI 语义核查」；为空时该按钮禁用。 */
+  agentId?: string;
 }
 
-export default function QualityCheckPanel({ projectId, chapterNum }: Props) {
+export default function QualityCheckPanel({ projectId, chapterNum, agentId }: Props) {
   const [aiState, setAiState] = useState<CheckState<AiPatternReport>>({ status: 'idle' });
   const [foreshadowState, setForeshadowState] = useState<CheckState<ForeshadowReport>>({ status: 'idle' });
   const [oocState, setOocState] = useState<CheckState<OocReport>>({ status: 'idle' });
+  const [factState, setFactState] = useState<CheckState<FactCheckReport>>({ status: 'idle' });
+  const [factMode, setFactMode] = useState<'quick' | 'deep' | null>(null);
   // 伏笔遗忘阈值，默认 5（与后端 FORGOTTEN_CHAPTER_THRESHOLD 一致）
   const [threshold, setThreshold] = useState(5);
 
@@ -340,6 +383,29 @@ export default function QualityCheckPanel({ projectId, chapterNum }: Props) {
       setOocState({ status: 'success', data });
     } catch (e) {
       setOocState({ status: 'error', error: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  /**
+   * 事实核查：
+   * - quick：只跑机械规则（POV 知情越界启发式 + 人名近似笔误），秒级返回；
+   * - deep：额外调用当前 agent 做语义核查（POV 泄漏 / 姓名别名 / 设定时间线）。
+   * 结果只报告，不阻断写作。
+   */
+  const runFactCheck = async (deep: boolean) => {
+    if (deep && !agentId) return;
+    setFactMode(deep ? 'deep' : 'quick');
+    setFactState({ status: 'loading' });
+    try {
+      const data = await postCheck<FactCheckReport>(
+        `/api/projects/${projectId}/check/fact-check`,
+        { chapterNum, deep, ...(deep ? { agentId } : {}) },
+      );
+      setFactState({ status: 'success', data });
+    } catch (e) {
+      setFactState({ status: 'error', error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setFactMode(null);
     }
   };
 
@@ -406,6 +472,38 @@ export default function QualityCheckPanel({ projectId, chapterNum }: Props) {
           {oocState.status === 'error' && <div className={errorMsg}>{oocState.error}</div>}
           {oocState.status === 'success' && oocState.data && (
             <OocResult report={oocState.data} />
+          )}
+        </section>
+
+        {/* 事实核查：POV 知情边界 / 人名 / 设定时间线 */}
+        <section className={checkSection}>
+          <div className={checkHeader}>
+            <p className={sectionTitle}>🔎 事实核查（POV / 人名 / 设定）</p>
+            <div className={thresholdRow}>
+              <button
+                className={primaryBtn}
+                disabled={factState.status === 'loading'}
+                onClick={() => runFactCheck(false)}
+              >
+                {factState.status === 'loading' && factMode === 'quick' ? '检查中...' : '快速检查'}
+              </button>
+              <button
+                className={primaryBtn}
+                disabled={factState.status === 'loading' || !agentId}
+                title={agentId ? '调用当前 agent 做语义核查，耗时较长' : '请先在对话面板选择 agent'}
+                onClick={() => runFactCheck(true)}
+              >
+                {factState.status === 'loading' && factMode === 'deep' ? '核查中...' : 'AI 语义核查'}
+              </button>
+            </div>
+          </div>
+          <div className={metaMuted}>
+            只报告、不阻断。快速检查覆盖 POV 知情越界与名册人名笔误；AI 语义核查额外检查设定/时间线矛盾。
+          </div>
+          {factState.status === 'loading' && <div className={loadingText}>正在比对知情边界与角色名册...</div>}
+          {factState.status === 'error' && <div className={errorMsg}>{factState.error}</div>}
+          {factState.status === 'success' && factState.data && (
+            <FactCheckResult report={factState.data} />
           )}
         </section>
       </div>
@@ -512,5 +610,63 @@ function OocResult({ report }: { report: OocReport }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/** 事实核查类型 → 中文标签。 */
+const FACT_TYPE_LABELS: Record<FactIssueType, string> = {
+  'pov-leakage': 'POV 越界知情',
+  'name-inconsistency': '人名/别名不一致',
+  'canon-contradiction': '设定/时间线矛盾',
+};
+
+/** 严重度 → 中文标签与颜色。 */
+const FACT_SEVERITY_META: Record<FactSeverity, { label: string; color: string }> = {
+  blocker: { label: '阻断', color: '#ef4444' },
+  major: { label: '重要', color: '#f59e0b' },
+  minor: { label: '轻微', color: '#6b7280' },
+};
+
+/** 事实核查报告：按严重度高亮，展示类型、角色、引文与建议。 */
+function FactCheckResult({ report }: { report: FactCheckReport }) {
+  const mechanicalCount = report.mechanical?.length ?? 0;
+  const semanticCount = report.semantic?.length ?? 0;
+  return (
+    <div>
+      <div className={metaMuted}>
+        第 {report.chapter} 章{report.pov ? ` · POV：${report.pov}` : ''} · 共 {report.findings.length} 条
+        （规则 {mechanicalCount} / AI {semanticCount}）
+      </div>
+      {report.semanticError && (
+        <div className={metaWarn}>AI 语义核查未完成：{report.semanticError}</div>
+      )}
+      {report.findings.length === 0 ? (
+        <div className={emptyHint}>未发现事实性问题</div>
+      ) : (
+        <ul className={issueList}>
+          {report.findings.map((finding, i) => {
+            const severity = FACT_SEVERITY_META[finding.severity];
+            const critical = finding.severity === 'blocker' || finding.severity === 'major';
+            return (
+              <li key={i} className={critical ? warnItem : issueItem}>
+                <span className={issueType}>{FACT_TYPE_LABELS[finding.type]}</span>
+                <span className={severityTag} style={{ background: severity.color }}>
+                  {severity.label}
+                </span>
+                <div className={snippet}>「{finding.quote}」</div>
+                {finding.character && (
+                  <div className={suggestion}>涉及角色：{finding.character}</div>
+                )}
+                {finding.detail && <div className={suggestion}>{finding.detail}</div>}
+                {finding.suggestion && <div className={suggestion}>建议：{finding.suggestion}</div>}
+                <div className={metaMuted}>
+                  第 {finding.chapter} 章 · {finding.source === 'mechanical' ? '规则检查' : 'AI 语义核查'}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }

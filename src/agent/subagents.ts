@@ -71,7 +71,7 @@ export const WRITING_SUBAGENTS: SubAgentDef[] = [
   {
     name: 'state-patcher',
     description:
-      '章节定稿后更新所有状态追踪文件：章节摘要、角色状态、写作进度、结构化状态、伏笔追踪。当章节正文写完并保存后使用。',
+      '章节定稿后更新所有状态追踪文件：章节摘要、角色状态、写作进度、结构化状态、伏笔追踪、角色知情边界。当章节正文写完并保存后使用。',
     tools: 'Read, Write, Edit',
     model: 'inherit',
     systemPrompt: `你是状态更新助手。章节定稿后，基于正文内容更新项目的所有状态追踪文件。
@@ -89,14 +89,20 @@ export const WRITING_SUBAGENTS: SubAgentDef[] = [
    当前进度（已写到第N章）、最近章节的一句话摘要、下一步写作衔接提示。
 
 4. **更新结构化状态**：更新 .novel/state.json
-   只保留结构化字段：lastUpdatedChapter、timeline、activeForeshadows（所有 status 为 planted 的伏笔 ID 列表）、updatedAt 时间戳。角色详细状态不要再写入 state.json 的 characters 字段。
+   只保留结构化字段：lastUpdatedChapter、timeline、activeForeshadows（所有 status 为 planted/progressing 的伏笔 ID 列表）、updatedAt 时间戳。角色详细状态不要再写入 state.json 的 characters 字段。
 
 5. **更新伏笔追踪**：更新 .novel/foreshadow.json
    本章是否埋设了新伏笔（plantedIn），是否回收了已有伏笔（resolvedIn）。
    - 若本章**新埋设**了一条伏笔（首次在正文中植入线索）且大纲阶段未预登：**新增一条**，id 取现有最大 id + 1，content 写具体描述，status 设为 "planted"，plantedIn 填当前章号，resolvedIn 为 null。
    - 若大纲阶段已预登该伏笔为 pending：将其 status 从 "pending" 改为 "planted"。
-   - 若本章**回收**了某条伏笔（线索得到兑现/揭晓）：将 status 改为 "resolved" 并填写 resolvedIn 为当前章号。
-   - 标准 schema：{ "foreshadows": [{ "id": 1, "content": "具体描述", "status": "planted", "plantedIn": 3, "resolvedIn": null }] }。顶层键为 foreshadows（不是 items），内容字段为 content（不是 description），status 取值 pending/planted/resolved。
+   - 若本章**推进**了某条已埋伏笔（线索部分兑现/进一步指向谜底）：status 改为 "progressing"，并把当前章号追加到 progressedIn 数组（状态机 pending→planted→progressing→resolved）。
+   - 若本章**回收**了某条伏笔（线索得到兑现/揭晓）：将 status 改为 "resolved" 并填写 resolvedIn 为当前章号（planted 可直接 resolved；回退迁移须显式 reopen）。
+   - 标准 schema：{ "foreshadows": [{ "id": 1, "content": "具体描述", "status": "planted", "plantedIn": 3, "resolvedIn": null, "progressedIn": [], "dependsOn": [], "weight": "light" }] }。顶层键为 foreshadows（不是 items），内容字段为 content（不是 description），status 取值 pending/planted/progressing/resolved/dropped。
+
+6. **更新角色知情边界**：更新 .novel/character-knowledge.json
+   schema：{ "characters": [{ "name": "角色名", "knows": [{ "fact": "已确认知道的事实", "learnedIn": 章号 }], "doesNotKnow": ["明确尚不知道的事实"], "updatedChapter": 章号 }] }。
+   - 只记录正文已确认的信息：本章角色确认知道的事实从 doesNotKnow 移入 knows（带 learnedIn 章号），并更新 updatedChapter。
+   - 不推测角色心理；没有变化的角色保持原样。
 
 ## 原则
 - 只基于章节正文的确认内容更新，不推测或虚构。
@@ -189,6 +195,7 @@ export function getSubagentGuidance(agentId?: string): string {
    - .novel/progress.md（写作进度、最近章节摘要、下一步提示）
    - .novel/state.json（lastUpdatedChapter、timeline、activeForeshadows、updatedAt）
    - .novel/foreshadow.json（本章是否埋设或回收伏笔）
+   - .novel/character-knowledge.json（角色知情边界：已确认知道的事实移入 knows 并标注 learnedIn）
 3. **正文与状态更新分离**：先把整章正文写完保存，再逐个更新状态文件，不要写到一半停下来更新。`;
   }
 
@@ -213,6 +220,7 @@ export function getSubagentGuidance(agentId?: string): string {
   - .novel/progress.md（写作进度、最近章节摘要、下一步提示）
   - .novel/state.json（lastUpdatedChapter、timeline、activeForeshadows、updatedAt）
   - .novel/foreshadow.json（伏笔状态更新）
+  - .novel/character-knowledge.json（角色知情边界：knows/doesNotKnow/updatedChapter）
 
 ### 使用原则
 - **先写完再委托**：不要写到一半就委托审查——先完成整章初稿。

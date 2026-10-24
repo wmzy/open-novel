@@ -26,6 +26,7 @@ import {
 import { splitMarkdownToCards, buildIndexMarkdown, DOC_DIR } from '../../shared/split-document';
 import type { DocType } from '../../shared/split-document';
 import { STAGES } from '../../shared/stages';
+import { readMilestoneEvery, readNovelConfig, writeNovelConfig } from '../../shared/novel-config';
 import timelineRouter from './timeline';
 import documentsRouter from './documents';
 import { resyncChaptersFromDisk } from './chapters';
@@ -411,7 +412,16 @@ projectsRouter.get('/:id', async (c) => {
     const cfg = JSON.parse(readFileSync(path.join(project.path, '.novel', 'config.json'), 'utf-8'));
     sampleGateBypassed = cfg.sampleGateBypassed === true;
   } catch { /* 无配置文件 */ }
-  return c.json({ project: { ...project, skillId: resolveSkillId(project.genre), sampleGateBypassed } });
+  // 项目级自动里程碑间隔（.novel/config.json，默认 50，0 关闭按章里程碑）
+  const milestoneEvery = await readMilestoneEvery(project.path);
+  return c.json({
+    project: {
+      ...project,
+      skillId: resolveSkillId(project.genre),
+      sampleGateBypassed,
+      milestoneEvery,
+    },
+  });
 });
 
 projectsRouter.patch('/:id', async (c) => {
@@ -433,6 +443,20 @@ projectsRouter.patch('/:id', async (c) => {
     }
     allowed.currentStage = body.currentStage;
   }
+  // 自动里程碑间隔：项目级设置，落 .novel/config.json（非 DB 列）。
+  // 0 关闭按章里程碑；卷末里程碑（volumes.json）仍生效。
+  let milestoneEvery: number | undefined;
+  if (body.milestoneEvery !== undefined) {
+    if (body.milestoneEvery === null
+      || (typeof body.milestoneEvery === 'string' && body.milestoneEvery.trim() === '')) {
+      return c.json({ error: 'milestoneEvery 必须是非负整数（0 关闭）' }, 400);
+    }
+    const n = Number(body.milestoneEvery);
+    if (!Number.isInteger(n) || n < 0) {
+      return c.json({ error: 'milestoneEvery 必须是非负整数（0 关闭）' }, 400);
+    }
+    milestoneEvery = n;
+  }
   allowed.updatedAt = new Date();
 
   const [updated] = await db.update(projects)
@@ -441,10 +465,22 @@ projectsRouter.patch('/:id', async (c) => {
     .returning();
   if (!updated) return c.json({ error: 'Not found' }, 404);
 
+  if (milestoneEvery !== undefined) {
+    try {
+      const cfg = await readNovelConfig(updated.path);
+      cfg.milestoneEvery = milestoneEvery;
+      await writeNovelConfig(updated.path, cfg);
+    } catch {
+      return c.json({ error: 'milestoneEvery 保存失败（项目目录不可写）' }, 500);
+    }
+  }
+
   // Emit project update event
   emitProjectEvent(id, 'project-updated', { project: updated });
 
-  return c.json({ project: updated });
+  return c.json({
+    project: milestoneEvery !== undefined ? { ...updated, milestoneEvery } : updated,
+  });
 });
 
 projectsRouter.delete('/:id', async (c) => {
@@ -632,6 +668,8 @@ function initWorkspace(projectDir: string, opts: WorkspaceOpts): void {
     targetWords: opts.targetWords,
     chapterCount: opts.chapterCount,
     perspective: opts.perspective,
+    // 自动里程碑间隔（0 关闭按章边界；卷末边界仍生效）。可在项目设置中修改。
+    milestoneEvery: 50,
     createdAt: new Date().toISOString(),
   }, null, 2));
 }

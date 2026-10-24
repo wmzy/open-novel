@@ -56,6 +56,21 @@ export async function setChapterStatus(novelDir: string, num: number, status: Ch
   }
 }
 
+/** 批量设置章节状态（导入/批量操作时一次性写盘，避免逐章读写 O(N²)）。 */
+export async function setChapterStatuses(
+  novelDir: string,
+  entries: ReadonlyMap<number, ChapterStatus>,
+): Promise<void> {
+  if (entries.size === 0) return;
+  try {
+    const statuses = await readChapterStatuses(novelDir);
+    for (const [num, status] of entries) statuses.set(num, status);
+    await writeChapterStatuses(novelDir, statuses);
+  } catch {
+    /* 写入失败不阻断主流程 */
+  }
+}
+
 /** 删除单章状态（章节被删除时调用）。 */
 export async function removeChapterStatus(novelDir: string, num: number): Promise<void> {
   try {

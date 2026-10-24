@@ -60,7 +60,8 @@ async function collectTargetFiles(projectDir: string, scope?: string[]): Promise
         entry.endsWith('.md') ||
         entry === 'state.json' ||
         entry === 'foreshadow.json' ||
-        entry === 'outline-meta.json'
+        entry === 'outline-meta.json' ||
+        entry === 'character-knowledge.json'
       ) {
         results.push(full);
       }

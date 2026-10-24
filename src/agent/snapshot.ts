@@ -74,6 +74,30 @@ export async function createSnapshot(projectDir: string, message: string): Promi
 }
 
 /**
+ * 批量导入后建立快照：在进程级 git 互斥内确保 main/draft 双分支并提交。
+ *
+ * 与直接调用 createSnapshot 的差异：ensureDraftBranch 会 checkout，属于结构性
+ * git 操作；并发审阅/回滚在途时必须跳过（下次 run 结束的快照会兜底捕获），
+ * 否则可能把 draft 内容提交到 main，破坏「main 是 draft 祖先」的不变量。
+ */
+export async function createSnapshotSafe(
+  projectDir: string,
+  message: string,
+): Promise<{ hash: string | null; skipped: boolean; failed?: boolean }> {
+  if (inflightGitOps.has(projectDir)) return { hash: null, skipped: true };
+  inflightGitOps.add(projectDir);
+  try {
+    await ensureDraftBranch(projectDir);
+    const hash = await createSnapshot(projectDir, message);
+    return { hash, skipped: false };
+  } catch {
+    return { hash: null, skipped: false, failed: true };
+  } finally {
+    inflightGitOps.delete(projectDir);
+  }
+}
+
+/**
  * Create a user milestone snapshot: commit pending changes (if any) and tag
  * the resulting / latest commit with `milestone-<name>`. Returns commit hash
  * (may be null if nothing to commit and no HEAD exists yet).
@@ -120,6 +144,33 @@ export interface Snapshot {
   tags: string[];
   /** True for machine-generated `[auto] ...` commits. */
   isAuto: boolean;
+}
+
+/**
+ * 自动里程碑快照：在进程级 git 互斥内确保双分支模型后提交并打标签。
+ *
+ * 与直接调用 createUserSnapshot 的差异：
+ * - ensureDraftBranch 会 checkout 到 draft（结构性 git 操作），必须与审阅/
+ *   回滚/手改防抖快照互斥，否则 commit 可能落在 main 上，破坏「main 是
+ *   draft 祖先」的不变量；
+ * - 互斥占用中（审阅/回滚在途）返回 skipped=true，由调用方稍后重试，
+ *   不把半成品状态写成里程碑。
+ */
+export async function createMilestoneSnapshotSafe(
+  projectDir: string,
+  name: string,
+): Promise<{ hash: string | null; skipped: boolean }> {
+  if (inflightGitOps.has(projectDir)) return { hash: null, skipped: true };
+  inflightGitOps.add(projectDir);
+  try {
+    await ensureDraftBranch(projectDir);
+    const hash = await createUserSnapshot(projectDir, name);
+    return { hash, skipped: false };
+  } catch {
+    return { hash: null, skipped: false };
+  } finally {
+    inflightGitOps.delete(projectDir);
+  }
 }
 
 /**

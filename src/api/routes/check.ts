@@ -16,7 +16,22 @@ import {
   checkForeshadows,
   detectOoc,
   readChapter,
+  readChapterSummary,
+  detectMechanicalFactIssues,
+  buildFactCheckPrompt,
+  parseFactCheckResponse,
+  type FactCheckFinding,
+  type RosterNameInput,
 } from '../../agent/quality-checker';
+import { extractChapterOutline, identifyCast } from '../../agent/chapter-context';
+import {
+  getStateTable,
+  readCharacterKnowledge,
+  readCharacterRoster,
+  type CharacterKnowledge,
+} from '../../agent/context-manager';
+import { getAgentDef } from '../../agent/registry';
+import { callAgentOnce } from '../../agent/agent-once';
 
 const checkRouter = new Hono();
 
@@ -152,6 +167,189 @@ checkRouter.post('/ooc', async (c) => {
 
   const report = await detectOoc(projectDir, body.chapterNum);
   return c.json(report);
+});
+
+/** 语义核查 agent 调用超时：单章正文 + 背景上下文，给足 3 分钟。 */
+const FACT_CHECK_TIMEOUT_MS = 3 * 60 * 1000;
+
+/** 名册条目展开为「别名 → 规范角色名」的检测输入。 */
+function toRosterInputs(
+  roster: Array<{ name: string; aliases: string[] }>,
+): RosterNameInput[] {
+  const inputs: RosterNameInput[] = [];
+  for (const entry of roster) {
+    inputs.push({ name: entry.name, canonical: entry.name });
+    for (const alias of entry.aliases) {
+      inputs.push({ name: alias, canonical: entry.name });
+    }
+  }
+  return inputs;
+}
+
+/** 事实核查结果严重度排序（阻断 → 重要 → 轻微）。 */
+const FACT_SEVERITY_RANK: Record<FactCheckFinding['severity'], number> = {
+  blocker: 0,
+  major: 1,
+  minor: 2,
+};
+
+/** 机械与语义结果合并去重（同类型 + 同章节 + 同引文视为同一条）。 */
+function dedupeFindings(findings: FactCheckFinding[]): FactCheckFinding[] {
+  const seen = new Set<string>();
+  return findings
+    .filter((finding) => {
+      const key = `${finding.type}|${finding.chapter}|${finding.quote}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => FACT_SEVERITY_RANK[a.severity] - FACT_SEVERITY_RANK[b.severity]);
+}
+
+/** 读取最近 N 章摘要（章节号升序拼接），供语义核查比对既有剧情。 */
+async function readRecentSummaries(
+  projectDir: string,
+  chapterNum: number,
+  count = 3,
+): Promise<string> {
+  const parts: string[] = [];
+  for (let offset = 1; offset <= count; offset++) {
+    const num = chapterNum - offset;
+    const summary = await readChapterSummary(projectDir, num);
+    if (summary) parts.unshift(`第${num}章：${summary}`);
+  }
+  return parts.join('\n\n');
+}
+
+/**
+ * 写后事实核查（非阻断、只报告）：
+ * - 机械检查（始终运行）：POV 知情越界启发式 + 名册人名近似笔误；
+ * - 语义检查（deep=true 时）：调用一次 CLI agent，按 POV 泄漏 / 姓名别名 / 设定时间线三类返回 JSON。
+ *
+ * body: { chapterNum: number, agentId?: string, deep?: boolean }
+ * deep 默认 true；agentId 也可用 query ?agent= 传入。
+ * 返回 { chapter, pov, findings, mechanical, semantic, semanticError? }。
+ * 不写任何文件，不影响样章门禁、CJK 阈值或写作锁。
+ */
+checkRouter.post('/fact-check', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  let body: { chapterNum?: number; agentId?: string; deep?: boolean } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // 允许空 body（会按 chapterNum 缺失返回 400）
+  }
+
+  if (typeof body.chapterNum !== 'number' || !Number.isFinite(body.chapterNum)) {
+    return c.json({ error: 'chapterNum is required' }, 400);
+  }
+  const chapterNum = Math.trunc(body.chapterNum);
+
+  let projectDir: string;
+  try {
+    projectDir = await resolveProjectDir(projectId);
+  } catch {
+    return c.json({ error: 'Project not found' }, 404);
+  }
+
+  const chapterText = await readChapter(projectDir, chapterNum);
+  if (!chapterText) {
+    return c.json({ error: `第${chapterNum}章正文不存在` }, 404);
+  }
+
+  const outline = await extractChapterOutline(projectDir, chapterNum);
+  const roster = await readCharacterRoster(projectDir);
+  const cast = await identifyCast(
+    projectDir,
+    chapterNum,
+    outline.content,
+    roster.map((entry) => entry.name),
+  );
+
+  // 知情边界：专属表 + state.json 的 knows 合并（只补漏，不覆盖）
+  const knowledgeTable = await readCharacterKnowledge(projectDir);
+  const knowledgeEntry = cast.pov
+    ? knowledgeTable.find((entry) => entry.name === cast.pov)
+    : undefined;
+  const state = await getStateTable(projectDir);
+  const mergedKnows = [...(knowledgeEntry?.knows ?? [])];
+  const stateKnows = cast.pov
+    ? state.characters.find((entry) => entry.name === cast.pov)?.knows ?? []
+    : [];
+  for (const fact of stateKnows) {
+    if (!mergedKnows.some((entry) => entry.fact === fact)) mergedKnows.push({ fact });
+  }
+  const knowledge: CharacterKnowledge | undefined = cast.pov
+    && (mergedKnows.length > 0 || (knowledgeEntry?.doesNotKnow.length ?? 0) > 0)
+    ? {
+        name: cast.pov,
+        knows: mergedKnows,
+        doesNotKnow: (knowledgeEntry?.doesNotKnow ?? []).filter(
+          (fact) => !mergedKnows.some((known) => known.fact === fact),
+        ),
+        ...(knowledgeEntry?.updatedChapter !== undefined
+          ? { updatedChapter: knowledgeEntry.updatedChapter }
+          : {}),
+      }
+    : undefined;
+
+  const mechanical = detectMechanicalFactIssues({
+    chapterText,
+    chapter: chapterNum,
+    pov: cast.pov,
+    roster: toRosterInputs(roster),
+    knowledge,
+  });
+
+  let semantic: FactCheckFinding[] = [];
+  let semanticError: string | undefined;
+  const deep = body.deep !== false;
+  if (deep) {
+    const agentId = (body.agentId ?? c.req.query('agent') ?? '').trim();
+    if (!agentId) {
+      // 未指定 agent：降级为只返回机械检查结果（非阻断）
+      semanticError = '未指定 agent，已仅返回机械检查结果';
+    } else {
+      const def = getAgentDef(agentId);
+      if (!def) return c.json({ error: `agent not found: ${agentId}` }, 400);
+      if (def.usesAcp) {
+        return c.json({ error: '语义核查暂不支持 ACP agent，请使用 claude 等 CLI agent' }, 400);
+      }
+
+      const prompt = buildFactCheckPrompt({
+        chapter: chapterNum,
+        chapterText,
+        pov: cast.pov,
+        roster,
+        knowledge,
+        timeline: state.timeline,
+        previousSummary: await readRecentSummaries(projectDir, chapterNum),
+        outline: outline.content,
+      });
+
+      try {
+        const output = await callAgentOnce(def, prompt, projectDir, FACT_CHECK_TIMEOUT_MS);
+        const parsed = parseFactCheckResponse(output, chapterNum);
+        if (parsed === null) {
+          semanticError = 'AI 输出无法解析为事实核查 JSON，已仅返回机械检查结果';
+        } else {
+          semantic = parsed;
+        }
+      } catch (e) {
+        // 语义核查失败不阻断：保留机械检查结果，前端展示错误提示
+        semanticError = e instanceof Error ? e.message : String(e);
+      }
+    }
+  }
+
+  return c.json({
+    chapter: chapterNum,
+    pov: cast.pov || null,
+    findings: dedupeFindings([...mechanical, ...semantic]),
+    mechanical,
+    semantic,
+    ...(semanticError ? { semanticError } : {}),
+  });
 });
 
 export default checkRouter;

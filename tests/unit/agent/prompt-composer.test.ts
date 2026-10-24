@@ -698,6 +698,72 @@ describe('composePrompt', () => {
       expect(prompt).toContain('### 状态层');
     });
 
+    it('POV 知情边界：有数据才注入，无数据/空表时提示词不含该层', async () => {
+      await seedWritingProject(tempDir);
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'outline', 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'outline', 'chapters', '第2章.md'),
+        '## 第 2 章：夜行\n- **POV**：林青\n- **核心事件**：夜行',
+      );
+      // 去掉 state.json 的已知信息，确保无任何知情数据
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({
+          characters: [{ name: '林青', location: '客栈', emotion: '警觉', knows: [], relationships: {}, lastAppearance: 1 }],
+          timeline: '第一夜',
+          activeForeshadows: [],
+          lastUpdatedChapter: 1,
+          updatedAt: '2026-01-01',
+        }),
+      );
+
+      const without = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(without).not.toContain('### POV 知情边界');
+
+      // 空表同样不注入
+      await fs.writeFile(path.join(novel, 'character-knowledge.json'), '{"characters":[]}');
+      const empty = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(empty).not.toContain('### POV 知情边界');
+
+      // 有数据时注入，且位于角色层之后、滚动摘要层之前
+      await fs.writeFile(
+        path.join(novel, 'character-knowledge.json'),
+        JSON.stringify({
+          characters: [{
+            name: '林青',
+            knows: [{ fact: '密道在厨房后面', learnedIn: 2 }],
+            doesNotKnow: ['自己的真实身世'],
+            updatedChapter: 2,
+          }],
+        }),
+      );
+      const withData = await composePrompt({
+        message: '写第二章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(withData).toContain('### POV 知情边界（林青）');
+      expect(withData).toContain('密道在厨房后面');
+      expect(withData).toContain('第2章获知');
+      expect(withData).toContain('尚不知（禁止以此行动）');
+      expect(withData).toContain('自己的真实身世');
+      const idx = (s: string) => withData.indexOf(s);
+      expect(idx('### 本章出场角色层')).toBeLessThan(idx('### POV 知情边界（林青）'));
+      expect(idx('### POV 知情边界（林青）')).toBeLessThan(idx('### 滚动摘要层'));
+    });
+
     it('进度层和角色状态层位于状态层之后、滚动摘要层之前', async () => {
       await seedWritingProject(tempDir);
       const novel = path.join(tempDir, '.novel');
@@ -999,9 +1065,77 @@ describe('composePrompt', () => {
       expect(prompt).toContain('前置：#2');
       expect(prompt).toContain('[情感线][轻量]');
       expect(prompt).toContain('期限：第15章前回收');
+      // 逾期/临期提醒块（有界注入）
+      expect(prompt).toContain('### ⏰ 伏笔到期提醒');
+      expect(prompt).toContain('已逾期 1 条');
+      expect(prompt).toContain('即将到期 1 条');
+      expect(prompt).toContain('期限在第12~21章');
       // 密度预算行（每 3 章新埋不超过 2 条）
       expect(prompt).toContain('密度预算');
       expect(prompt).toContain('可新埋');
+    });
+
+    it('推进中伏笔进入活跃伏笔层并标注 progressedIn 章号', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 10, updatedAt: '' }),
+      );
+      await fs.writeFile(
+        path.join(novel, 'foreshadow.json'),
+        JSON.stringify({
+          foreshadows: [
+            { id: 1, content: '推进中的身份线', type: 'identity', status: 'progressing', plantedIn: 2, resolveDeadline: 14, resolvedIn: null, progressedIn: [5, 8], dependsOn: [], weight: 'major' },
+          ],
+        }),
+      );
+      const prompt = await composePrompt({
+        message: '写第十一章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('### 活跃伏笔层');
+      expect(prompt).toContain('**推进中**');
+      expect(prompt).toContain('推进于第5章、第8章');
+      expect(prompt).toContain('### ⏰ 伏笔到期提醒');
+      expect(prompt).toContain('即将到期 1 条');
+    });
+
+    it('到期提醒有界：超过 5 条时折叠剩余条目', async () => {
+      const novel = path.join(tempDir, '.novel');
+      await fs.mkdir(path.join(novel, 'chapters'), { recursive: true });
+      await fs.writeFile(
+        path.join(novel, 'state.json'),
+        JSON.stringify({ characters: [], timeline: '', activeForeshadows: [], lastUpdatedChapter: 10, updatedAt: '' }),
+      );
+      const foreshadows = Array.from({ length: 7 }, (_, i) => ({
+        id: i + 1,
+        content: `逾期伏笔${i + 1}`,
+        type: 'chekhov',
+        status: 'planted',
+        plantedIn: 1,
+        resolveDeadline: 5,
+        resolvedIn: null,
+        progressedIn: [],
+        dependsOn: [],
+        weight: 'light',
+      }));
+      await fs.writeFile(path.join(novel, 'foreshadow.json'), JSON.stringify({ foreshadows }));
+      const prompt = await composePrompt({
+        message: '写第十一章',
+        projectId: 'p',
+        stage: 'writing',
+        projectDir: tempDir,
+      });
+      expect(prompt).toContain('已逾期 7 条');
+      const reminder = prompt.slice(prompt.indexOf('### ⏰ 伏笔到期提醒'));
+      expect(reminder).toContain('另有 2 条逾期');
+      // 提醒块内有界：只列前 5 条，其余折叠
+      expect(reminder).toContain('逾期伏笔5');
+      expect(reminder).not.toContain('逾期伏笔6');
+      expect(reminder).not.toContain('逾期伏笔7');
     });
 
     it('孤儿章号高亮警告：plantedIn 超出全书章数', async () => {

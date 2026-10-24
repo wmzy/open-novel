@@ -4,8 +4,8 @@ import { db } from '../db/drizzle';
 import { projects } from '../db/schema';
 import { getPlugin } from '../plugins/registry';
 import { eq } from 'drizzle-orm';
-import { buildRollingSummaryContext, getStateTable, readCharacterNames, getProgressMarkdown, getCharacterStatesMarkdown, getStyleRefs } from './context-manager';
-import { extractChapterOutline, identifyCast, buildCastLayer, type ChapterOutline } from './chapter-context';
+import { buildRollingSummaryContext, buildSemanticRecallContext, getStateTable, readCharacterNames, getProgressMarkdown, getCharacterStatesMarkdown, getStyleRefs } from './context-manager';
+import { extractChapterOutline, identifyCast, buildCastLayer, buildPovKnowledgeLayer, type ChapterOutline } from './chapter-context';
 import { buildReverseDecomposePrompt } from './reverse-decomposer';
 import { buildEnrichPrompt } from './enricher';
 import { STAGE_OUTPUT_FILES, isCritiqueRound } from '../shared/deepen';
@@ -14,6 +14,9 @@ import { parseChapterNumber } from '../shared/chapter-names';
 import {
   parseForeshadowFile,
   computeDensityBudget,
+  isForeshadowOverdue,
+  isForeshadowDueSoon,
+  DUE_SOON_WINDOW,
   FORESHADOW_TYPE_LABELS,
   FORESHADOW_WEIGHT_LABELS,
   type Foreshadow,
@@ -167,11 +170,11 @@ actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视
 \`\`\`json
 {
   "foreshadows": [
-    { "id": 1, "content": "具体伏笔描述", "type": "chekhov", "status": "pending", "plantedIn": 预定埋设章号, "resolveDeadline": 最晚回收章号, "resolvedIn": null, "dependsOn": [], "weight": "major" }
+    { "id": 1, "content": "具体伏笔描述", "type": "chekhov", "status": "pending", "plantedIn": 预定埋设章号, "resolveDeadline": 最晚回收章号, "resolvedIn": null, "progressedIn": [], "dependsOn": [], "weight": "major" }
   ]
 }
 \`\`\`
-顶层键为 foreshadows（**不是** items），内容字段为 content（**不是** description）。type 取值 chekhov（契诃夫之枪）/identity（身份揭示）/emotional（情感回响）/world（世界观）；status 取值 pending/planted/resolved/dropped；plantedIn/resolveDeadline/resolvedIn 为数字章号，无法确定时填 null；dependsOn 填前置伏笔的 id 列表（该伏笔回收前必须先回收的前置）；weight 取值 major（主线级）/light（点缀级）。密度预算：每 3 章新埋不超过 2 条，登记时据此控制总量。写章时 agent 会据此把 pending 翻成 planted，故此处务必把全书伏笔登记齐全。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
+顶层键为 foreshadows（**不是** items），内容字段为 content（**不是** description）。type 取值 chekhov（契诃夫之枪）/identity（身份揭示）/emotional（情感回响）/world（世界观）；status 取值 pending/planted/progressing/resolved/dropped（状态机 pending→planted→progressing→resolved，planted 亦可直接 resolved，回退须显式 reopen）；plantedIn/resolveDeadline/resolvedIn 为数字章号，无法确定时填 null；progressedIn 为推进记录章号数组（进入 progressing 时追加当前章号）；dependsOn 填前置伏笔的 id 列表（该伏笔回收前必须先回收的前置）；weight 取值 major（主线级）/light（点缀级）。密度预算：每 3 章新埋不超过 2 条，登记时据此控制总量。写章时 agent 会据此把 pending 翻成 planted、推进中的转 progressing 并在 progressedIn 追加章号、回收后转 resolved，故此处务必把全书伏笔登记齐全。然后通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "scenes" }）将项目阶段更新为 "scenes"。`,
 
   scenes: `
 确保主动场景（目标→冲突→灾难/转折）与被动场景（反应→困境→新决定）交替，避免连续同型。
@@ -328,8 +331,10 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
    - 更新 .novel/progress.md（当前进度、最近章节摘要、下一步提示）
    - 更新 .novel/state.json（lastUpdatedChapter、timeline、activeForeshadows）
    - 更新 .novel/foreshadow.json（伏笔状态）
+   - 更新 .novel/character-knowledge.json（POV 知情边界：已确认知道的事实写入 knows 并标注 learnedIn 章号；明确尚不知道的事写入 doesNotKnow。只记正文已确认的信息）
 3. **如果当前 Agent 不支持 SubAgent**（如 OpenCode），则你需要自行完成上述状态更新。参见下方 SubAgent 使用指导。
 4. **正文写作和状态更新不要混在一起**——先把正文写完保存，再做状态更新。避免写到一半停下来更新状态文件。
+5. **知情边界必须落盘**：无论是否委托 SubAgent，写完后都要确认「.novel/character-knowledge.json」已更新——POV 角色已确认知道的事实写入「knows」（尽量标注「learnedIn」章号），明确尚不知道的事写入「doesNotKnow」；某条事实在本章获知后，要从「doesNotKnow」移除并迁入「knows」。这是下一章 POV 越界检查的依据。
 
 写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。
 ${WRITING_OUTPUT_PROTOCOL}`,
@@ -346,7 +351,7 @@ ${WRITING_OUTPUT_PROTOCOL}`,
    - **节奏体感**：本章场景推进的松紧、断章钩子是否有效？
    - **世界观落地**：设定在正文中是否自然融入，有无与卡片冲突之处？
    - **大纲需修正点**：写作过程暴露出的大纲问题（节拍失效/动机牵强/信息顺序不当等）
-3. 委托 state-patcher SubAgent 更新章节摘要与状态文件（与写作阶段相同的职责分离；不支持 SubAgent 时自行完成）
+3. 委托 state-patcher SubAgent 更新章节摘要与状态文件（与写作阶段相同的职责分离；含 .novel/character-knowledge.json 的 POV 知情边界；不支持 SubAgent 时自行完成）
 
 **3 章全部完成后（反馈回灌）**：
 1. 按三篇复盘中的「大纲需修正点」修订对应的大纲章节卡片与承诺等级
@@ -757,13 +762,8 @@ function foreshadowBadges(f: Foreshadow): string {
   return `[${type}][${weight}]`;
 }
 
-/** 未结清（待埋/已埋未收）才需要逾期报警；resolved/dropped 不再报警。 */
-function foreshadowUnsettled(f: Foreshadow): boolean {
-  return f.status === 'pending' || f.status === 'planted';
-}
-
 /**
- * 伏笔条目括注：埋设章 / 期限章（含逾期标记）/ 前置依赖链。
+ * 伏笔条目括注：埋设章 / 推进记录 / 期限章（含逾期标记）/ 前置依赖链。
  * planned=true 时埋设章显示为「应埋于」（该条仍是 pending，尚未真正落笔）。
  */
 function foreshadowMetaNote(f: Foreshadow, currentChapter: number, planned = false): string {
@@ -771,8 +771,11 @@ function foreshadowMetaNote(f: Foreshadow, currentChapter: number, planned = fal
   if (f.plantedIn !== null) {
     segs.push(planned ? `应埋于第${f.plantedIn}章` : `埋于第${f.plantedIn}章`);
   }
+  if (f.status === 'progressing' && f.progressedIn.length > 0) {
+    segs.push(`推进于${f.progressedIn.map((c) => `第${c}章`).join('、')}`);
+  }
   if (f.resolveDeadline !== null) {
-    const overdue = foreshadowUnsettled(f) && f.resolveDeadline < currentChapter;
+    const overdue = isForeshadowOverdue(f, currentChapter);
     segs.push(`期限：第${f.resolveDeadline}章前回收${overdue ? ' ⚠已逾期' : ''}`);
   }
   if (f.dependsOn.length > 0) {
@@ -815,8 +818,41 @@ async function buildCurrentChapterForeshadows(
 }
 
 /**
+ * 逾期 / 临期伏笔提醒（有界：各最多 5 条，避免 prompt 膨胀）。
+ * 写作阶段针对「正在写的这一章」注入：逾期 = 非 resolved/dropped 且期限 < 当前章；
+ * 临期 = 期限落在 (当前章, 当前章+DUE_SOON_WINDOW]。无到期项返回空串。
+ */
+function buildForeshadowDueReminderBlock(foreshadows: Foreshadow[], currentChapter: number): string {
+  const overdue = foreshadows.filter((f) => isForeshadowOverdue(f, currentChapter));
+  const dueSoon = foreshadows.filter((f) => isForeshadowDueSoon(f, currentChapter));
+  if (overdue.length === 0 && dueSoon.length === 0) return '';
+  const LIMIT = 5;
+  const lines: string[] = ['### ⏰ 伏笔到期提醒（写作本章时优先处理）'];
+  if (overdue.length > 0) {
+    lines.push(`**已逾期 ${overdue.length} 条**（期限早于当前进度，尽快回收或标记放弃）：`);
+    for (const f of overdue.slice(0, LIMIT)) {
+      lines.push(`- [#${f.id}] ${foreshadowBadges(f)} ${f.content}${foreshadowMetaNote(f, currentChapter, f.status === 'pending')}`);
+    }
+    if (overdue.length > LIMIT) {
+      lines.push(`- …另有 ${overdue.length - LIMIT} 条逾期，详见 .novel/foreshadow.json`);
+    }
+  }
+  if (dueSoon.length > 0) {
+    lines.push(`**即将到期 ${dueSoon.length} 条**（期限在第${currentChapter + 1}~${currentChapter + DUE_SOON_WINDOW}章）：`);
+    for (const f of dueSoon.slice(0, LIMIT)) {
+      lines.push(`- [#${f.id}] ${foreshadowBadges(f)} ${f.content}${foreshadowMetaNote(f, currentChapter, f.status === 'pending')}`);
+    }
+    if (dueSoon.length > LIMIT) {
+      lines.push(`- …另有 ${dueSoon.length - LIMIT} 条临期，详见 .novel/foreshadow.json`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
  * 活跃伏笔层（债务视角）：
  * - 「待回收」区 = status === 'planted'（已埋进故事，等待兑现），标注期限与依赖
+ * - 「推进中」区 = status === 'progressing'（已部分兑现，记录推进章号）
  * - 「逾期未埋」区 = status === 'pending' 且 plantedIn < currentChapter
  *   （规划埋在本章或更早但状态仍未推进——提醒 agent 补埋或放弃）
  * - 「密度预算」行 = 每 3 章新埋不超过 2 条；超支报警并给出本章可新埋配额
@@ -832,6 +868,7 @@ async function buildForeshadowLayer(
   if (foreshadows.length === 0) return '';
 
   const planted = foreshadows.filter((f) => f.status === 'planted');
+  const progressing = foreshadows.filter((f) => f.status === 'progressing');
   const overduePending = foreshadows.filter(
     (f) => f.status === 'pending' && f.plantedIn !== null && f.plantedIn < currentChapter,
   );
@@ -839,12 +876,18 @@ async function buildForeshadowLayer(
   const orphaned = chapterCount > 0
     ? foreshadows.filter((f) => f.plantedIn !== null && f.plantedIn > chapterCount)
     : [];
-  if (planted.length === 0 && overduePending.length === 0 && orphaned.length === 0) return '';
+  if (planted.length === 0 && progressing.length === 0 && overduePending.length === 0 && orphaned.length === 0) return '';
 
   const lines: string[] = ['### 活跃伏笔层'];
   if (planted.length > 0) {
     lines.push('**待回收**（已埋进故事，等待兑现）：');
     for (const f of planted) {
+      lines.push(`- [#${f.id}] ${foreshadowBadges(f)} ${f.content}${foreshadowMetaNote(f, currentChapter)}`);
+    }
+  }
+  if (progressing.length > 0) {
+    lines.push('**推进中**（已部分兑现，继续推进直至回收）：');
+    for (const f of progressing) {
       lines.push(`- [#${f.id}] ${foreshadowBadges(f)} ${f.content}${foreshadowMetaNote(f, currentChapter)}`);
     }
   }
@@ -902,6 +945,7 @@ function commitmentFraming(chapter: number, outline: ChapterOutline): string {
 async function buildWritingContextLayers(
   projectDir: string,
   currentChapter: number,
+  projectId?: string,
 ): Promise<string> {
   const sections: string[] = [];
 
@@ -956,6 +1000,12 @@ async function buildWritingContextLayers(
     }
   }
 
+  // POV 知情边界层：仅当角色有已知/尚不知数据时注入（无数据时提示词保持不变）
+  if (cast.pov) {
+    const povKnowledge = await buildPovKnowledgeLayer(projectDir, cast.pov, currentChapter);
+    if (povKnowledge) sections.push(povKnowledge);
+  }
+
   const rolling = await buildRollingSummaryContext(projectDir);
   if (rolling) {
     sections.push(`### 滚动摘要层（最近 3 章详摘，更早章节简摘）\n${rolling}`);
@@ -965,8 +1015,22 @@ async function buildWritingContextLayers(
     );
   }
 
+  // 语义回忆层（可选，默认关闭）：仅在配置嵌入服务后检索更早章节的高相关片段。
+  // 未配置时返回空串，提示词与旧行为完全一致。
+  if (projectId) {
+    const semanticRecall = await buildSemanticRecallContext(projectId, projectDir, currentChapter);
+    if (semanticRecall) {
+      sections.push(`### 语义相关前文（自动检索，供保持设定与伏笔一致性参考）\n${semanticRecall}`);
+    }
+  }
+
   const foreshadow = await buildForeshadowLayer(projectDir, currentChapter);
   if (foreshadow) sections.push(foreshadow);
+
+  // 逾期/临期提醒：针对本章有界注入（各最多 5 条），确保 agent 写作时优先兑现到期伏笔
+  const { foreshadows: writingForeshadows } = await loadForeshadows(projectDir);
+  const dueReminder = buildForeshadowDueReminderBlock(writingForeshadows, currentChapter);
+  if (dueReminder) sections.push(dueReminder);
 
   return `## Novel Context Layers\n\n${sections.join('\n\n')}`;
 }
@@ -1180,7 +1244,7 @@ ${questionRule}
       }
     }
 
-    const layers = await buildWritingContextLayers(projectDir, currentChapter);
+    const layers = await buildWritingContextLayers(projectDir, currentChapter, projectId);
     if (layers) {
       parts.push(`\n${layers}`);
     }

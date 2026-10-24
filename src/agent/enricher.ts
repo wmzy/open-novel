@@ -125,8 +125,8 @@ location/emotion 可从档案中的当前状态推断（若档案无明确信息
 
 ### 3.4 timeline 与 activeForeshadows
 - timeline：若 outline/ 目录有章节卡片，提取关键节点推进到当前进度
-- activeForeshadows：若 .novel/foreshadow.json 存在，收集 status=planted 的条目 ID。
-  若需新建 foreshadow.json，**必须用标准 schema**：\`{ "foreshadows": [{ "id": 1, "content": "描述", "status": "planted", "plantedIn": null, "resolvedIn": null }] }\`。
+- activeForeshadows：若 .novel/foreshadow.json 存在，收集 status=planted 或 progressing 的条目 ID。
+  若需新建 foreshadow.json，**必须用标准 schema**：\`{ "foreshadows": [{ "id": 1, "content": "描述", "status": "planted", "plantedIn": null, "resolvedIn": null, "progressedIn": [] }] }\`。
   顶层键为 \`foreshadows\`（不是 items），内容字段为 \`content\`（不是 description）。
 
 ## 第四步·章节滚动摘要（仅有正文时）

@@ -10,6 +10,10 @@ import {
   computeForeshadowStats,
   computeDensityBudget,
   resolveCurrentChapter,
+  canTransitionForeshadow,
+  transitionForeshadow,
+  isForeshadowOverdue,
+  isForeshadowDueSoon,
   type Foreshadow,
 } from '../../../src/shared/foreshadow';
 
@@ -22,6 +26,7 @@ function make(overrides: Partial<Foreshadow> & { id: number }): Foreshadow {
     plantedIn: null,
     resolveDeadline: null,
     resolvedIn: null,
+    progressedIn: [],
     dependsOn: [],
     weight: 'light',
     ...overrides,
@@ -171,32 +176,35 @@ describe('computeForeshadowStats：债务统计', () => {
       make({ id: 3, status: 'pending', weight: 'major' }),
       make({ id: 4, status: 'resolved', weight: 'major' }),
       make({ id: 5, status: 'dropped', weight: 'light' }),
+      make({ id: 6, status: 'progressing', weight: 'light' }),
     ];
-    expect(computeForeshadowStats(list, 1, 10).debtScore).toBe(5);
+    expect(computeForeshadowStats(list, 1, 10).debtScore).toBe(6);
   });
 
-  it('byStatus 与 total 统计四种状态', () => {
+  it('byStatus 与 total 统计五种状态', () => {
     const list = [
       make({ id: 1, status: 'pending' }),
       make({ id: 2, status: 'planted' }),
-      make({ id: 3, status: 'resolved' }),
-      make({ id: 4, status: 'dropped' }),
+      make({ id: 3, status: 'progressing' }),
+      make({ id: 4, status: 'resolved' }),
+      make({ id: 5, status: 'dropped' }),
     ];
     const stats = computeForeshadowStats(list, 1, 10);
-    expect(stats.total).toBe(4);
-    expect(stats.byStatus).toEqual({ pending: 1, planted: 1, resolved: 1, dropped: 1 });
+    expect(stats.total).toBe(5);
+    expect(stats.byStatus).toEqual({ pending: 1, planted: 1, progressing: 1, resolved: 1, dropped: 1 });
   });
 
-  it('density：pending 规划章不计入新埋；按 plantedIn/resolvedIn 逐章计数', () => {
+  it('density：pending 规划章不计入新埋；planted/progressing/resolved 按 plantedIn 逐章计数', () => {
     const list = [
       make({ id: 1, status: 'planted', plantedIn: 2 }),
       make({ id: 2, status: 'resolved', plantedIn: 2, resolvedIn: 4 }),
       make({ id: 3, status: 'pending', plantedIn: 2 }), // 仍是规划，不算已埋
+      make({ id: 4, status: 'progressing', plantedIn: 2 }), // 推进中同样是实际新埋
     ];
     const stats = computeForeshadowStats(list, 3, 4);
     expect(stats.density).toEqual([
       { chapter: 1, planted: 0, resolved: 0 },
-      { chapter: 2, planted: 2, resolved: 0 },
+      { chapter: 2, planted: 3, resolved: 0 },
       { chapter: 3, planted: 0, resolved: 0 },
       { chapter: 4, planted: 0, resolved: 1 },
     ]);
@@ -274,8 +282,154 @@ describe('resolveCurrentChapter', () => {
     expect(resolveCurrentChapter(list, 0)).toBe(7);
   });
 
+  it('未开写时推进记录章号也作为已写进度证据', () => {
+    const list = [
+      make({ id: 1, plantedIn: 2, progressedIn: [6] }),
+      make({ id: 2, plantedIn: 9, progressedIn: [] }),
+    ];
+    expect(resolveCurrentChapter(list, 0)).toBe(9);
+    expect(resolveCurrentChapter([make({ id: 3, plantedIn: 2, progressedIn: [6] })], 0)).toBe(6);
+  });
+
   it('空清单与非法进度回退为 0', () => {
     expect(resolveCurrentChapter([], 0)).toBe(0);
     expect(resolveCurrentChapter([], NaN)).toBe(0);
+  });
+});
+
+describe('progressedIn：向后兼容与解析', () => {
+  it('旧数据缺失 progressedIn 时默认 []，且不被标记为旧格式', () => {
+    const { foreshadows, migrated } = parseForeshadowFile(JSON.stringify({
+      foreshadows: [{
+        id: 1, content: '新 schema 但无推进记录', type: 'chekhov', status: 'planted',
+        plantedIn: 2, resolveDeadline: 9, resolvedIn: null, dependsOn: [], weight: 'light',
+      }],
+    }));
+    expect(migrated).toBe(false);
+    expect(foreshadows[0].progressedIn).toEqual([]);
+  });
+
+  it('接受 progressing 状态，progressedIn 支持数字/数字字符串、去重并升序', () => {
+    const { foreshadows } = parseForeshadowFile(JSON.stringify({
+      foreshadows: [{
+        id: 1, content: '推进中', type: 'identity', status: 'progressing',
+        plantedIn: 2, resolveDeadline: 12, resolvedIn: null, dependsOn: [], weight: 'major',
+        progressedIn: ['第7章', 5, 7, '第3章'],
+      }],
+    }));
+    expect(foreshadows[0].status).toBe('progressing');
+    expect(foreshadows[0].progressedIn).toEqual([3, 5, 7]);
+  });
+
+  it('非法 progressedIn 值被宽容丢弃', () => {
+    const { foreshadows } = parseForeshadowFile(JSON.stringify({
+      foreshadows: [{
+        id: 1, content: '推进中', type: 'world', status: 'planted',
+        plantedIn: 1, resolveDeadline: null, resolvedIn: null, dependsOn: [], weight: 'light',
+        progressedIn: ['序章', null, 4],
+      }],
+    }));
+    expect(foreshadows[0].progressedIn).toEqual([4]);
+  });
+
+  it('序列化 round-trip 保留 progressedIn', () => {
+    const list = [make({ id: 1, status: 'progressing', plantedIn: 1, progressedIn: [3, 6] })];
+    const parsed = parseForeshadowFile(serializeForeshadows(list));
+    expect(parsed.foreshadows[0].progressedIn).toEqual([3, 6]);
+  });
+});
+
+describe('伏笔状态机迁移表', () => {
+  it('允许前向迁移：pending→planted、planted→progressing、progressing→resolved', () => {
+    expect(canTransitionForeshadow('pending', 'planted')).toBe(true);
+    expect(canTransitionForeshadow('planted', 'progressing')).toBe(true);
+    expect(canTransitionForeshadow('progressing', 'resolved')).toBe(true);
+  });
+
+  it('允许 planted 直接 resolved，以及任意未结清状态 → dropped', () => {
+    expect(canTransitionForeshadow('planted', 'resolved')).toBe(true);
+    expect(canTransitionForeshadow('pending', 'dropped')).toBe(true);
+    expect(canTransitionForeshadow('planted', 'dropped')).toBe(true);
+    expect(canTransitionForeshadow('progressing', 'dropped')).toBe(true);
+  });
+
+  it('拒绝回退与跨级迁移：progressing→planted、planted→pending、pending→progressing/resolved', () => {
+    expect(canTransitionForeshadow('progressing', 'planted')).toBe(false);
+    expect(canTransitionForeshadow('planted', 'pending')).toBe(false);
+    expect(canTransitionForeshadow('pending', 'progressing')).toBe(false);
+    expect(canTransitionForeshadow('pending', 'resolved')).toBe(false);
+  });
+
+  it('同状态为 no-op；reopen=true 可显式回退/重新打开到非终态', () => {
+    expect(canTransitionForeshadow('resolved', 'resolved')).toBe(true);
+    expect(canTransitionForeshadow('resolved', 'planted')).toBe(false);
+    expect(canTransitionForeshadow('resolved', 'planted', { reopen: true })).toBe(true);
+    expect(canTransitionForeshadow('dropped', 'progressing', { reopen: true })).toBe(true);
+    // reopen 允许纠正任意回退，但不能把已收/已放弃改成终态
+    expect(canTransitionForeshadow('progressing', 'planted', { reopen: true })).toBe(true);
+    expect(canTransitionForeshadow('planted', 'pending', { reopen: true })).toBe(true);
+    // reopen 不覆盖正常前向迁移
+    expect(canTransitionForeshadow('planted', 'resolved', { reopen: true })).toBe(true);
+    expect(canTransitionForeshadow('pending', 'dropped', { reopen: true })).toBe(true);
+    expect(canTransitionForeshadow('resolved', 'dropped', { reopen: true })).toBe(false);
+  });
+
+  it('transitionForeshadow：进入 progressing 记录章号并去重升序', () => {
+    const item = make({ id: 1, status: 'planted', plantedIn: 2, progressedIn: [3] });
+    const first = transitionForeshadow(item, 'progressing', { chapter: 5 });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.foreshadow.status).toBe('progressing');
+    expect(first.foreshadow.progressedIn).toEqual([3, 5]);
+
+    // 已在 progressing 时再次推进（同状态 no-op）也可追加新章号
+    const second = transitionForeshadow(first.foreshadow, 'progressing', { chapter: 8 });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.foreshadow.progressedIn).toEqual([3, 5, 8]);
+
+    // 重复章号不重复记录
+    const duplicate = transitionForeshadow(second.foreshadow, 'progressing', { chapter: 8 });
+    expect(duplicate.ok).toBe(true);
+    if (!duplicate.ok) return;
+    expect(duplicate.foreshadow.progressedIn).toEqual([3, 5, 8]);
+  });
+
+  it('transitionForeshadow：非法迁移返回 ok=false；reopen 清空 resolvedIn', () => {
+    const progressing = make({ id: 1, status: 'progressing' });
+    const invalid = transitionForeshadow(progressing, 'planted');
+    expect(invalid.ok).toBe(false);
+    if (invalid.ok) return;
+    expect(invalid.error).toContain('非法状态迁移');
+
+    const resolved = make({ id: 2, status: 'resolved', resolvedIn: 9 });
+    const reopened = transitionForeshadow(resolved, 'planted', { reopen: true });
+    expect(reopened.ok).toBe(true);
+    if (!reopened.ok) return;
+    expect(reopened.foreshadow.status).toBe('planted');
+    expect(reopened.foreshadow.resolvedIn).toBeNull();
+  });
+});
+
+describe('isForeshadowOverdue / isForeshadowDueSoon 边界', () => {
+  it('逾期边界：deadline == currentChapter 不算逾期，< currentChapter 才算', () => {
+    const boundary = make({ id: 1, status: 'planted', resolveDeadline: 10 });
+    const late = make({ id: 2, status: 'planted', resolveDeadline: 9 });
+    expect(isForeshadowOverdue(boundary, 10)).toBe(false);
+    expect(isForeshadowOverdue(late, 10)).toBe(true);
+  });
+
+  it('progressing 计入逾期；resolved/dropped/无期限豁免', () => {
+    expect(isForeshadowOverdue(make({ id: 1, status: 'progressing', resolveDeadline: 3 }), 10)).toBe(true);
+    expect(isForeshadowOverdue(make({ id: 2, status: 'resolved', resolveDeadline: 3 }), 10)).toBe(false);
+    expect(isForeshadowOverdue(make({ id: 3, status: 'dropped', resolveDeadline: 3 }), 10)).toBe(false);
+    expect(isForeshadowOverdue(make({ id: 4, status: 'planted', resolveDeadline: null }), 10)).toBe(false);
+  });
+
+  it('临期窗口为 (currentChapter, currentChapter+10]，两侧边界都不含/含', () => {
+    expect(isForeshadowDueSoon(make({ id: 1, status: 'planted', resolveDeadline: 10 }), 10)).toBe(false);
+    expect(isForeshadowDueSoon(make({ id: 2, status: 'planted', resolveDeadline: 11 }), 10)).toBe(true);
+    expect(isForeshadowDueSoon(make({ id: 3, status: 'progressing', resolveDeadline: 20 }), 10)).toBe(true);
+    expect(isForeshadowDueSoon(make({ id: 4, status: 'planted', resolveDeadline: 21 }), 10)).toBe(false);
   });
 });

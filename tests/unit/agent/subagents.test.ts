@@ -11,6 +11,7 @@ const STATE_PATCHER_FILES = [
   '.novel/progress.md',
   '.novel/state.json',
   '.novel/foreshadow.json',
+  '.novel/character-knowledge.json',
 ];
 
 describe('WRITING_SUBAGENTS', () => {
@@ -28,18 +29,20 @@ describe('WRITING_SUBAGENTS', () => {
       expect(patcher.description).toContain('角色状态');
       expect(patcher.description).toContain('写作进度');
       expect(patcher.description).toContain('伏笔追踪');
+      expect(patcher.description).toContain('角色知情边界');
     });
 
-    it('systemPrompt 按顺序列出五项职责', () => {
-      // 五项职责标题必须存在
+    it('systemPrompt 按顺序列出六项职责', () => {
+      // 六项职责标题必须存在
       expect(patcher.systemPrompt).toContain('1. **生成章节摘要**');
       expect(patcher.systemPrompt).toContain('2. **更新角色状态**');
       expect(patcher.systemPrompt).toContain('3. **更新写作进度**');
       expect(patcher.systemPrompt).toContain('4. **更新结构化状态**');
       expect(patcher.systemPrompt).toContain('5. **更新伏笔追踪**');
+      expect(patcher.systemPrompt).toContain('6. **更新角色知情边界**');
     });
 
-    it('systemPrompt 涵盖全部五个状态文件', () => {
+    it('systemPrompt 涵盖全部六个状态文件', () => {
       for (const file of STATE_PATCHER_FILES) {
         expect(patcher.systemPrompt).toContain(file);
       }
@@ -59,7 +62,7 @@ describe('WRITING_SUBAGENTS', () => {
       // schema 严格化：顶层键、字段名、status 取值
       expect(patcher.systemPrompt).toContain('顶层键为 foreshadows');
       expect(patcher.systemPrompt).toContain('内容字段为 content');
-      expect(patcher.systemPrompt).toContain('pending/planted/resolved');
+      expect(patcher.systemPrompt).toContain('pending/planted/progressing/resolved/dropped');
     });
 
     it('摘要严禁复制正文原文', () => {
@@ -86,7 +89,7 @@ describe('getSubagentGuidance', () => {
       expect(g).toContain('task 工具');
     });
 
-    it('state-patcher 指导列出全部五个状态文件', () => {
+    it('state-patcher 指导列出全部六个状态文件', () => {
       const g = getSubagentGuidance('omp');
       expect(g).toContain('### state-patcher（状态更新）');
       expect(g).toContain('**何时委托**：章节正文写完并保存后');
@@ -109,7 +112,7 @@ describe('getSubagentGuidance', () => {
       expect(g).toContain('不要委托');
     });
 
-    it('内联列出全部五个状态文件（自行完成）', () => {
+    it('内联列出全部六个状态文件（自行完成）', () => {
       for (const file of STATE_PATCHER_FILES) {
         expect(g).toContain(file);
       }

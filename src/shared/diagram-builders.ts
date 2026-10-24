@@ -14,6 +14,10 @@ export interface ForeshadowItem {
   resolvedIn?: number;
   /** 最晚回收章号（债务期限）；缺省视为未设定。 */
   resolveDeadline?: number | null;
+  /** 推进记录章号（progressing 条形止于最近推进章）。 */
+  progressedIn?: number[];
+  /** 逾期标记：由调用方按当前写作章号判定；缺省时由 currentChapter 参数计算。 */
+  overdue?: boolean;
 }
 
 export interface CharRelState {
@@ -47,20 +51,34 @@ function foreshadowLabel(content: string): string {
 
 /**
  * 从 foreshadow.json 派生甘特图：横轴=章节号，每条=伏笔从埋设章到回收章。
- * 按 status 分 section（待埋/待回收/已回收/已放弃），一眼看出哪条逾期、哪条扎堆。
+ * 按 status 分 section（待埋/待回收/推进中/已回收/已放弃），一眼看出哪条逾期、哪条扎堆。
  * 设定了 resolveDeadline 的条目在期限章追加 ◆milestone 标记（期限里程碑）；
- * 期限早于实际回收章的，标记名前加 ⚠ 提示回收晚了。
+ * 期限早于实际回收章或已逾期的，标记名前加 ⚠ 提示。
+ * currentChapter 传入时按「未回收 && 期限 < 当前章」自动标记逾期（也可逐条传 overdue）。
  */
-export function buildForeshadowGantt(items: ForeshadowItem[]): string | null {
+export function buildForeshadowGantt(items: ForeshadowItem[], currentChapter?: number): string | null {
   if (!items || items.length === 0) return null;
 
+  const isOverdue = (f: ForeshadowItem): boolean => {
+    if (typeof f.overdue === 'boolean') return f.overdue;
+    if (f.status === 'resolved' || f.status === 'dropped') return false;
+    return typeof currentChapter === 'number'
+      && Number.isFinite(currentChapter)
+      && f.resolveDeadline != null
+      && f.resolveDeadline < currentChapter;
+  };
+
   const maxChapter = Math.max(
-    ...items.map((f) => f.resolvedIn ?? f.resolveDeadline ?? f.plantedIn ?? 1),
+    ...items.map((f) => {
+      const lastProgress = f.progressedIn?.length ? Math.max(...f.progressedIn) : 0;
+      return Math.max(f.resolvedIn ?? 0, f.resolveDeadline ?? 0, f.plantedIn ?? 1, lastProgress);
+    }),
   );
 
   const sections: Array<{ title: string; state: string; group: ForeshadowItem[] }> = [
     { title: '待埋', state: 'crit', group: items.filter((f) => f.status === 'pending') },
     { title: '待回收', state: 'active', group: items.filter((f) => f.status === 'planted') },
+    { title: '推进中', state: 'active', group: items.filter((f) => f.status === 'progressing') },
     { title: '已回收', state: 'done', group: items.filter((f) => f.status === 'resolved' && f.resolvedIn != null) },
     { title: '已放弃', state: 'done', group: items.filter((f) => f.status === 'dropped') },
   ];
@@ -77,13 +95,22 @@ export function buildForeshadowGantt(items: ForeshadowItem[]): string | null {
     lines.push(`    section ${title}`);
     for (const f of group) {
       const start = f.plantedIn || 1;
-      const end = f.resolvedIn ?? f.resolveDeadline ?? maxChapter;
+      const lastProgress = f.progressedIn?.length ? Math.max(...f.progressedIn) : null;
+      // 推进中：条形止于最近推进章（体现「已推进到哪」），无推进记录时退回期限/最大章
+      const end = f.resolvedIn
+        ?? (f.status === 'progressing' && lastProgress !== null
+          ? Math.max(start + 1, lastProgress)
+          : f.resolveDeadline ?? maxChapter);
       const dur = Math.max(1, end - start);
-      lines.push(`    ${sanitize(foreshadowLabel(f.content))} :${state}, f${f.id}, ${start}, ${dur}`);
+      const overdue = isOverdue(f);
+      const label = `${overdue ? '⚠逾期 ' : ''}${foreshadowLabel(f.content)}`;
+      lines.push(`    ${sanitize(label)} :${state}, f${f.id}, ${start}, ${dur}`);
       // 期限里程碑：未回收条目止于期限章；已回收条目若晚于期限，标记回收迟到
       if (f.resolveDeadline != null) {
         const late = f.resolvedIn != null && f.resolvedIn > f.resolveDeadline;
-        const mark = late ? `⚠${foreshadowLabel(f.content)}期限` : `${foreshadowLabel(f.content)}期限`;
+        const mark = late || overdue
+          ? `⚠${foreshadowLabel(f.content)}期限`
+          : `${foreshadowLabel(f.content)}期限`;
         lines.push(`    ${sanitize(mark)} :milestone, fd${f.id}, ${f.resolveDeadline}, 0`);
       }
     }

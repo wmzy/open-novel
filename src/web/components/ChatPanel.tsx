@@ -24,6 +24,14 @@ import {
   type DeepenToChatDetail,
 } from '../../shared/deepen';
 import { STAGES } from '../../shared/stages';
+import {
+  BATCH_MAX_CHAPTERS,
+  parseBatchCommand,
+  batchChapterMessage,
+  batchProgress,
+  isBatchActive,
+  type BatchState,
+} from '../../shared/batch';
 import AgentMessage from './AgentMessage';
 import RevisionDiffPanel from './RevisionDiffPanel';
 import { css, cx } from '@linaria/core';
@@ -251,6 +259,38 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     return () => clearInterval(t);
   }, [deepenMode?.active]);
 
+  // ===== 批量写作：每章都是真实 run，前端逐章驱动 =====
+  // 状态事实源是服务端 .novel/batch.json；挂载时只回显、不自动续跑，
+  // 由用户点击「继续」（与深化循环的 mount-replay 一致）。
+  const [batch, setBatch] = useState<BatchState | null>(null);
+  const batchRef = useRef<BatchState | null>(null);
+  /** 本前端最近启动的章节号；null = 非本前端驱动（刷新后等待用户继续）。 */
+  const batchChapterRef = useRef<number | null>(null);
+  const batchStartInFlightRef = useRef(false);
+  /** 创建批量 API 在途（防止快速双击产生两个 batch）。 */
+  const batchStartRequestRef = useRef(false);
+  const batchRetryCountRef = useRef(0);
+  const batchRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (batchRetryTimerRef.current) clearTimeout(batchRetryTimerRef.current);
+  }, []);
+  useEffect(() => {
+    batchRef.current = batch;
+  }, [batch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/batch`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { batch?: BatchState | null };
+        if (!cancelled && data.batch && isBatchActive(data.batch)) setBatch(data.batch);
+      } catch { /* 无历史批量或网络不可用 */ }
+    })();
+    return () => { cancelled = true; };
+  }, [projectId]);
+
   /** 剩余时间格式化：Xh Ym（不足 1 小时显示分钟）。 */
   const fmtRemaining = (ms: number): string => {
     if (ms <= 0) return '已到截止';
@@ -282,7 +322,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const fileAutocomplete = useFileAutocomplete(projectId);
   const queryClient = useQueryClient();
 
-  const { messages: chatMessages, isRunning, status, contextSize, runtimeUsage, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+  const { messages: chatMessages, isRunning, status, contextSize, runtimeUsage, lastFinishedRun, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
 
   // 灵感注入：来自视图 💡 按钮 dispatch 的事件，直接 sendMessage（消息已组装好）
   useEffect(() => {
@@ -514,6 +554,201 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     prevIsRunningRef.current = isRunning;
   }, [isRunning, deepenMode, advanceDeepen]);
 
+  // ===== 批量写作驱动 =====
+
+  /** 调用批量 API（action='' 时为创建批量）。 */
+  const batchApi = useCallback(async (
+    action: string,
+    body?: Record<string, unknown>,
+  ): Promise<BatchState | null> => {
+    const url = action
+      ? `/api/projects/${projectId}/batch/${action}`
+      : `/api/projects/${projectId}/batch`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      batch?: BatchState | null;
+      message?: string;
+      error?: string;
+    };
+    if (!res.ok) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+    return data.batch ?? null;
+  }, [projectId]);
+
+  /** 发起当前章的普通 run（POST /api/runs 由 useRun 完成）。 */
+  const launchBatchChapter = useCallback((state: BatchState, resetRetry = false) => {
+    if (state.status !== 'running' || batchStartInFlightRef.current) return;
+    if (resetRetry) batchRetryCountRef.current = 0;
+    batchStartInFlightRef.current = true;
+    const chapter = state.currentChapter;
+    batchChapterRef.current = chapter;
+    sendMessage(
+      {
+        projectId,
+        agentId,
+        skillId,
+        // 批量写作是正式写作；样章门照常由 POST /api/runs 校验。
+        stage: 'writing',
+        message: batchChapterMessage(chapter),
+        model: selectedModel !== 'default' ? selectedModel : undefined,
+      },
+      {
+        // 回填关联 runId：run 结束时服务端据此自动推进批量状态，
+        // 即使浏览器被关闭/刷新，进度也不会停在已完成的章节。
+        onRunStarted: (runId) => {
+          void batchApi('run-started', { chapter, runId }).catch(() => {});
+        },
+      },
+    );
+  }, [sendMessage, batchApi, projectId, agentId, skillId, selectedModel]);
+
+  /** 启动一批（N..M）。 */
+  const handleStartBatch = useCallback(async (from: number, to: number) => {
+    if (batchStartRequestRef.current) return;
+    batchStartRequestRef.current = true;
+    batchChapterRef.current = null;
+    batchStartInFlightRef.current = false;
+    try {
+      const state = await batchApi('', { from, to, agentId, skillId });
+      if (!state) return;
+      setBatch(state);
+      batchRef.current = state;
+      launchBatchChapter(state, true);
+    } catch (err) {
+      toast.error(`批量写作启动失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      batchStartRequestRef.current = false;
+    }
+  }, [batchApi, launchBatchChapter, agentId, skillId]);
+
+  /** 暂停：当前章继续写，结束后停在下一章。 */
+  const handlePauseBatch = useCallback(async () => {
+    try {
+      const state = await batchApi('pause');
+      if (state) {
+        setBatch(state);
+        toast.info(state.pauseRequested ? '当前章完成后暂停' : '批量写作已暂停');
+      }
+    } catch (err) {
+      toast.error(`暂停失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [batchApi]);
+
+  /** 继续：从暂停/失败处恢复并立即写下一章。 */
+  const handleResumeBatch = useCallback(async () => {
+    try {
+      const state = await batchApi('resume');
+      if (!state) return;
+      setBatch(state);
+      if (state.status === 'running') launchBatchChapter(state, true);
+    } catch (err) {
+      toast.error(`继续失败：${err instanceof Error ? err.message : String(err)}`);
+      // 服务端可能已自动推进到 completed/canceled（例如刷新期间章节已结束）：
+      // 重新拉取以更新横幅，而不是停留在过期的 running。
+      try {
+        const res = await fetch(`/api/projects/${projectId}/batch`);
+        if (res.ok) {
+          const data = (await res.json()) as { batch?: BatchState | null };
+          if (data.batch) setBatch(data.batch);
+        }
+      } catch { /* ignore */ }
+    }
+  }, [batchApi, launchBatchChapter, projectId]);
+
+  /** 取消：终止批量状态，并取消当前前端正在跟踪的 run。 */
+  const handleCancelBatch = useCallback(async () => {
+    if (batchRetryTimerRef.current) {
+      clearTimeout(batchRetryTimerRef.current);
+      batchRetryTimerRef.current = null;
+    }
+    batchStartInFlightRef.current = false;
+    batchChapterRef.current = null;
+    try {
+      const state = await batchApi('cancel');
+      if (state) setBatch(state);
+    } catch { /* 状态更新失败也要停止当前 run */ }
+    await cancel();
+  }, [batchApi, cancel]);
+
+  const prevBatchRunningRef = useRef(false);
+  useEffect(() => {
+    if (!batch || batch.status !== 'running') {
+      prevBatchRunningRef.current = isRunning;
+      return;
+    }
+    if (prevBatchRunningRef.current && !isRunning && batchChapterRef.current !== null) {
+      const chapter = batchChapterRef.current;
+      batchChapterRef.current = null;
+      batchStartInFlightRef.current = false;
+      const lastMsg = chatMessages[chatMessages.length - 1];
+
+      // 里程碑回顾等其它真实 run 抢占了项目锁：不是本章失败，等它结束后重试本章。
+      if (lastMsg?.errorCode === 'run-in-progress' && batchRetryCountRef.current < 120) {
+        batchRetryCountRef.current += 1;
+        if (batchRetryCountRef.current === 1) {
+          toast.info('当前有其他任务在运行，批量写作等待其完成后继续…');
+        }
+        // 定时器挂在 ref 上：不随 effect 依赖变化被清理（run 收尾后仍可能有
+        // 最后一次 delta flush 触发重渲染，若用 effect cleanup 会吞掉重试）。
+        if (batchRetryTimerRef.current) clearTimeout(batchRetryTimerRef.current);
+        batchRetryTimerRef.current = setTimeout(() => {
+          batchRetryTimerRef.current = null;
+          // 重新拉取服务端状态：等待期间当前章可能已被服务端自动推进/完成，
+          // 不能拿本地过期状态直接启动下一章。
+          void (async () => {
+            try {
+              const res = await fetch(`/api/projects/${projectId}/batch`);
+              if (!res.ok) return;
+              const data = (await res.json()) as { batch?: BatchState | null };
+              const latest = data.batch ?? null;
+              if (latest) {
+                setBatch(latest);
+                batchRef.current = latest;
+              }
+              // 用户可能在等待期间手动点了「继续」：已有在途章节时不要重复启动。
+              if (
+                latest?.status === 'running'
+                && !batchStartInFlightRef.current
+                && batchChapterRef.current === null
+              ) {
+                launchBatchChapter(latest);
+              }
+            } catch { /* 下个 run 结束后仍可手动继续 */ }
+          })();
+        }, 5000);
+        prevBatchRunningRef.current = isRunning;
+        return;
+      }
+
+      const succeeded = !lastMsg?.error && lastFinishedRun?.status === 'succeeded';
+      void (async () => {
+        try {
+          const next = await batchApi('advance', {
+            chapter,
+            succeeded,
+            reason: succeeded ? undefined : (lastMsg?.error || lastFinishedRun?.status || 'run failed'),
+          });
+          if (!next) return;
+          setBatch(next);
+          if (succeeded) {
+            if (next.status === 'completed') {
+              toast.success(`批量写作完成：第 ${next.from}-${next.to} 章全部结束`);
+            }
+          } else {
+            toast.error(`第${chapter}章失败，批量已停止；点击「继续」将从该章重试`);
+          }
+          if (next.status === 'running') launchBatchChapter(next, true);
+        } catch (err) {
+          toast.error(`批量状态更新失败：${err instanceof Error ? err.message : String(err)}`);
+        }
+      })();
+    }
+    prevBatchRunningRef.current = isRunning;
+  }, [isRunning, batch, chatMessages, lastFinishedRun, batchApi, launchBatchChapter, projectId]);
+
   // Fetch conversations for this project
   const { data: conversations } = useConversations(projectId);
 
@@ -574,6 +809,31 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
   const handleSend = async () => {
     if (!input.trim() || !agentAvailable || isRunning) return;
+
+    // 批量写作命令：/batch 10-20、写第10到20章。整句匹配，避免误伤正文。
+    const trimmed = input.trim();
+    const batchRange = pendingRevise ? null : parseBatchCommand(trimmed);
+    if (batchRange) {
+      const count = batchRange.to - batchRange.from + 1;
+      if (count > BATCH_MAX_CHAPTERS) {
+        toast.error(`单批最多 ${BATCH_MAX_CHAPTERS} 章（本次 ${count} 章），请分批提交`);
+        return;
+      }
+      if (batch && batch.status === 'running') {
+        toast.error('已有批量写作进行中，请先暂停或取消');
+        return;
+      }
+      if (deepenMode?.active) exitDeepen('用户启动批量写作');
+      setInput('');
+      await handleStartBatch(batchRange.from, batchRange.to);
+      return;
+    }
+
+    // 批量写作未结束时阻止普通消息插队：会与章节 run 抢项目锁、污染上下文。
+    if (batch && isBatchActive(batch)) {
+      toast.warning('批量写作尚未结束：请先点击「继续」完成或「取消」后再发送其他消息');
+      return;
+    }
 
     // 用户手动发消息 → 退出深化模式
     if (deepenMode?.active) exitDeepen('用户手动中断');
@@ -731,6 +991,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     { name: '/polish', description: '进入润色阶段', source: 'app', action: () => { onStageChange?.('polish'); sendMessage({ projectId, agentId, skillId, stage: 'polish', message: '切换到润色阶段' }); } },
     { name: '/new', description: '开始新对话', source: 'app', action: () => { setActiveConversationId(null); resetConversation(); setPendingRevise(null); } },
     { name: '/import', description: '导入源文本并逆向拆书（/import <文件或目录路径>）', source: 'app' },
+    { name: '/batch', description: '批量写章（/batch 10-20，单批最多 10 章；也可直接说「写第10到20章」）', source: 'app' },
     { name: '/enrich', description: '补全缺失的结构化数据（state/outline-meta/关系图，只增不覆盖）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage: 'enrich', message: '扫描并补全缺失的结构化数据' }); } },
     { name: '/retry', description: '重试上一条消息', source: 'app', action: () => { const last = [...chatMessages].reverse().find(m => m.role === 'user'); if (last) sendMessage({ projectId, agentId, skillId, stage: effectiveStage, message: last.content }); } },
     { name: '/explore', description: '自治推进当前阶段（不提问，AI 自主决策并落盘）', source: 'app', action: () => { sendMessage({ projectId, agentId, skillId, stage: effectiveStage, message: '自治推进当前阶段，所有创作决策自主做出', autonomous: true, model: selectedModel !== 'default' ? selectedModel : undefined }); } },
@@ -1207,6 +1468,30 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           <div className={reviseBanner}>
             <span>📌 正在修订 {pendingRevise.targetFile}{pendingRevise.sectionTitle ? ` · ${pendingRevise.sectionTitle}` : ''}</span>
             <button className={reviseBannerClose} onClick={() => setPendingRevise(null)} title="退出修订模式">✕</button>
+          </div>
+        )}
+        {batch && isBatchActive(batch) && (
+          <div className={deepenBanner} data-testid="batch-banner">
+            <span>
+              📚 批量写作 · 第 {batch.currentChapter} / {batch.to} 章
+              {' · '}剩余 {batchProgress(batch).remaining} 章
+              {batch.status === 'running' && batch.pauseRequested && ' · 当前章完成后暂停'}
+              {batch.status === 'paused' && ' · 已暂停'}
+              {batch.status === 'failed' && ` · 第 ${batch.resumeChapter ?? batch.currentChapter} 章失败`}
+            </span>
+            {batch.status === 'running' && !batch.pauseRequested && (
+              <button className={deepenCancelBtn} onClick={handlePauseBatch}>暂停</button>
+            )}
+            {(batch.status === 'paused'
+              || batch.status === 'failed'
+              || (batch.status === 'running' && !isRunning && batchChapterRef.current === null)) && (
+              <button className={deepenConfirmBtn} onClick={handleResumeBatch} disabled={isRunning}>
+                继续
+              </button>
+            )}
+            <button className={deepenCancelBtn} onClick={handleCancelBatch} title="取消批量写作">
+              取消
+            </button>
           </div>
         )}
         {deepenMode?.active && (

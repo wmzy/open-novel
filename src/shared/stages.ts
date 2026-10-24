@@ -22,7 +22,11 @@ export const STAGES: StageDefinition[] = [
 /** 需要注入写作分层上下文（滚动摘要/状态/伏笔等）的阶段。
  * sample（样章）要写真实章节正文，故与写作阶段共用分层上下文；
  * drafting / revision / polish 为写作子模式，不在 STAGES 主线中。 */
-const WRITING_CONTEXT_STAGES = new Set(['sample', 'writing', 'drafting', 'revision', 'polish']);
+const WRITING_CONTEXT_STAGES = new Set([
+  'sample', 'writing', 'drafting', 'revision', 'polish',
+  // 里程碑回顾 run 需要读取正文/状态/伏笔上下文（不写章节，只产出回顾报告）
+  'retro',
+]);
 
 /** 判断某阶段是否为写作型阶段（需注入写作分层上下文）。 */
 export function isWritingStage(stageId: string): boolean {

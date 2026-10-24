@@ -4,6 +4,7 @@ import { CollapsibleDiagram } from '../MermaidDiagram';
 import { buildForeshadowGantt, buildForeshadowDensity } from '../../../shared/diagram-builders';
 import {
   computeDensityBudget,
+  isForeshadowOverdue,
   FORESHADOW_TYPE_LABELS,
   FORESHADOW_WEIGHT_LABELS,
   DENSITY_WINDOW,
@@ -60,7 +61,7 @@ const warnBox = css`
 
 const kanban = css`
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 1rem;
 `;
 
@@ -139,6 +140,9 @@ interface Props {
 interface ForeshadowResponse {
   foreshadows: Foreshadow[];
   stats: ForeshadowStats;
+  overdue?: Foreshadow[];
+  dueSoon?: Foreshadow[];
+  overdueIds?: number[];
   migrated: boolean;
   warnings: string[];
   currentChapter: number;
@@ -154,15 +158,18 @@ function weightLabel(weight: ForeshadowWeight): string {
   return FORESHADOW_WEIGHT_LABELS[weight] ?? FORESHADOW_WEIGHT_LABELS.light;
 }
 
-/** 单条伏笔卡片：内容 + [类型][权重] 徽章 + 期限/逾期 + 依赖链 + 章号信息。 */
+/** 单条伏笔卡片：内容 + [类型][权重] 徽章 + 逾期标记 + 期限/推进记录 + 依赖链 + 章号信息。 */
 function ForeshadowCard({ f, currentChapter }: { f: Foreshadow; currentChapter: number }) {
-  const unsettled = f.status === 'pending' || f.status === 'planted';
-  const overdue = unsettled && f.resolveDeadline !== null && f.resolveDeadline < currentChapter;
+  const overdue = isForeshadowOverdue(f, currentChapter);
+  const progressedIn = f.progressedIn ?? [];
   const dependsNote = f.dependsOn.length > 0
     ? `前置依赖：${f.dependsOn.map((d) => `#${d}`).join(' → ')}`
     : '';
   const chapterNote = [
     f.plantedIn !== null ? (f.status === 'pending' ? `计划埋于第${f.plantedIn}章` : `埋于第${f.plantedIn}章`) : '',
+    f.status === 'progressing' && progressedIn.length > 0
+      ? `推进于${progressedIn.map((c) => `第${c}章`).join('、')}`
+      : '',
     f.status === 'resolved' && f.resolvedIn !== null ? `收于第${f.resolvedIn}章` : '',
   ].filter(Boolean).join('｜');
   const meta = [chapterNote, dependsNote].filter(Boolean).join('｜');
@@ -172,6 +179,7 @@ function ForeshadowCard({ f, currentChapter }: { f: Foreshadow; currentChapter: 
       <div className={badgeRow}>
         <span className={badge}>{typeLabel(f.type)}</span>
         <span className={f.weight === 'major' ? `${badge} ${badgeMajor}` : badge}>{weightLabel(f.weight)}</span>
+        {overdue && <span className={`${badge} ${badgeOverdue}`}>逾期</span>}
         {f.resolveDeadline !== null && (
           <span className={overdue ? `${badge} ${badgeOverdue}` : badge}>
             期限第{f.resolveDeadline}章{overdue ? '（已逾期）' : ''}
@@ -204,6 +212,7 @@ export default function ForeshadowView({ projectId }: Props) {
 
   const pending = byStatus('pending');
   const planted = byStatus('planted');
+  const progressing = byStatus('progressing');
   const resolved = byStatus('resolved');
   const dropped = byStatus('dropped');
 
@@ -217,13 +226,16 @@ export default function ForeshadowView({ projectId }: Props) {
     plantedIn: f.plantedIn ?? 0,
     resolvedIn: f.resolvedIn ?? undefined,
     resolveDeadline: f.resolveDeadline ?? undefined,
+    progressedIn: f.progressedIn ?? [],
+    overdue: isForeshadowOverdue(f, currentChapter),
   }));
-  const gantt = buildForeshadowGantt(ganttItems);
+  const gantt = buildForeshadowGantt(ganttItems, currentChapter);
   const density = buildForeshadowDensity(stats?.density ?? []);
 
   const columns: Array<{ title: string; list: Foreshadow[] }> = [
     { title: '待埋', list: pending },
     { title: '已埋', list: planted },
+    { title: '推进中', list: progressing },
     { title: '已收', list: resolved },
     { title: '放弃', list: dropped },
   ];
@@ -269,7 +281,7 @@ export default function ForeshadowView({ projectId }: Props) {
         </div>
       )}
 
-      <CollapsibleDiagram chart={gantt} title="埋设→回收周期（◆=期限）" />
+      <CollapsibleDiagram chart={gantt} title="埋设→回收周期（◆=期限，⚠=逾期/迟到）" />
       <CollapsibleDiagram chart={density} title="伏笔密度（新埋/回收）" defaultShow={false} />
 
       <div className={kanban}>

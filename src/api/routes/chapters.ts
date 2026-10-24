@@ -6,8 +6,9 @@ import { db } from '../../db/drizzle';
 import { chapters, projects } from '../../db/schema';
 import { generateId } from '../../utils/id';
 import { resolveNovelDir } from '../../shared/project-dir';
-import { parseChapterNumber } from '../../shared/chapter-names';
+import { parseChapterNumber, stripChapterMarker } from '../../shared/chapter-names';
 import { getActiveRunForProject } from '../../agent/run';
+import { scheduleSemanticIndexing } from '../../agent/semantic-index';
 import { parseForeshadowFile, serializeForeshadows } from '../../shared/foreshadow';
 import { readChapterStatuses, setChapterStatus, removeChapterStatus, shiftChapterStatuses } from '../../shared/chapter-status';
 import { createSnapshot, isReviewOpInFlight } from '../../agent/snapshot';
@@ -115,7 +116,7 @@ export async function resyncChaptersFromDisk(projectId: string, opts?: { force?:
       const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
       const wordCount = cjk > 0 ? cjk : stripped.split(/\s+/).filter(Boolean).length;
       const titleMatch = content.match(/^#\s+(.+)$/m);
-      const title = titleMatch ? titleMatch[1].trim() : '';
+      const title = titleMatch ? stripChapterMarker(titleMatch[1].trim()) : '';
       diskChapters.set(num, { title, wordCount });
     } catch { /* skip unreadable */ }
   }
@@ -165,6 +166,10 @@ export async function resyncChaptersFromDisk(projectId: string, opts?: { force?:
       }
     }
   }
+
+  // 磁盘对齐后触发后台增量语义索引（未配置嵌入服务时为空操作；有活跃 run 时
+  // 调度器会跳过，等 run 结束后的下一次同步再补）。非阻塞：不拖慢 chapters 拉取。
+  scheduleSemanticIndexing(projectId);
 }
 
 chaptersRouter.get('/', async (c) => {
@@ -226,7 +231,7 @@ chaptersRouter.get('/degraded', async (c) => {
         const cjk = (stripped.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
         wordCount = cjk > 0 ? cjk : stripped.split(/\s+/).filter(Boolean).length;
         const titleMatch = content.match(/^#\s+(.+)$/m);
-        title = titleMatch ? titleMatch[1].trim() : '';
+        title = titleMatch ? stripChapterMarker(titleMatch[1].trim()) : '';
       } catch { /* unreadable → keep defaults */ }
       items.push({ number: num, title, wordCount, location: cand.location });
     }
@@ -416,6 +421,8 @@ chaptersRouter.patch('/:num', async (c) => {
       await fs.writeFile(chapterFilePath(novelDir, num), body.content, 'utf-8');
       // 手改正文防抖快照：保存后 30s 自动 commit，不再等下一次 run 才入版本库
       scheduleManualSnapshot(projectId, novelDir, num);
+      // 正文变化后增量刷新语义索引（非阻塞；未配置嵌入服务时为空操作）
+      scheduleSemanticIndexing(projectId);
     } catch {
       return c.json({ error: 'Failed to write chapter content' }, 500);
     }
@@ -527,15 +534,22 @@ chaptersRouter.delete('/:num', async (c) => {
       for (const f of parsed.foreshadows) {
         const oldP = f.plantedIn;
         const oldR = f.resolvedIn;
+        const oldProgressedIn = f.progressedIn;
         f.plantedIn = shift(f.plantedIn);
         f.resolvedIn = shift(f.resolvedIn);
+        // progressedIn 是严格章号记录：删除章移除、renumber 时 > num 前移
+        f.progressedIn = f.progressedIn
+          .filter((c) => c !== num)
+          .map((c) => (renumber && c > num ? c - 1 : c));
         // resolveDeadline 是严格章号，同样随重编号平移
         if (renumber && f.resolveDeadline !== null && f.resolveDeadline !== num && f.resolveDeadline > num) {
           f.resolveDeadline -= 1;
         }
         if (oldP === num) foreshadowRefsCleared++;
         if (oldR === num) foreshadowRefsCleared++;
+        if (oldProgressedIn.includes(num)) foreshadowRefsCleared++;
         if (oldP !== f.plantedIn || oldR !== f.resolvedIn) foreshadowRefsShifted++;
+        if (renumber && oldProgressedIn.some((c) => c > num)) foreshadowRefsShifted++;
       }
       if (foreshadowRefsCleared > 0 || foreshadowRefsShifted > 0) {
         await fs.writeFile(fp, serializeForeshadows(parsed.foreshadows), 'utf-8');
@@ -640,6 +654,10 @@ chaptersRouter.delete('/:num', async (c) => {
 
   // 章节已删除：删除后的「写下一章」目标 = 最小未写章号（renumber 后自动补位）
   const holeAt = renumber ? null : num;
+
+  // 删除/重编号后清理语义索引中的过期块（非阻塞；有活跃 run 时调度器跳过，
+  // 但删除端点本身已在 run 锁保护下，正常路径会执行）。
+  scheduleSemanticIndexing(projectId);
 
   return c.json({
     ok: true,

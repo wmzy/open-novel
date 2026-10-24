@@ -13,9 +13,7 @@ import { getAgentDef } from '../../agent/registry';
 import { createRun, finishRun, getActiveRunForProject } from '../../agent/run';
 import { createSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
-import { launchAgent } from '../../agent/launch';
-import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
-import type { StreamEvent, RuntimeAgentDef } from '../../agent/types';
+import { callAgentOnce } from '../../agent/agent-once';
 import { buildFillPrompt, parseAiResponse, type FillChapterInput } from '../../agent/timeline-filler';
 
 const timelineRouter = new Hono();
@@ -326,54 +324,5 @@ timelineRouter.post('/:id/fill', async (c) => {
 
 /** 单章预填的 agent 调用超时：逐章 spawn 无超时会因单个挂死子进程让整条 SSE 永挂。 */
 const FILL_CHAPTER_TIMEOUT_MS = 10 * 60 * 1000;
-
-/** 单次调 AI 取文本响应（同步等完）。复用 launchAgent + stream 解析。
- * timeoutMs 到期杀掉子进程并拒绝；onChild 回调用于把子进程挂到 run 上（取消时杀掉当前章）。 */
-async function callAgentOnce(
-  def: RuntimeAgentDef,
-  prompt: string,
-  cwd: string,
-  timeoutMs = FILL_CHAPTER_TIMEOUT_MS,
-  onChild?: (child: ReturnType<typeof launchAgent>['child']) => void,
-): Promise<string> {
-  const { child } = launchAgent(def, prompt, cwd, [], undefined);
-  onChild?.(child);
-  return new Promise((resolve, reject) => {
-    let output = '';
-    let settled = false;
-    const finish = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      fn();
-    };
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* 已退出 */
-      }
-      finish(() => reject(new Error('AI 调用超时，已中止当前章节')));
-    }, timeoutMs);
-    timer.unref?.();
-    const onEvent = (event: StreamEvent) => {
-      if (event.type === 'text_delta') output += String(event.delta || '');
-    };
-    const handler =
-      def.streamFormat === 'claude-stream-json'
-        ? createClaudeStreamHandler(onEvent)
-        : createJsonEventHandler(onEvent);
-
-    child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
-    // 排空 stderr，避免背压
-    child.stderr?.on('data', () => {});
-    child.on('close', (code) => {
-      handler.flush();
-      if (code === 0) finish(() => resolve(output));
-      else finish(() => reject(new Error('AI 调用失败，agent 异常退出')));
-    });
-    child.on('error', (e) => finish(() => reject(new Error(`AI 调用失败：${e.message}`))));
-  });
-}
 
 export default timelineRouter;

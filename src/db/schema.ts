@@ -1,4 +1,4 @@
-import { pgTable, varchar, integer, timestamp, index, uniqueIndex, jsonb } from 'drizzle-orm/pg-core';
+import { pgTable, varchar, integer, timestamp, index, uniqueIndex, jsonb, real } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const projects = pgTable('projects', {
@@ -85,6 +85,41 @@ export const userSettings = pgTable('user_settings', {
   value: varchar('value', { length: 5000 }).notNull(),
 }, (table) => [
   uniqueIndex('user_settings_key_idx').on(table.key),
+]);
+
+/**
+ * 语义检索块索引（派生数据，可随时重建）。
+ *
+ * 向量以 real[] 存储并在 JS 侧计算余弦相似度：当前安装的 PGlite 0.5.8
+ * 未内置 pgvector 扩展（node_modules/@electric-sql/pglite/dist 无 vector.tar.gz），
+ * 为避免 PGlite/postgres 双后端行为分叉，统一使用 real[]，不依赖数据库扩展。
+ *
+ * 增量策略：每块存 contentHash；重索引时哈希未变的块直接复用旧向量。
+ */
+export const semanticChunks = pgTable('semantic_chunks', {
+  id: varchar('id', { length: 40 }).primaryKey(),
+  projectId: varchar('project_id', { length: 25 }).notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  chapterNumber: integer('chapter_number').notNull(),
+  /** body = 章节正文；summary = 章节摘要 */
+  source: varchar('source', { length: 20 }).notNull(),
+  chunkIndex: integer('chunk_index').notNull(),
+  /** 相对 .novel/ 的文件路径（正文或摘要） */
+  file: varchar('file', { length: 300 }).notNull(),
+  content: varchar('content', { length: 4000 }).notNull(),
+  contentHash: varchar('content_hash', { length: 64 }).notNull(),
+  /** 生成该向量的嵌入模型；模型变更时整项目向量视为过期。 */
+  model: varchar('model', { length: 150 }).notNull(),
+  embedding: real('embedding').array().notNull(),
+  dim: integer('dim').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).default(sql`now()`).notNull(),
+}, (table) => [
+  uniqueIndex('semantic_chunks_unique_idx').on(
+    table.projectId,
+    table.source,
+    table.chapterNumber,
+    table.chunkIndex,
+  ),
+  index('semantic_chunks_project_idx').on(table.projectId),
 ]);
 
 export type Project = typeof projects.$inferSelect;

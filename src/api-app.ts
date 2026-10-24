@@ -11,7 +11,9 @@ import { killOrphanAgentChildren } from './agent/child-registry';
 import { config } from './config';
 import { requestLogger } from './api/middleware/logger';
 import { securityHeaders, rateLimit } from './api/middleware/security';
+import { authMiddleware } from './api/middleware/auth';
 import projectsRouter from './api/routes/projects';
+import manuscriptRouter from './api/routes/manuscript';
 import chaptersRouter from './api/routes/chapters';
 import settingsRouter from './api/routes/settings';
 import agentsRouter from './api/routes/agents';
@@ -28,12 +30,17 @@ import reviewRouter from './api/routes/review';
 import backupRouter from './api/routes/backup';
 import foreshadowsRouter from './api/routes/foreshadows';
 import retroRouter from './api/routes/retro';
+import batchRouter from './api/routes/batch';
 
 const app = new Hono();
 
 // Security, logging middleware
 app.use('/api/*', securityHeaders);
 app.use('/api/*', rateLimit(config.rateLimit.max, config.rateLimit.windowMs));
+// 可选令牌认证：AUTH_TOKEN 未设置时直接放行；设置后覆盖所有 /api/* 路由，
+// 包括 SSE 流（EventSource 通过登录 Cookie 携带凭证）。放在 bodyLimit 之前，
+// 未授权请求不会读入请求体。静态资源与 /api/health 不受影响。
+app.use('/api/*', authMiddleware);
 // 25MB：文本 + 图片上传的宽松上限。用 Hono 内置 bodyLimit 而非只看 content-length，
 // chunked 传输无 content-length 时旧的自定义 maxBodySize 会被绕过。
 app.use('/api/*', bodyLimit({
@@ -93,6 +100,7 @@ app.get('/api/health', async (c) => {
   });
 });
 app.route('/api/projects', projectsRouter);
+app.route('/api/projects', manuscriptRouter);
 app.route('/api/projects/:projectId/chapters', chaptersRouter);
 app.route('/api/projects/:projectId/search', searchRouter);
 app.route('/api/projects/:projectId/export', exportRouter);
@@ -102,6 +110,7 @@ app.route('/api/projects/:projectId/naming', namingRouter);
 app.route('/api/projects/:projectId/rename', renameRouter);
 app.route('/api/projects/:projectId/review', reviewRouter);
 app.route('/api/projects/:projectId/foreshadows', foreshadowsRouter);
+app.route('/api/projects/:projectId/batch', batchRouter);
 app.route('/api/projects/:projectId', retroRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);

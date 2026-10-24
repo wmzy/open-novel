@@ -11,6 +11,7 @@ import {
   computeForeshadowStats,
   resolveCurrentChapter,
   extractChapterNumber,
+  transitionForeshadow,
   FORESHADOW_TYPES,
   FORESHADOW_STATUSES,
   FORESHADOW_WEIGHTS,
@@ -23,9 +24,11 @@ import {
 /**
  * 伏笔债务系统路由（挂载于 /api/projects/:projectId/foreshadows）。
  * 数据只存文件层 .novel/foreshadow.json（不进 DB）：
- * - GET    /          → 清单 + 债务统计（含旧格式迁移标记与警告）
+ * - GET    /          → 清单 + 债务统计（含旧格式迁移标记与警告、顶层 overdue/dueSoon）
  * - POST   /          → 新建伏笔（服务端补默认值与自增 id）
- * - PATCH  /:fid      → 更新单条伏笔
+ * - PATCH  /:fid      → 更新单条伏笔（status 走状态机：pending→planted→progressing→resolved，
+ *                        planted 可直接 resolved；回退/重新打开须 body.reopen=true；进入 progressing
+ *                        时把当前章号/body.chapter 追加到 progressedIn）
  * - DELETE /:fid      → 删除单条（并清理其余条目的 dependsOn 引用）
  */
 const foreshadowRouter = new Hono();
@@ -119,8 +122,8 @@ function pickChapterField(value: unknown): { ok: true; value: number | null } | 
   return { ok: false };
 }
 
-/** dependsOn 字段校验：数字/含数字字符串列表；非法返回 null。 */
-function pickDependsOn(value: unknown): number[] | null {
+/** 章号/ id 数组校验：数字或含数字字符串列表；非法返回 null。 */
+function pickNumberArray(value: unknown): number[] | null {
   if (!Array.isArray(value)) return null;
   const ids: number[] = [];
   for (const v of value) {
@@ -131,7 +134,12 @@ function pickDependsOn(value: unknown): number[] | null {
   return ids;
 }
 
-/** 组装统计：currentChapter = max(lastUpdatedChapter, max plantedIn, 0)。 */
+/** dependsOn 字段校验（复用章号数组校验）。 */
+function pickDependsOn(value: unknown): number[] | null {
+  return pickNumberArray(value);
+}
+
+/** 组装统计：currentChapter 取实际写作进度（未开写时回退最大规划埋设章）。 */
 async function buildStatsPayload(projectDir: string, chapterCount: number, foreshadows: Foreshadow[]) {
   const lastUpdatedChapter = await readLastUpdatedChapter(projectDir);
   const currentChapter = resolveCurrentChapter(foreshadows, lastUpdatedChapter);
@@ -142,7 +150,9 @@ async function buildStatsPayload(projectDir: string, chapterCount: number, fores
   };
 }
 
-/** GET / → { foreshadows, stats, migrated, warnings, currentChapter, chapterCount } */
+/** GET / → { foreshadows, stats, overdue, dueSoon, overdueIds, migrated, warnings, currentChapter, chapterCount }
+ * overdue/dueSoon 与 stats 内同名数组一致，放在顶层便于前端直接消费；overdueIds 便于轻量标记列表。
+ * 逾期边界：resolveDeadline < currentChapter（等于当前章为「本章到期」，不算逾期）。 */
 foreshadowRouter.get('/', async (c) => {
   const projectId = c.req.param('projectId')!;
   let ctx: { projectDir: string; chapterCount: number };
@@ -153,7 +163,17 @@ foreshadowRouter.get('/', async (c) => {
   }
   const { foreshadows, migrated, warnings } = await readForeshadows(ctx.projectDir);
   const { currentChapter, chapterCount, stats } = await buildStatsPayload(ctx.projectDir, ctx.chapterCount, foreshadows);
-  return c.json({ foreshadows, stats, migrated, warnings, currentChapter, chapterCount });
+  return c.json({
+    foreshadows,
+    stats,
+    overdue: stats.overdue,
+    dueSoon: stats.dueSoon,
+    overdueIds: stats.overdue.map((f) => f.id).sort((a, b) => a - b),
+    migrated,
+    warnings,
+    currentChapter,
+    chapterCount,
+  });
 });
 
 /** POST / → 创建伏笔，服务端补默认值与自增 id。 */
@@ -190,6 +210,10 @@ foreshadowRouter.post('/', async (c) => {
   const dependsOn = body.dependsOn === undefined ? [] : pickDependsOn(body.dependsOn);
   if (dependsOn === null) return c.json({ error: 'dependsOn 必须是伏笔 id 数组' }, 400);
 
+  const progressedInRaw = body.progressedIn === undefined ? [] : pickNumberArray(body.progressedIn);
+  if (progressedInRaw === null) return c.json({ error: 'progressedIn 必须是章号数组' }, 400);
+  const progressedIn = [...new Set(progressedInRaw)].sort((a, b) => a - b);
+
   const { foreshadows } = await readForeshadows(projectDir);
   const nextId = foreshadows.reduce((m, f) => Math.max(m, f.id), 0) + 1;
   const created: Foreshadow = {
@@ -200,6 +224,7 @@ foreshadowRouter.post('/', async (c) => {
     plantedIn: plantedIn.value,
     resolveDeadline: resolveDeadline.value,
     resolvedIn: resolvedIn.value,
+    progressedIn,
     dependsOn,
     weight: weight as ForeshadowWeight,
   };
@@ -227,7 +252,7 @@ foreshadowRouter.patch('/:fid', async (c) => {
   if (!target) return c.json({ error: `Foreshadow not found: ${fid}` }, 404);
 
   const body = await readBody(c);
-  const updated: Foreshadow = { ...target };
+  const updated: Foreshadow = { ...target, progressedIn: [...target.progressedIn] };
 
   if (body.content !== undefined) {
     if (typeof body.content !== 'string' || body.content.trim() === '') {
@@ -240,20 +265,23 @@ foreshadowRouter.patch('/:fid', async (c) => {
     if (!v) return c.json({ error: `type 必须是 ${FORESHADOW_TYPES.join('/')}` }, 400);
     updated.type = v;
   }
-  if (body.status !== undefined) {
-    const v = pickEnum(body.status, FORESHADOW_STATUSES);
-    if (!v) return c.json({ error: `status 必须是 ${FORESHADOW_STATUSES.join('/')}` }, 400);
-    updated.status = v;
-  }
   if (body.weight !== undefined) {
     const v = pickEnum(body.weight, FORESHADOW_WEIGHTS);
     if (!v) return c.json({ error: `weight 必须是 ${FORESHADOW_WEIGHTS.join('/')}` }, 400);
     updated.weight = v;
   }
+  if (body.reopen !== undefined && typeof body.reopen !== 'boolean') {
+    return c.json({ error: 'reopen 必须是布尔值' }, 400);
+  }
+
+  // 章号字段先暂存：状态迁移可能在 reopen 时清空 resolvedIn，
+  // 调用方显式传入的值应覆盖迁移副作用。
+  const chapterOverrides: Partial<Pick<Foreshadow, 'plantedIn' | 'resolveDeadline' | 'resolvedIn'>> = {};
   for (const key of ['plantedIn', 'resolveDeadline', 'resolvedIn'] as const) {
     if (body[key] !== undefined) {
       const picked = pickChapterField(body[key]);
       if (!picked.ok) return c.json({ error: `${key} 必须是章号（数字）或 null` }, 400);
+      chapterOverrides[key] = picked.value;
       updated[key] = picked.value;
     }
   }
@@ -261,6 +289,48 @@ foreshadowRouter.patch('/:fid', async (c) => {
     const v = pickDependsOn(body.dependsOn);
     if (v === null) return c.json({ error: 'dependsOn 必须是伏笔 id 数组' }, 400);
     updated.dependsOn = v;
+  }
+  if (body.progressedIn !== undefined) {
+    const v = pickNumberArray(body.progressedIn);
+    if (v === null) return c.json({ error: 'progressedIn 必须是章号数组' }, 400);
+    updated.progressedIn = [...new Set(v)].sort((a, b) => a - b);
+  }
+
+  // 状态迁移最后应用：非法迁移 400 且不落盘。
+  const nextStatus: ForeshadowStatus | null = body.status === undefined
+    ? null
+    : pickEnum(body.status, FORESHADOW_STATUSES);
+  if (body.status !== undefined && nextStatus === null) {
+    return c.json({ error: `status 必须是 ${FORESHADOW_STATUSES.join('/')}` }, 400);
+  }
+  if (nextStatus !== null) {
+    let transitionChapter: number | null = null;
+    if (nextStatus === 'progressing') {
+      if (body.chapter !== undefined) {
+        const picked = pickChapterField(body.chapter);
+        if (!picked.ok) return c.json({ error: 'chapter 必须是章号（数字）或 null' }, 400);
+        transitionChapter = picked.value;
+      } else if (nextStatus !== target.status) {
+        // 仅在真正进入 progressing 的迁移时自动记录当前写作进度；
+        // 已是 progressing 的重复 PATCH 需显式传 chapter，避免误追加。
+        transitionChapter = resolveCurrentChapter(foreshadows, await readLastUpdatedChapter(projectDir));
+      }
+    }
+    const transition = transitionForeshadow(updated, nextStatus, {
+      reopen: body.reopen === true,
+      chapter: transitionChapter,
+    });
+    if (!transition.ok) {
+      return c.json({
+        error: 'invalid-status-transition',
+        message: transition.error,
+        from: target.status,
+        to: nextStatus,
+        hint: '合法前向：pending→planted→progressing→resolved（planted 可直接 resolved）；回退/重新打开需 reopen=true 且目标为非终态',
+      }, 400);
+    }
+    Object.assign(updated, transition.foreshadow);
+    Object.assign(updated, chapterOverrides);
   }
 
   const list = foreshadows.map((f) => (f.id === fid ? updated : f));

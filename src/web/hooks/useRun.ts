@@ -26,6 +26,12 @@ export interface ChatMessage {
   revisionDiff?: { targetFile: string; diff: string; addedLines: number; removedLines: number };
 }
 
+/** sendMessage 生命周期回调（不进入 HTTP body）。 */
+export interface SendMessageHooks {
+  /** POST /api/runs 成功、拿到 runId 后立即触发。 */
+  onRunStarted?: (runId: string) => void;
+}
+
 /** sendMessage 参数（导出供 ChatPanel 在 force 旁路时按原意图重发）。 */
 export interface SendMessageParams {
   projectId: string;
@@ -67,6 +73,8 @@ export function useRun(conversationId?: string) {
   // 活跃 run 数量：曾是 ref 派生值，读 ref 不触发重渲染——并行 run 场景下
   // 其中一个结束时无 state 变化，ChatPanel 的「(N active)」徽标显示过期值。改真实 state。
   const [activeRunCount, setActiveRunCount] = useState(0);
+  /** 最近一次结束的 run（end 事件状态）。批量写作据此判断章节成功/失败。 */
+  const [lastFinishedRun, setLastFinishedRun] = useState<{ runId: string; status: string } | null>(null);
   const activeRunsRef = useRef(new Set<string>());
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string | null>(conversationId || null);
@@ -205,9 +213,10 @@ export function useRun(conversationId?: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  const sendMessage = useCallback(async (params: SendMessageParams) => {
+  const sendMessage = useCallback(async (params: SendMessageParams, hooks?: SendMessageHooks) => {
     // Add user message
     setMessages((prev) => [...prev, { id: String(msgIdCounter++), role: 'user', content: params.message }]);
+    setLastFinishedRun(null);
     setIsRunning(true);
     setStatus('starting');
     setContextSize(null);
@@ -254,6 +263,7 @@ export function useRun(conversationId?: string) {
       activeRunsRef.current.add(runId);
       setActiveRunCount(activeRunsRef.current.size);
       if (returnedConvId) conversationIdRef.current = returnedConvId;
+      try { hooks?.onRunStarted?.(runId); } catch { /* 回调异常不应中断 run */ }
 
       // Add assistant message placeholder（runId 挂在消息上，失败时供重试端点使用）
       const startedAt = Date.now();
@@ -346,6 +356,7 @@ export function useRun(conversationId?: string) {
                   if (last?.role === 'assistant') last.endedAt = Date.now();
                   return updated;
                 });
+                setLastFinishedRun({ runId, status: String(data.status || 'failed') });
                 streamEnded = true;
                 break;
               case 'stderr':
@@ -699,6 +710,7 @@ export function useRun(conversationId?: string) {
     status,
     contextSize,
     runtimeUsage,
+    lastFinishedRun,
     availableCommands,
     pendingAsk,
     resolveAsk,

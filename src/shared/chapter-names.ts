@@ -34,3 +34,16 @@ export function isSummaryFileName(basename: string): boolean {
 export function chapterFileName(num: number): string {
   return `第${num}章.md`;
 }
+
+/**
+ * 去掉标题文本里已有的章号前缀（第12章 / 第十二回 / Chapter 3）。
+ *
+ * 正文文件的 H1 通常是「第N章 标题」，resync/导入若原样存进 DB，
+ * 侧栏再拼一次「第N章」就成了「第1章 第1章 起风」。统一在写库前剥掉编号。
+ */
+export function stripChapterMarker(title: string): string {
+  return title
+    .replace(/^第\s*[0-9０-９零〇一二三四五六七八九十百千万两]+\s*[章回节篇卷]\s*[:：.、,，\-—]?\s*/, '')
+    .replace(/^chapter\s+\d+\s*[:：.、,，\-—]?\s*/i, '')
+    .trim();
+}

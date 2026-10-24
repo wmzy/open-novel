@@ -24,6 +24,11 @@ import {
   type NovelState,
   type NovelIntent,
 } from '../../agent/context-manager';
+import { RETRO_DIR } from '../../shared/retrospective';
+
+// 里程碑回顾（stage=retro 的正常 run）与回溯影响分析共用 .novel/retro/ 产物目录。
+// 提示词构造在 shared 中，供 agent/milestones.ts 触发运行使用。
+export { buildMilestoneRetrospectivePrompt } from '../../shared/retrospective';
 
 const retroRouter = new Hono();
 
@@ -84,8 +89,6 @@ const CHAPTERS_DIR = 'chapters';
 const OUTLINE_CHAPTERS_DIR = path.join('outline', 'chapters');
 /** 伏笔登记文件。 */
 const FORESHADOW_FILE = 'foreshadow.json';
-/** 报告产物目录（相对 .novel/）。 */
-const RETRO_DIR = 'retro';
 /** 伏笔内容摘要截断长度。 */
 const FORESHADOW_CONTENT_MAX = 60;
 

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { css } from '@linaria/core';
 import { toast } from 'sonner';
-import { pageContainer, pageTitle, card, input } from '@/styles/shared';
+import { pageContainer, pageTitle, card, input, primaryBtn } from '@/styles/shared';
 import NavHeader from '@/web/components/NavHeader';
 
 const formGroup = css`
@@ -49,6 +49,43 @@ const installLink = css`
   margin-left: 0.5rem;
 `;
 
+const buttonRow = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+`;
+
+const secondaryBtn = css`
+  background: transparent;
+  color: var(--haze-color-text-secondary);
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`;
+
+const checkboxRow = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+`;
+
+const sectionTitle = css`
+  margin-bottom: 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+`;
+
 export default function SettingsPage() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({
@@ -88,6 +125,33 @@ export default function SettingsPage() {
     setPreferredAgent(settings?.preferred_agent ?? '');
   }, [settings]);
 
+  // ===== 语义检索（可选，默认关闭）=====
+  const [embeddingEnabled, setEmbeddingEnabled] = useState(false);
+  const [embeddingBaseUrl, setEmbeddingBaseUrl] = useState('');
+  const [embeddingModel, setEmbeddingModel] = useState('');
+  const [embeddingApiKey, setEmbeddingApiKey] = useState('');
+
+  useEffect(() => {
+    setEmbeddingBaseUrl(settings?.embedding_baseUrl ?? '');
+    setEmbeddingModel(settings?.embedding_model ?? '');
+    const configured = !!(settings?.embedding_baseUrl && settings?.embedding_model);
+    // 未显式关闭且已配置地址/模型 → 视为启用；默认（无配置）为关闭。
+    setEmbeddingEnabled(configured && settings?.embedding_enabled !== 'false');
+  }, [settings]);
+
+  const apiKeyConfigured = settings?.embedding_apiKeySet === 'true';
+
+  const saveEmbedding = () => {
+    const body: Record<string, string> = {
+      embedding_enabled: embeddingEnabled ? 'true' : 'false',
+      embedding_baseUrl: embeddingBaseUrl.trim(),
+      embedding_model: embeddingModel.trim(),
+    };
+    // 留空表示不修改已保存密钥；清除请用下方「清除已保存密钥」。
+    if (embeddingApiKey.trim()) body.embedding_apiKey = embeddingApiKey.trim();
+    saveSettings.mutate(body, { onSuccess: () => setEmbeddingApiKey('') });
+  };
+
   return (
     <div className={settingsLayout}>
       <NavHeader />
@@ -111,6 +175,66 @@ export default function SettingsPage() {
             {a.installUrl && !a.available && <a href={a.installUrl} target="_blank" rel="noopener" className={installLink}>安装指南</a>}
           </div>
         ))}
+      </div>
+
+      <div className={card} style={{ marginTop: '1.5rem' }}>
+        <h3 className={sectionTitle}>语义检索（可选，默认关闭）</h3>
+        <label className={checkboxRow}>
+          <input
+            type="checkbox"
+            checked={embeddingEnabled}
+            onChange={(e) => setEmbeddingEnabled(e.target.checked)}
+          />
+          <span>启用语义检索</span>
+        </label>
+        <div className={formGroup}>
+          <label className={label}>嵌入服务 Base URL</label>
+          <input
+            className={input}
+            value={embeddingBaseUrl}
+            onChange={(e) => setEmbeddingBaseUrl(e.target.value)}
+            placeholder="https://api.openai.com/v1"
+            autoComplete="off"
+          />
+          <span className={formHint}>OpenAI 兼容的 /embeddings 端点前缀，例如 https://api.openai.com/v1；本地 Ollama 可填 http://localhost:11434/v1。</span>
+        </div>
+        <div className={formGroup}>
+          <label className={label}>嵌入模型</label>
+          <input
+            className={input}
+            value={embeddingModel}
+            onChange={(e) => setEmbeddingModel(e.target.value)}
+            placeholder="text-embedding-3-small"
+            autoComplete="off"
+          />
+          <span className={formHint}>模型名由嵌入服务定义。更换模型后，下一次索引会自动重建全部向量。</span>
+        </div>
+        <div className={formGroup}>
+          <label className={label}>API Key</label>
+          <input
+            className={input}
+            type="password"
+            value={embeddingApiKey}
+            onChange={(e) => setEmbeddingApiKey(e.target.value)}
+            placeholder={apiKeyConfigured ? '已保存（留空保持不变）' : '可选；本地服务可留空'}
+            autoComplete="new-password"
+          />
+          <span className={formHint}>密钥只保存在服务端，接口不会回显。留空保存不会覆盖已保存的密钥。</span>
+        </div>
+        <div className={buttonRow}>
+          <button type="button" className={primaryBtn} onClick={saveEmbedding} disabled={saveSettings.isPending}>
+            {saveSettings.isPending ? '保存中...' : '保存嵌入设置'}
+          </button>
+          <button
+            type="button"
+            className={secondaryBtn}
+            disabled={!apiKeyConfigured || saveSettings.isPending}
+            onClick={() => saveSettings.mutate({ embedding_apiKey: '' })}
+          >
+            清除已保存密钥
+          </button>
+        </div>
+        <span className={formHint}>启用后，章节正文与摘要会发送到该嵌入服务建立索引，并在写作时用于检索相关前文；索引与检索失败时自动回退为文本搜索，不影响写作与保存。</span>
       </div>
       </div>
     </div>

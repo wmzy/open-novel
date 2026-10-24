@@ -15,8 +15,12 @@
 /** 伏笔类型：契诃夫之枪（具体道具/细节）/ 身份之谜 / 情感线 / 世界观揭示。 */
 export type ForeshadowType = 'chekhov' | 'identity' | 'emotional' | 'world';
 
-/** 伏笔状态：待埋 → 已埋 → 已收；主动放弃的进入 dropped（不再计入债务）。 */
-export type ForeshadowStatus = 'pending' | 'planted' | 'resolved' | 'dropped';
+/**
+ * 伏笔状态机：待埋 → 已埋 → 推进中 → 已收；主动放弃的进入 dropped（不再计入债务）。
+ * 合法前向迁移：pending→planted、planted→progressing、progressing→resolved，
+ * 且允许 planted→resolved 直收；终态（resolved/dropped）回退须显式 reopen。
+ */
+export type ForeshadowStatus = 'pending' | 'planted' | 'progressing' | 'resolved' | 'dropped';
 
 /** 伏笔权重：轻量（债务 1 分）/ 重磅（债务 2 分）。 */
 export type ForeshadowWeight = 'light' | 'major';
@@ -29,6 +33,7 @@ export interface Foreshadow {
   plantedIn: number | null;        // 严格章号；不再允许自由文本
   resolveDeadline: number | null;  // 最晚回收章号
   resolvedIn: number | null;
+  progressedIn: number[];          // 推进记录：每次推进（planted→progressing 等）追加的章号
   dependsOn: number[];             // 前置伏笔 id 列表
   weight: ForeshadowWeight;        // 缺省 'light'
   rawPlantedIn?: string | null;    // 迁移时保留的原始自由文本
@@ -37,7 +42,7 @@ export interface Foreshadow {
 // ── 常量与文案 ──
 
 export const FORESHADOW_TYPES: readonly ForeshadowType[] = ['chekhov', 'identity', 'emotional', 'world'];
-export const FORESHADOW_STATUSES: readonly ForeshadowStatus[] = ['pending', 'planted', 'resolved', 'dropped'];
+export const FORESHADOW_STATUSES: readonly ForeshadowStatus[] = ['pending', 'planted', 'progressing', 'resolved', 'dropped'];
 export const FORESHADOW_WEIGHTS: readonly ForeshadowWeight[] = ['light', 'major'];
 
 /** 类型 → 中文标签（用于注入层与 UI 徽章）。 */
@@ -66,6 +71,106 @@ export const DUE_SOON_WINDOW = 10;
 /** 密度预算默认规则：每 3 章新埋不超过 2 条。 */
 export const DENSITY_WINDOW = 3;
 export const DENSITY_MAX_PER_WINDOW = 2;
+
+// ── 状态机 ──
+
+/**
+ * 合法前向迁移表（不含自身 → 自身的 no-op）。
+ * - pending 只能埋设或放弃；
+ * - planted 可推进、直接回收或放弃；
+ * - progressing 只能回收或放弃；
+ * - resolved / dropped 为终态，须通过 reopen=true 显式重新打开。
+ */
+export const FORESHADOW_TRANSITIONS: Record<ForeshadowStatus, readonly ForeshadowStatus[]> = {
+  pending: ['planted', 'dropped'],
+  planted: ['progressing', 'resolved', 'dropped'],
+  progressing: ['resolved', 'dropped'],
+  resolved: [],
+  dropped: [],
+};
+
+/** 终态（需显式 reopen 才能离开）。 */
+export function isTerminalForeshadowStatus(status: ForeshadowStatus): boolean {
+  return status === 'resolved' || status === 'dropped';
+}
+
+/**
+ * 状态迁移校验：同状态视为 no-op。
+ * 默认只允许前向迁移；reopen=true 时显式重新打开，可离开任意状态（含终态）
+ * 回到非终态（pending/planted/progressing），用于纠正误标或重启已收/已放弃伏笔。
+ */
+export function canTransitionForeshadow(
+  from: ForeshadowStatus,
+  to: ForeshadowStatus,
+  opts: { reopen?: boolean } = {},
+): boolean {
+  if (from === to) return true;
+  if (FORESHADOW_TRANSITIONS[from]?.includes(to)) return true;
+  // reopen 额外放行回退/重新打开，但目标只能是仍可编辑的非终态
+  if (opts.reopen) {
+    return to === 'pending' || to === 'planted' || to === 'progressing';
+  }
+  return false;
+}
+
+export interface ForeshadowTransitionOptions {
+  /** 显式重新打开/回退：可回到任意非终态（pending/planted/progressing）。 */
+  reopen?: boolean;
+  /** 推进章号：进入 progressing（或已处于 progressing 时再次推进）记录到 progressedIn。 */
+  chapter?: number | null;
+}
+
+export type ForeshadowTransitionResult =
+  | { ok: true; foreshadow: Foreshadow; changed: boolean }
+  | { ok: false; error: string };
+
+/**
+ * 应用状态迁移（纯函数，不落盘）：
+ * - 非法迁移返回 ok=false 与说明；
+ * - 终态重新打开时清空 resolvedIn（如需从 recovered 状态重启）；
+ * - 进入 progressing（或已处于 progressing 时显式传入 chapter）时，
+ *   把章号追加到 progressedIn（去重、升序）。
+ */
+export function transitionForeshadow(
+  current: Foreshadow,
+  to: ForeshadowStatus,
+  opts: ForeshadowTransitionOptions = {},
+): ForeshadowTransitionResult {
+  if (!canTransitionForeshadow(current.status, to, { reopen: opts.reopen })) {
+    const allowed = FORESHADOW_TRANSITIONS[current.status] ?? [];
+    const hint = opts.reopen
+      ? '；reopen 只能回到非终态（pending/planted/progressing）'
+      : '；如需强制回退/重新打开，请显式传 reopen=true';
+    return {
+      ok: false,
+      error: `非法状态迁移：${current.status} → ${to}（允许：${allowed.length > 0 ? allowed.join('/') : '仅 reopen'}${hint}）`,
+    };
+  }
+
+  const changed = current.status !== to;
+  const existingProgress = Array.isArray(current.progressedIn) ? current.progressedIn : [];
+  const next: Foreshadow = { ...current, progressedIn: [...existingProgress] };
+
+  if (changed) {
+    next.status = to;
+    // 从终态重新打开：不再处于已收状态，清空回收章号
+    if (isTerminalForeshadowStatus(current.status) && opts.reopen) {
+      next.resolvedIn = null;
+    }
+  }
+
+  const chapter = opts.chapter;
+  if (to === 'progressing'
+    && typeof chapter === 'number'
+    && Number.isFinite(chapter)
+    && chapter > 0
+    && !next.progressedIn.includes(chapter)) {
+    next.progressedIn.push(chapter);
+    next.progressedIn.sort((a, b) => a - b);
+  }
+
+  return { ok: true, foreshadow: next, changed };
+}
 
 // ── 解析与迁移 ──
 
@@ -103,7 +208,7 @@ function isLegacyEntry(entry: Record<string, unknown>): boolean {
  * 宽容解析 foreshadow.json 文本并完成旧格式迁移：
  * - plantedIn 为字符串时提取首个数字（"第64-66章"→64）；提取失败 → null 并把原文存入 rawPlantedIn；
  * - 未知 status 丢弃并记 warning；content 缺失的条目同样丢弃；
- * - 字段缺失给默认值（type='chekhov'，weight='light'，dependsOn=[]）；
+ * - 字段缺失给默认值（type='chekhov'，weight='light'，dependsOn=[]，progressedIn=[]）；
  * - 任一条目命中旧格式时 migrated=true，供路由层提示「已自动迁移」。
  * 永不抛错：JSON 损坏返回空清单 + warning。
  */
@@ -185,6 +290,14 @@ export function parseForeshadowFile(text: string): {
           .map((d) => extractChapterNumber(d))
           .filter((d): d is number => d !== null)
       : [];
+    // progressedIn：缺失视为 []（向后兼容旧数据，不触发 migrated）；
+    // 数字/数字字符串均可，去重后按章号升序保存。
+    const progressedIn = Array.isArray(entry.progressedIn)
+      ? [...new Set(entry.progressedIn
+          .map((c) => extractChapterNumber(c))
+          .filter((c): c is number => c !== null))]
+          .sort((a, b) => a - b)
+      : [];
 
     foreshadows.push({
       id,
@@ -194,6 +307,7 @@ export function parseForeshadowFile(text: string): {
       plantedIn,
       resolveDeadline: parseChapterField(entry.resolveDeadline),
       resolvedIn: parseChapterField(entry.resolvedIn),
+      progressedIn,
       dependsOn,
       weight,
       ...(rawPlantedIn !== null ? { rawPlantedIn } : {}),
@@ -210,9 +324,29 @@ export function serializeForeshadows(list: Foreshadow[]): string {
 
 // ── 统计（债务视角） ──
 
-/** 未结清的债务状态：pending（未埋）与 planted（已埋未收）。dropped 视为主动核销，resolved 视为已清偿。 */
+/** 未结清的债务状态：pending（未埋）、planted（已埋未收）与 progressing（推进中）。dropped 视为主动核销，resolved 视为已清偿。 */
 export function isUnsettled(f: Foreshadow): boolean {
-  return f.status === 'pending' || f.status === 'planted';
+  return f.status === 'pending' || f.status === 'planted' || f.status === 'progressing';
+}
+
+/**
+ * 逾期判定：未清偿（非 resolved，且非主动放弃的 dropped）且期限早于当前写作章号。
+ * 边界：resolveDeadline === currentChapter 视为「本章到期」，不算逾期；
+ * 只有 resolveDeadline < currentChapter 才逾期。
+ */
+export function isForeshadowOverdue(f: Foreshadow, currentChapter: number): boolean {
+  if (!Number.isFinite(currentChapter)) return false;
+  if (f.status === 'resolved' || f.status === 'dropped') return false;
+  return f.resolveDeadline !== null && f.resolveDeadline < currentChapter;
+}
+
+/** 即将到期：未清偿且期限落在 (currentChapter, currentChapter + DUE_SOON_WINDOW]。 */
+export function isForeshadowDueSoon(f: Foreshadow, currentChapter: number): boolean {
+  if (!Number.isFinite(currentChapter)) return false;
+  if (f.status === 'resolved' || f.status === 'dropped') return false;
+  return f.resolveDeadline !== null
+    && f.resolveDeadline > currentChapter
+    && f.resolveDeadline <= currentChapter + DUE_SOON_WINDOW;
 }
 
 export interface ForeshadowDensityPoint {
@@ -236,10 +370,11 @@ export interface ForeshadowStats {
   debtScore: number;
 }
 
-/** 该章「实际新埋」条数：已埋或已收（planted/resolved）且 plantedIn === chapter。dropped 不计。 */
+/** 该章「实际新埋」条数：已埋/推进中/已收（planted/progressing/resolved）且 plantedIn === chapter。dropped 不计。 */
 function plantedCountAt(list: Foreshadow[], chapter: number): number {
   return list.filter(
-    (f) => f.plantedIn === chapter && (f.status === 'planted' || f.status === 'resolved'),
+    (f) => f.plantedIn === chapter
+      && (f.status === 'planted' || f.status === 'progressing' || f.status === 'resolved'),
   ).length;
 }
 
@@ -257,22 +392,17 @@ export function computeForeshadowStats(
   currentChapter: number,
   chapterCount: number,
 ): ForeshadowStats {
-  const byStatus: Record<ForeshadowStatus, number> = { pending: 0, planted: 0, resolved: 0, dropped: 0 };
+  const byStatus: Record<ForeshadowStatus, number> = {
+    pending: 0, planted: 0, progressing: 0, resolved: 0, dropped: 0,
+  };
   let debtScore = 0;
   for (const f of list) {
     if (byStatus[f.status] !== undefined) byStatus[f.status] += 1;
     if (isUnsettled(f)) debtScore += FORESHADOW_WEIGHT_SCORE[f.weight] ?? 1;
   }
 
-  const overdue = list.filter(
-    (f) => isUnsettled(f) && f.resolveDeadline !== null && f.resolveDeadline < currentChapter,
-  );
-  const dueSoon = list.filter(
-    (f) => isUnsettled(f)
-      && f.resolveDeadline !== null
-      && f.resolveDeadline > currentChapter
-      && f.resolveDeadline <= currentChapter + DUE_SOON_WINDOW,
-  );
+  const overdue = list.filter((f) => isForeshadowOverdue(f, currentChapter));
+  const dueSoon = list.filter((f) => isForeshadowDueSoon(f, currentChapter));
   const orphaned = list.filter(
     (f) => chapterCount > 0 && f.plantedIn !== null && f.plantedIn > chapterCount,
   );
@@ -344,8 +474,8 @@ export function computeDensityBudget(
 
 /**
  * 推断「债务视角」的当前章号：写作已开始（lastUpdatedChapter > 0）时以
- * state.json 的实际写作进度为准；未开写时回退到最大规划埋设章（供规划期
- * 甘特图展示）。不再取 max(进度, 未来埋设章)——未来伏笔会把逾期/临期/密度
+ * state.json 的实际写作进度为准；未开写时回退到最大规划埋设章与最大推进记录章
+ * （供规划期甘特图展示）。不再取 max(进度, 未来埋设章)——未来伏笔会把逾期/临期/密度
  * 窗口整体前移，写作到第 3 章时按第 18 章计算债务。
  */
 export function resolveCurrentChapter(foreshadows: Foreshadow[], lastUpdatedChapter: number): number {
@@ -354,5 +484,10 @@ export function resolveCurrentChapter(foreshadows: Foreshadow[], lastUpdatedChap
     : 0;
   if (progress > 0) return progress;
   const maxPlanted = foreshadows.reduce((m, f) => Math.max(m, f.plantedIn ?? 0), 0);
-  return Math.max(0, maxPlanted);
+  // 无 state.json 进度时：已记录的推进章号也是「已写到」的证据，优先于规划埋设章
+  const maxProgressed = foreshadows.reduce(
+    (m, f) => Math.max(m, ...(f.progressedIn ?? [])),
+    0,
+  );
+  return Math.max(0, maxPlanted, maxProgressed);
 }

@@ -12,6 +12,7 @@ import { deploySubagents } from '../agent/subagents';
 import { reconcileStaleRuns } from '../agent/run';
 import { killOrphanAgentChildren, killAllAgentChildren } from '../agent/child-registry';
 import { config } from '../config';
+import { isLoopbackHost } from '../api/middleware/auth';
 import { nodeRequestToFetchRequest, writeFetchResponse } from './request-adapter';
 
 /**
@@ -45,6 +46,21 @@ app.get('/*', async (c) => {
 });
 
 const logger = pino({ name: 'open-novel', level: config.logLevel });
+
+// 安全提示：默认已绑定回环地址。若用户显式暴露到非回环地址又没设置令牌，
+// 任何能连上端口的人都能读写项目文件、触发 agent（消耗 API 额度）、删除项目。
+// 只警告、不拒绝启动；日志中绝不输出 token 本身。
+if (!isLoopbackHost(config.host) && !config.auth.token) {
+  logger.warn(
+    { host: config.host },
+    'SECURITY WARNING: listening on a non-loopback host without AUTH_TOKEN. ' +
+      'Anyone who can reach this port can read/write all projects and trigger AI agent runs. ' +
+      'Set AUTH_TOKEN, or bind HOST=127.0.0.1 (the default).',
+  );
+}
+if (config.auth.token) {
+  logger.info('API authentication enabled (AUTH_TOKEN set)');
+}
 
 await ensureDbReady();
 initPlugins();

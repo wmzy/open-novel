@@ -8,7 +8,7 @@ export default defineConfig({
     headless: true,
   },
   webServer: {
-    command: 'npx vite --port 3006 --host',
+    command: 'npx vite --port 3006 --host 127.0.0.1',
     port: 3006,
     reuseExistingServer: true,
     timeout: 15000,
