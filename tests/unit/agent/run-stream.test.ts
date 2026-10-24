@@ -65,6 +65,7 @@ describe('RunStream', () => {
     expect(received[1].data).toEqual({ type: 'text_delta', delta: 'new' });
 
     unsub();
+    await rs.flush(); // 收尾，避免遗留定时落盘
   });
 
   it('subscribe 的 fromSeq 跳过已收到的事件', async () => {
@@ -94,6 +95,7 @@ describe('RunStream', () => {
     rs.push('agent', { a: 2 });
     await new Promise((r) => setTimeout(r, 50));
     expect(received).toHaveLength(1);
+    await rs.flush(); // 收尾，避免遗留定时落盘
   });
 
   it('auto-flush 当缓冲达到阈值（50 条）', async () => {
@@ -104,6 +106,74 @@ describe('RunStream', () => {
 
     const rows = await db.select().from(runEvents).where(eq(runEvents.runId, runId));
     expect(rows).toHaveLength(50);
+  });
+
+  it('突发 push 超过阈值时并发落盘串行化，事件每条只插入一次', async () => {
+    const rs = new RunStream(runId, convId);
+    const batches: number[][] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const realInsert = db.insert.bind(db) as unknown as (table: unknown) => {
+      values: (rows: unknown[]) => { onConflictDoNothing: () => Promise<unknown> };
+    };
+
+    // 首批 insert 挂在闸门上模拟慢落盘；期间连续 push 不得再并发发起新的 insert。
+    const insertSpy = vi.spyOn(db, 'insert').mockImplementation(((table: unknown) => ({
+      values: (rows: Array<{ seq: number }>) => {
+        batches.push(rows.map((r) => r.seq));
+        return {
+          onConflictDoNothing: async () => {
+            if (batches.length === 1) await firstGate;
+            await realInsert(table).values(rows).onConflictDoNothing();
+          },
+        };
+      },
+    })) as unknown as typeof db.insert);
+
+    try {
+      // 模拟同一个 stdout chunk 内的连续 push（不 await，落盘必然在途）
+      for (let i = 0; i < 200; i++) rs.push('tick', { n: i });
+      // 旧实现每满 50 条就会并发发起一次 insert；串行化后只应有在途的一批
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(50);
+
+      releaseFirst();
+      await rs.flush();
+
+      // 在途期间新事件只补一趟：首批 50，其余 150 一次落盘，无重叠批次
+      expect(batches.map((b) => b.length)).toEqual([50, 150]);
+      const inserted = batches.flat();
+      expect(inserted).toHaveLength(200);
+      expect(new Set(inserted).size).toBe(200);
+
+      const rows = await db.select().from(runEvents).where(eq(runEvents.runId, runId));
+      expect(rows).toHaveLength(200);
+    } finally {
+      insertSpy.mockRestore();
+    }
+  });
+
+  it('连续落盘失败后仍会重新安排重试（缓冲不被永久搁置）', async () => {
+    vi.useFakeTimers();
+    const rs = new RunStream(runId, convId);
+    const insertSpy = vi.spyOn(db, 'insert').mockImplementation(((() => {
+      throw new Error('db down');
+    }) as unknown) as typeof db.insert);
+
+    try {
+      rs.push('agent', { type: 'text_delta', delta: 'x' });
+      await rs.flush();
+      expect(insertSpy).toHaveBeenCalledTimes(1); // 第 1 次失败，已安排重试
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(insertSpy).toHaveBeenCalledTimes(2); // 第 2 次失败
+
+      await vi.advanceTimersByTimeAsync(600);
+      expect(insertSpy).toHaveBeenCalledTimes(3); // 失败次数 >=2 仍继续重试
+    } finally {
+      insertSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   // --- Task 2: close 固化 messages ---

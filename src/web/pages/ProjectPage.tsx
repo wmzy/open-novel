@@ -35,6 +35,26 @@ const WritingView = lazy(() => import('@/web/components/views/WritingView'));
 /** Sidebar chapters 回退常量——避免每次渲染新建数组导致 memo 失效。 */
 const EMPTY_CHAPTERS: Array<{ number: number; title: string | null }> = [];
 
+/**
+ * 断线重连时需按前缀全量失效的项目级查询族（键形如 [family, projectId, ...]）。
+ * 项目 SSE 端点不 emit 事件 id，断线窗口内的 file-changed 无法重放，因此除了
+ * file-changed 处理器按路径刷新的族（novel-document/novel-file/chapters/
+ * state-hygiene/foreshadow-stats），由项目文件派生的只读视图查询也要补一轮。
+ * 故意不含 chapter-content：编辑器持有未保存草稿，重连拉取会覆盖用户输入。
+ */
+const RECONNECT_QUERY_FAMILIES = [
+  'novel-document',
+  'novel-file',
+  'novel-file-list',
+  'chapters',
+  'state-hygiene',
+  'foreshadow-stats',
+  'timeline',
+  'character-graph',
+  'degraded-chapters',
+  'state-characters',
+] as const;
+
 const layout = css`
   display: flex;
   height: 100%;
@@ -430,14 +450,17 @@ export default function ProjectPage() {
 
     // 原生 EventSource 连接断开时自动重连（onerror 不 close 即保留默认重连）。
     // 但该 SSE 端点不 emit id，断线窗口内的 file-changed/project-updated 无法重放——
-    // 首次 open 之后再次 open 即视为重连，全量回填项目与章节 + 刷新当前预览，
+    // 首次 open 之后再次 open 即视为重连，全量回填项目、章节与各视图查询 + 刷新当前预览，
     // 避免窗口断线期间 agent 写的文件让视图陈旧。
     let opened = false;
     es.onopen = () => {
       if (!opened) { opened = true; return; }
       refetchProject();
       queryClient.invalidateQueries({ queryKey: ['project', id] });
-      queryClient.invalidateQueries({ queryKey: ['chapters', id] });
+      // 前缀失效覆盖各视图的文件派生查询（file-changed 按路径只刷新其中一个子集）。
+      for (const family of RECONNECT_QUERY_FAMILIES) {
+        queryClient.invalidateQueries({ queryKey: [family, id] });
+      }
       const cur = previewFileRef.current;
       if (cur) readFileRef.current(cur).then((content) => { if (content) setPreviewContent(content); });
     };

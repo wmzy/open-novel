@@ -23,6 +23,9 @@ const sidebar = css`
 
 const navItem = css`
   display: block;
+  /* button 的 auto 宽度是 shrink-to-fit，显式 100% 才能让 hover/点击区铺满整行 */
+  width: 100%;
+  box-sizing: border-box;
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
   border: none;
@@ -33,6 +36,10 @@ const navItem = css`
   font-size: 0.875rem;
   color: var(--haze-color-text);
   &:hover { background: var(--haze-color-bg-secondary); text-decoration: none; }
+  /* 移动端侧边栏横排（flex wrap），条目按内容宽度排列 */
+  @media (max-width: 768px) {
+    width: auto;
+  }
 `;
 
 const navItemActive = css`

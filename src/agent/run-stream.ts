@@ -50,6 +50,10 @@ export class RunStream {
   /** 落盘缓冲。 */
   private pending: BufferedEvent[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** 在途落盘：并发触发复用同一趟，避免同一批事件被重复插入。 */
+  private flushing: Promise<void> | null = null;
+  /** 落盘期间又有新事件到达：当前趟结束后再补一趟。 */
+  private flushQueued = false;
   /** 实时订阅者。 */
   private subscribers = new Set<Subscriber>();
   private _closed = false;
@@ -83,10 +87,10 @@ export class RunStream {
 
     this.pending.push({ seq: id, type: event, data });
     if (this.pending.length >= FLUSH_THRESHOLD) {
-      this.doFlush().catch(() => {});
-    } else if (!this.timer) {
-      this.timer = setTimeout(() => { this.doFlush().catch(() => {}); }, FLUSH_INTERVAL_MS);
-      this.timer.unref?.();
+      // 已有在途落盘时只标记补跑，不再并发发起新的 insert（否则会重复插入同一前缀）。
+      this.scheduleFlush().catch(() => {});
+    } else {
+      this.armFlushTimer();
     }
 
     for (const cb of this.subscribers) cb(event, data, id);
@@ -110,9 +114,14 @@ export class RunStream {
     return () => { this.subscribers.delete(cb); };
   }
 
-  /** 立即落盘缓冲（不关闭流）。 */
+  /**
+   * 立即落盘缓冲（不关闭流）。返回时，调用时刻已在缓冲中的事件都至少尝试过落盘一次：
+   * 先等在途趟结束，若仍有待落盘事件再补一趟。
+   */
   async flush(): Promise<void> {
-    await this.doFlush();
+    while (this.flushing) await this.flushing;
+    if (this.pending.length === 0) return;
+    await this.scheduleFlush();
   }
 
   /**
@@ -150,7 +159,7 @@ export class RunStream {
   ): Promise<void> {
     if (this._closed) return;
     this._closed = true;
-    await this.doFlush();
+    await this.flush();
     const all = await this.replay(0);
     const agentEvents = all
       .filter((e) => e.event === 'agent')
@@ -177,10 +186,48 @@ export class RunStream {
     this.window = [];
   }
 
-  /** 连续落盘失败次数（成功一次即清零）。两次失败视为持久性故障，停止自动重试。 */
+  /**
+   * 连续落盘失败次数（成功一次即清零）。失败后总会安排下一次重试，
+   * 该计数只用于诊断日志与阻止失败后紧循环重跑。
+   */
   private flushFailures = 0;
 
-  /** 落盘缓冲的内部实现。 */
+  /**
+   * 触发一趟串行落盘。已有在途趟时不并发发起新的 insert，只标记「结束后补一趟」，
+   * 由在途趟统一消化（同一批事件因此只会插入一次）。
+   */
+  private scheduleFlush(): Promise<void> {
+    if (this.flushing) {
+      this.flushQueued = true;
+      return this.flushing;
+    }
+    this.flushing = this.drain();
+    return this.flushing;
+  }
+
+  /** 串行落盘循环：一趟成功后，若期间有新事件到达则再补一趟；失败则交给重试定时器。 */
+  private async drain(): Promise<void> {
+    try {
+      do {
+        this.flushQueued = false;
+        await this.doFlush();
+      } while (this.flushQueued && this.flushFailures === 0);
+    } finally {
+      this.flushing = null;
+    }
+  }
+
+  /** 安排一次延迟落盘（阈值以下的定时落盘 / 失败重试共用）；已有定时器则不重复安排。 */
+  private armFlushTimer(): void {
+    if (this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.scheduleFlush().catch(() => {});
+    }, FLUSH_INTERVAL_MS);
+    this.timer.unref?.();
+  }
+
+  /** 落盘缓冲的内部实现（单趟）。 */
   private async doFlush(): Promise<void> {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     const batch = this.pending.slice();
@@ -208,11 +255,9 @@ export class RunStream {
         },
         'run-stream flush failed; buffer retained for retry',
       );
-      // 重试一次：短延迟后再次落盘。close() 的 doFlush 仍会兜底第三次尝试。
-      if (this.flushFailures === 1) {
-        this.timer = setTimeout(() => { this.doFlush().catch(() => {}); }, FLUSH_INTERVAL_MS);
-        this.timer.unref?.();
-      }
+      // 失败后总是安排下一次重试（已有定时器则复用），缓冲不会因连续失败被永久搁置；
+      // 定时器间隔保证失败不会形成紧循环。
+      this.armFlushTimer();
     }
   }
 }

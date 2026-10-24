@@ -279,7 +279,8 @@ export default function DashboardView({ projectId }: Props) {
   const currentStageIdx = STAGES.findIndex((s) => s.id === project?.currentStage);
   const stageLabel = currentStageIdx >= 0 ? STAGES[currentStageIdx].label : project?.currentStage || '-';
   // 新项目（概念阶段且无任何章节）：显示欢迎引导卡，指引入门第一步。
-  const isFreshProject = project?.currentStage === 'concept' && (chapters?.length ?? 0) === 0 && totalWords === 0;
+  // chapters 未加载完成为 undefined，此时不判定为新项目，避免加载期间卡片闪现。
+  const isFreshProject = project?.currentStage === 'concept' && chapters?.length === 0 && totalWords === 0;
   // 样章门：写作阶段需至少 3 个有效章节。口径与服务端一致（wordCount ≥ 100）
   const effectiveChapters = (chapters || []).filter((ch: { wordCount?: number }) => (ch.wordCount || 0) >= 100).length;
   const sampleGateIncomplete = project?.currentStage === 'writing' && effectiveChapters < 3;
