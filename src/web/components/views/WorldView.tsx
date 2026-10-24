@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { css } from '@linaria/core';
-import { useNovelFile, EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
+import { EmptyState, loadingWrap, pageHeading, card, cardTitle, cardTitleText, cardReviseBtn, isSectionEmpty, CardContent, ViewToolbar, useViewMode, viewHeaderRow, reviseBtn, renameBtn, inspireToggleBtn } from './viewShared';
 import { parseSections } from './parseSections';
 import type { MdSection } from './parseSections';
 import { useNovelDocument } from '@/web/hooks/useNovelDocument';

@@ -23,12 +23,23 @@ const sidebar = css`
 
 const navItem = css`
   display: block;
+  /* button 的 auto 宽度是 shrink-to-fit，显式 100% 才能让 hover/点击区铺满整行 */
+  width: 100%;
+  box-sizing: border-box;
   padding: 0.5rem 0.75rem;
   border-radius: 6px;
+  border: none;
+  background: none;
+  text-align: left;
+  font-family: inherit;
   cursor: pointer;
   font-size: 0.875rem;
   color: var(--haze-color-text);
   &:hover { background: var(--haze-color-bg-secondary); text-decoration: none; }
+  /* 移动端侧边栏横排（flex wrap），条目按内容宽度排列 */
+  @media (max-width: 768px) {
+    width: auto;
+  }
 `;
 
 const navItemActive = css`
@@ -59,17 +70,17 @@ function Sidebar({ activeView, onViewChange, chapters, skillId }: Props) {
     <div className={sidebar} data-testid="sidebar">
       <div className={sectionTitle}>文档</div>
       {views.map((v) => (
-        <a key={v.id} className={`${navItem} ${activeView === v.id ? navItemActive : ''}`} onClick={() => onViewChange(v.id)}>
+        <button key={v.id} type="button" className={`${navItem} ${activeView === v.id ? navItemActive : ''}`} onClick={() => onViewChange(v.id)}>
           {v.label}
-        </a>
+        </button>
       ))}
       {chapters.length > 0 && (
         <>
           <div className={sectionTitle}>章节</div>
           {chapters.map((ch) => (
-            <a key={ch.number} className={`${navItem} ${activeView === `chapter-${ch.number}` ? navItemActive : ''}`} onClick={() => onViewChange(`chapter-${ch.number}`)}>
+            <button key={ch.number} type="button" className={`${navItem} ${activeView === `chapter-${ch.number}` ? navItemActive : ''}`} onClick={() => onViewChange(`chapter-${ch.number}`)}>
               第{ch.number}章 {ch.title || ''}
-            </a>
+            </button>
           ))}
         </>
       )}

@@ -18,7 +18,8 @@ export function useProjects() {
 
 export interface CreateProjectInput {
   title: string;
-  path: string;
+  /** 保存位置（可选）：省略时后端默认 ~/novels/<标题拼音>，支持 ~ 前缀。 */
+  path?: string;
   genre?: string;
   targetWords?: number;
   chapterCount?: number;

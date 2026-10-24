@@ -80,16 +80,3 @@ export function rateLimit(maxRequests = 100, windowMs = 60000) {
     await next();
   };
 }
-
-/**
- * Validate request body size.
- */
-export function maxBodySize(maxBytes: number) {
-  return async (c: Context, next: Next) => {
-    const contentLength = c.req.header('content-length');
-    if (contentLength && parseInt(contentLength) > maxBytes) {
-      return c.json({ error: 'Request body too large' }, 413);
-    }
-    await next();
-  };
-}

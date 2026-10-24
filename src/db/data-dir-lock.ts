@@ -42,6 +42,9 @@ function pidAlive(pid: number): boolean {
  */
 export function acquireDataDirLock(dataDir: string): void {
   const lockPath = lockPathFor(dataDir);
+  // The sidecar lives next to the data dir; on a fresh checkout its parent
+  // (e.g. ./data) does not exist yet.
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const fd = fs.openSync(lockPath, 'wx');

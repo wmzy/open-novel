@@ -24,7 +24,7 @@ interface ChildEntry {
   startedAt: number;
 }
 
-let entries = new Map<number, ChildEntry>();
+const entries = new Map<number, ChildEntry>();
 let loaded = false;
 
 function load(): void {

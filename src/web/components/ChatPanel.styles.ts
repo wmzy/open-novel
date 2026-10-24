@@ -185,6 +185,50 @@ export const emptyState = css`
   gap: 0.5rem;
 `;
 
+/** 空态工作流一览：七阶段箭头流。 */
+export const emptyFlow = css`
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  opacity: 0.85;
+`;
+
+export const emptyFlowArrow = css`
+  opacity: 0.5;
+`;
+
+/** 空态起始提示 chips。 */
+export const emptyChips = css`
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  max-width: 420px;
+`;
+
+export const emptyChip = css`
+  padding: 0.45rem 0.8rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--haze-color-border);
+  background: var(--haze-color-bg);
+  color: var(--haze-color-text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  &:hover {
+    border-color: var(--haze-color-primary);
+    background: var(--haze-color-bg-secondary);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+`;
+
 /** 修订模式提示条：视图/卡片 ✎ dispatch 后显示，标明修订目标。 */
 export const reviseBanner = css`
   display: flex;

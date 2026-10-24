@@ -20,19 +20,6 @@ export function isReviewOpInFlight(projectDir: string): boolean {
   return inflightGitOps.has(projectDir);
 }
 
-/** 串行执行一次 git 结构操作；已在途时返回可读错误。 */
-async function runExclusiveGitOp<T>(projectDir: string, fn: () => Promise<T>): Promise<T> {
-  if (inflightGitOps.has(projectDir)) {
-    throw new Error('另一个审阅/版本操作正在进行，请稍候重试');
-  }
-  inflightGitOps.add(projectDir);
-  try {
-    return await fn();
-  } finally {
-    inflightGitOps.delete(projectDir);
-  }
-}
-
 /**
  * Initialize a git repository in the project directory if not already initialized.
  */

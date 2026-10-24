@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
 import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, rmSync, realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { pinyin } from 'pinyin-pro';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
 import { generateId } from '../../utils/id';
@@ -54,6 +56,62 @@ async function findProjectByCanonicalPath(canon: string) {
   return null;
 }
 
+/** slug 长度上限：标题最长 200 字，拼音展开后远超单个文件名 255 字节上限。 */
+const SLUG_MAX_LENGTH = 80;
+
+/** 标题 → 目录名（slug）：中文转无调拼音，非字母数字折叠为连字符。
+ * 用于未显式指定保存位置时派生项目目录，让写作者不必理解文件系统路径。 */
+function slugifyTitle(title: string): string {
+  const pinyinStr = pinyin(title, { toneType: 'none', type: 'array' }).join('');
+  const slug = pinyinStr
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    // 先截断再去尾部连字符：留出空间给去重序号，避免 ENAMETOOLONG。
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/, '');
+  return slug || 'novel';
+}
+
+/** 展开 `~` 前缀为家目录；其余原样返回。 */
+function expandTilde(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+/** 用户提供的保存位置 → 绝对路径（支持 `~` 前缀）。 */
+function resolveUserPath(rawPath: string): string {
+  return path.resolve(expandTilde(rawPath.trim()));
+}
+
+/** 未显式提供保存位置时的默认目录：~/novels/<标题拼音>（seq>1 时追加 -seq）。
+ * 序号在截断之后拼接，长标题截断不会吃掉序号导致去重循环永远撞车。 */
+function defaultProjectPath(title: string, seq = 1): string {
+  const slug = slugifyTitle(title || '未命名项目');
+  return resolveUserPath(path.join('~', 'novels', seq > 1 ? `${slug}-${seq}` : slug));
+}
+
+/** 默认目录是否已被占用：磁盘上有 .novel/，或 DB 中已有记录指向该目录
+ * （文件被手动删除但记录仍在的项目，GET / 会显示 pathExists:false）。
+ * 仅用于派生的默认路径；显式路径冲突仍由后面的 409 拦截。 */
+async function isDefaultPathOccupied(p: string): Promise<boolean> {
+  if (existsSync(path.join(p, '.novel'))) return true;
+  return (await findProjectByCanonicalPath(canonicalProjectPath(p))) !== null;
+}
+
+/** 项目创建串行化：默认路径选择与 DB 插入必须原子完成。
+ * projects.path 没有唯一索引，并发同名请求会同时选中同一目录并各自插入。 */
+let createProjectQueue: Promise<unknown> = Promise.resolve();
+
+function withProjectCreateLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = createProjectQueue.then(fn);
+  // 无论本次创建成功与否，后续请求都能继续排队（锁必须释放）。
+  createProjectQueue = run.then(() => undefined, () => undefined);
+  return run;
+}
+
 projectsRouter.get('/', async (c) => {
   const all = await db.select().from(projects).orderBy(desc(projects.createdAt));
   const enriched = all.map((p) => ({
@@ -65,78 +123,96 @@ projectsRouter.get('/', async (c) => {
 
 projectsRouter.post('/', async (c) => {
   const body = await c.req.json();
-  if (!body.path || typeof body.path !== 'string') {
-    return c.json({ error: 'path is required' }, 400);
-  }
-  const id = generateId('proj_');
-  const userPath = path.resolve(body.path);
-  // Prevent creating directories in sensitive system locations
-  const sensitive = ['/etc', '/proc', '/sys', '/dev', '/boot', '/usr', '/bin', '/sbin', '/lib'];
-  if (sensitive.some((p) => userPath === p || userPath.startsWith(p + '/'))) {
-    return c.json({ error: '不允许在系统目录下创建项目' }, 400);
-  }
-  // 目录已是 open-novel 项目（存在 .novel/）：引导用户走「打开项目」，
-  // 避免两条项目记录指向同一目录（删除其中一个会互相污染）。
-  if (existsSync(path.join(userPath, '.novel'))) {
-    return c.json({
-      error: 'workspace-exists',
-      message: '该目录已是 open-novel 项目（存在 .novel/ 结构），请使用「打开项目」导入',
-    }, 409);
-  }
-  // 非空目录警告：目录中已有 .novel 之外的文件时，git 快照会把它们卷入版本库，
-  // 且「删除项目-同时删除文件」只允许删除纯 open-novel 目录——提前告知而非事后踩坑。
-  let warning: string | undefined;
-  if (existsSync(userPath)) {
-    try {
-      const entries = readdirSync(userPath);
-      if (entries.length > 0) {
-        warning = `该目录已有 ${entries.length} 个文件（如 ${entries.slice(0, 3).join('、')}${entries.length > 3 ? '…' : ''}）。现有文件会被纳入项目版本管理；删除项目时仅允许删除纯 open-novel 目录。`;
-      }
-    } catch { /* 读取失败不阻断创建 */ }
-  }
-  mkdirSync(userPath, { recursive: true });
-  // 真实路径查重：symlink/相对路径等不同写法指向同一目录时拒绝第二条记录
-  const canonical = canonicalProjectPath(userPath);
-  const dup = await findProjectByCanonicalPath(canonical);
-  if (dup) {
-    return c.json({
-      error: 'path-exists',
-      message: `该目录已是 open-novel 项目「${dup.title}」（可能经其他路径形式创建）。请使用「打开项目」导入，或另选目录。`,
-    }, 409);
-  }
-  const [project] = await db.insert(projects).values({
-    id,
-    title: body.title || '未命名项目',
-    path: userPath,
-    genre: body.genre || 'general',
-    // 下限钳制：0/负数/非法值会使每章字数目标失真（0 → Infinity，字数校验静默失效）
-    targetWords: Math.max(1, Number(body.targetWords) || 100000),
-    chapterCount: Math.max(1, Number(body.chapterCount) || 20),
-    theme: body.theme || null,
-    perspective: body.perspective || 'third-person',
-  }).returning();
+  const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '未命名项目';
+  const explicitPath = typeof body.path === 'string' && body.path.trim() !== '';
 
-  // 过滤空意图字段：全部为空时按未提供处理（不生成 intent.md）
-  const rawIntent = (body.intent ?? {}) as Record<string, unknown>;
-  const intentEntries = Object.entries(rawIntent).filter(
-    ([, value]) => typeof value === 'string' && value.trim(),
-  ) as Array<[keyof IntentInput, string]>;
-  const intent: IntentInput | undefined = intentEntries.length > 0
-    ? Object.fromEntries(intentEntries) as IntentInput
-    : undefined;
+  // 路径选择 → mkdir → 查重 → 插入必须原子完成，否则并发同名请求会各自选中
+  // 同一默认目录并双双插入（projects.path 无唯一索引）。
+  return withProjectCreateLock(async () => {
+    const id = generateId('proj_');
 
-  // Auto-initialize workspace
-  initWorkspace(userPath, {
-    title: project.title,
-    genre: project.genre,
-    targetWords: project.targetWords,
-    chapterCount: project.chapterCount,
-    perspective: project.perspective,
-    skillId: body.skillId,
-    intent,
+    // 保存位置可选：未提供时默认 ~/novels/<标题拼音>；`~` 前缀展开为家目录。
+    let userPath: string;
+    if (explicitPath) {
+      userPath = resolveUserPath(body.path as string);
+    } else {
+      // 默认目录已被占用（磁盘 .novel/ 或 DB 记录残留）→ 自动追加 -2/-3… 序号，
+      // 避免「两部同名小说」在默认路径下冲突后又被 409 拦截。
+      let n = 1;
+      do {
+        userPath = defaultProjectPath(title, n);
+        n++;
+      } while (await isDefaultPathOccupied(userPath));
+    }
+
+    // Prevent creating directories in sensitive system locations
+    const sensitive = ['/etc', '/proc', '/sys', '/dev', '/boot', '/usr', '/bin', '/sbin', '/lib'];
+    if (sensitive.some((p) => userPath === p || userPath.startsWith(p + '/'))) {
+      return c.json({ error: '不允许在系统目录下创建项目' }, 400);
+    }
+    // 目录已是 open-novel 项目（存在 .novel/）：引导用户走「打开项目」，
+    // 避免两条项目记录指向同一目录（删除其中一个会互相污染）。
+    if (existsSync(path.join(userPath, '.novel'))) {
+      return c.json({
+        error: 'workspace-exists',
+        message: '该目录已是 open-novel 项目（存在 .novel/ 结构），请使用「打开项目」导入',
+      }, 409);
+    }
+    // 非空目录警告：目录中已有 .novel 之外的文件时，git 快照会把它们卷入版本库，
+    // 且「删除项目-同时删除文件」只允许删除纯 open-novel 目录——提前告知而非事后踩坑。
+    let warning: string | undefined;
+    if (existsSync(userPath)) {
+      try {
+        const entries = readdirSync(userPath);
+        if (entries.length > 0) {
+          warning = `该目录已有 ${entries.length} 个文件（如 ${entries.slice(0, 3).join('、')}${entries.length > 3 ? '…' : ''}）。现有文件会被纳入项目版本管理；删除项目时仅允许删除纯 open-novel 目录。`;
+        }
+      } catch { /* 读取失败不阻断创建 */ }
+    }
+    mkdirSync(userPath, { recursive: true });
+    // 真实路径查重：symlink/相对路径等不同写法指向同一目录时拒绝第二条记录
+    const canonical = canonicalProjectPath(userPath);
+    const dup = await findProjectByCanonicalPath(canonical);
+    if (dup) {
+      return c.json({
+        error: 'path-exists',
+        message: `该目录已是 open-novel 项目「${dup.title}」（可能经其他路径形式创建）。请使用「打开项目」导入，或另选目录。`,
+      }, 409);
+    }
+    const [project] = await db.insert(projects).values({
+      id,
+      title,
+      path: userPath,
+      genre: body.genre || 'general',
+      // 下限钳制：0/负数/非法值会使每章字数目标失真（0 → Infinity，字数校验静默失效）
+      targetWords: Math.max(1, Number(body.targetWords) || 100000),
+      chapterCount: Math.max(1, Number(body.chapterCount) || 20),
+      theme: body.theme || null,
+      perspective: body.perspective || 'third-person',
+    }).returning();
+
+    // 过滤空意图字段：全部为空时按未提供处理（不生成 intent.md）
+    const rawIntent = (body.intent ?? {}) as Record<string, unknown>;
+    const intentEntries = Object.entries(rawIntent).filter(
+      ([, value]) => typeof value === 'string' && value.trim(),
+    ) as Array<[keyof IntentInput, string]>;
+    const intent: IntentInput | undefined = intentEntries.length > 0
+      ? Object.fromEntries(intentEntries) as IntentInput
+      : undefined;
+
+    // Auto-initialize workspace
+    initWorkspace(userPath, {
+      title: project.title,
+      genre: project.genre,
+      targetWords: project.targetWords,
+      chapterCount: project.chapterCount,
+      perspective: project.perspective,
+      skillId: body.skillId,
+      intent,
+    });
+
+    return c.json({ project, warning }, 201);
   });
-
-  return c.json({ project, warning }, 201);
 });
 
 /**
@@ -173,7 +249,10 @@ function inferStageFromDisk(novelDir: string): string {
 // Import an existing .novel/ directory
 projectsRouter.post('/import', async (c) => {
   const body = await c.req.json();
-  const userPath = path.resolve(body.path);
+  if (typeof body.path !== 'string' || !body.path.trim()) {
+    return c.json({ error: 'path is required' }, 400);
+  }
+  const userPath = resolveUserPath(body.path);
   const novelDir = path.join(userPath, '.novel');
 
   if (!existsSync(novelDir)) {

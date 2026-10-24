@@ -107,7 +107,7 @@ const header = css`
   border-bottom: 1px solid var(--haze-color-border);
 `;
 
-const title = css`
+const titleText = css`
   font-size: 0.95rem;
   font-weight: 600;
   color: var(--haze-color-text);
@@ -290,7 +290,7 @@ export function MarkdownFileDialog({ projectId, filePath, title, onClose }: Prop
         aria-label={`文件预览：${title || currentPath}`}
       >
         <div className={header}>
-          <span className={title}>{title || currentPath}</span>
+          <span className={titleText}>{title || currentPath}</span>
           <span className={pathBadge} title={currentPath}>
             {currentPath}
           </span>

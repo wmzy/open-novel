@@ -4,7 +4,6 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { projects } from '../../db/schema';
-import { resolveProjectDir } from '../../shared/project-dir';
 import { getActiveRunForProject } from '../../agent/run';
 import {
   parseForeshadowFile,
@@ -78,7 +77,7 @@ async function readForeshadows(projectDir: string): Promise<{
   migrated: boolean;
   warnings: string[];
 }> {
-  let raw = '';
+  let raw: string;
   try {
     raw = await readFile(path.join(projectDir, FORESHADOW_FILE), 'utf-8');
   } catch {

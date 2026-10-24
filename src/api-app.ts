@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { bodyLimit } from 'hono/body-limit';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ensureDbReady } from './db/drizzle';
@@ -9,7 +10,7 @@ import { reconcileStaleRuns } from './agent/run';
 import { killOrphanAgentChildren } from './agent/child-registry';
 import { config } from './config';
 import { requestLogger } from './api/middleware/logger';
-import { securityHeaders, rateLimit, maxBodySize } from './api/middleware/security';
+import { securityHeaders, rateLimit } from './api/middleware/security';
 import projectsRouter from './api/routes/projects';
 import chaptersRouter from './api/routes/chapters';
 import settingsRouter from './api/routes/settings';
@@ -33,7 +34,12 @@ const app = new Hono();
 // Security, logging middleware
 app.use('/api/*', securityHeaders);
 app.use('/api/*', rateLimit(config.rateLimit.max, config.rateLimit.windowMs));
-app.use('/api/*', maxBodySize(25 * 1024 * 1024)); // 25MB: generous for text + image uploads
+// 25MB：文本 + 图片上传的宽松上限。用 Hono 内置 bodyLimit 而非只看 content-length，
+// chunked 传输无 content-length 时旧的自定义 maxBodySize 会被绕过。
+app.use('/api/*', bodyLimit({
+  maxSize: 25 * 1024 * 1024,
+  onError: (c) => c.json({ error: 'Request body too large' }, 413),
+}));
 app.use('/api/*', requestLogger);
 
 // Global error handler. Hono's middleware `try/catch` form does NOT catch

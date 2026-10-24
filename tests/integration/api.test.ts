@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import app from '../../src/api-app';
 import { ensureDbReady } from '../../src/db/drizzle';
@@ -36,6 +37,145 @@ describe('API Integration', () => {
     const data = await res.json();
     expect(data.project).toBeDefined();
     expect(data.project.title).toBe('Test Novel');
+  });
+
+  it('POST /api/projects defaults path to ~/novels/<拼音 slug> when omitted', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const ts = Date.now();
+      const res = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: `测试${ts}`, genre: 'general' }),
+      });
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      // 中文标题转无调拼音（测试 → ceshi），非字母数字折叠。
+      expect(data.project.path).toBe(path.join(home, 'novels', `ceshi${ts}`));
+      expect(fs.existsSync(data.project.path)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/projects expands ~ prefix in explicit path', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const res = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Tilde Test', genre: 'general', path: '~/my-novel-dir' }),
+      });
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      expect(data.project.path).toBe(path.join(home, 'my-novel-dir'));
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/projects dedupes default dir for same title', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const first = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '同名小说', genre: 'general' }),
+      });
+      expect(first.ok).toBe(true);
+      const second = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '同名小说', genre: 'general' }),
+      });
+      expect(second.ok).toBe(true);
+      const p1 = (await first.json()).project;
+      const p2 = (await second.json()).project;
+      expect(p1.path).toBe(path.join(home, 'novels', 'tongmingxiaoshuo'));
+      // 同名 → 追加序号，避免 409 拦截
+      expect(p2.path).toBe(path.join(home, 'novels', 'tongmingxiaoshuo-2'));
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/projects caps long CJK title slug at 80 chars', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      // title 列允许 200 字；拼音展开后远超单个路径组件 255 字节上限。
+      const title = `长篇标题${Date.now()}`.padEnd(200, '字');
+      const res = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, genre: 'general' }),
+      });
+      expect(res.status).toBe(201);
+      const data = await res.json();
+      expect(path.basename(data.project.path).length).toBeLessThanOrEqual(80);
+      expect(fs.existsSync(path.join(data.project.path, '.novel'))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/projects serializes concurrent same-title default creates', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const title = `并发同名${Date.now()}`;
+      const create = () => app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, genre: 'general' }),
+      });
+      // 并发提交：路径选择与插入必须串行，否则会选中同一目录并各插一条记录。
+      const [r1, r2] = await Promise.all([create(), create()]);
+      expect(r1.status).toBe(201);
+      expect(r2.status).toBe(201);
+      const [p1, p2] = [await r1.json(), await r2.json()];
+      const paths = [p1.project.path, p2.project.path].sort();
+      expect(paths[0]).not.toBe(paths[1]);
+      expect(paths[1]).toBe(`${paths[0]}-2`);
+      expect(fs.existsSync(path.join(paths[0], '.novel'))).toBe(true);
+      expect(fs.existsSync(path.join(paths[1], '.novel'))).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/projects skips default dir whose .novel was deleted but row remains', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const title = `残留项目${Date.now()}`;
+      const create = () => app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, genre: 'general' }),
+      });
+      const first = await create();
+      expect(first.status).toBe(201);
+      const p1 = (await first.json()).project;
+      // 模拟用户手删工作区文件但 DB 记录残留（GET / 显示 pathExists:false）。
+      fs.rmSync(path.join(p1.path, '.novel'), { recursive: true, force: true });
+      const second = await create();
+      expect(second.status).toBe(201);
+      const p2 = (await second.json()).project;
+      // 不能因 DB 残留记录命中 path-exists 409，而应自动跳到 -2。
+      expect(p2.path).toBe(`${p1.path}-2`);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('POST /api/projects with intent writes .novel/intent.md', async () => {

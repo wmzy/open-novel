@@ -106,6 +106,8 @@ const inputFull = css`width:100%;`;
 
 const fieldLabel = css`display:block;font-size:0.8rem;margin-bottom:0.25rem;color:var(--haze-color-text-secondary);`;
 
+const fieldHint = css`display:block;font-size:0.72rem;color:var(--haze-color-text-secondary);margin-top:0.25rem;line-height:1.4;`;
+
 const genreHint = css`
   font-size: 0.75rem;
   color: var(--haze-color-warning, #f59e0b);
@@ -228,10 +230,13 @@ export default function HomePage() {
   }, [projects, search]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // 删除项目或搜索过滤后 filtered 缩短，page 可能超过 totalPages —— 渲染时钳制，
+  // 否则 slice 出空数组，出现「空白网格 + 3/2 分页」的假空态。
+  const currentPage = Math.min(page, totalPages);
+  const paged = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   const handleCreate = () => {
-    if (!title.trim() || !projectPath.trim()) return;
+    if (!title.trim()) return;
     const intentEntries = [
       ['pacing', intentPacing.trim()],
       ['characterWeight', intentCharacterWeight.trim()],
@@ -239,9 +244,11 @@ export default function HomePage() {
       ['styleAnchor', intentStyleAnchor.trim()],
     ].filter(([, value]) => value) as Array<[string, string]>;
     const intent = intentEntries.length > 0 ? Object.fromEntries(intentEntries) : undefined;
+    const path = projectPath.trim();
     createProject.mutate({
       title: title.trim(),
-      path: projectPath.trim(),
+      // 保存位置可选：留空由后端派生默认目录 ~/novels/<标题拼音>
+      ...(path ? { path } : {}),
       genre,
       // 下限钳制：0/负数会导致每章字数目标 Infinity（字数校验静默失效）
       targetWords: Math.max(1, parseInt(targetWords) || 100000),
@@ -353,14 +360,17 @@ export default function HomePage() {
             </div>
             <div className={fullWidth}>
               <label className={fieldLabel}>
-                项目目录
+                保存位置（可选）
               </label>
               <input
                 className={cx(input, inputFull)}
-                placeholder="/home/user/novels/my-novel"
+                placeholder="默认 ~/novels/＜标题拼音＞"
                 value={projectPath}
                 onChange={(e) => setProjectPath(e.target.value)}
               />
+              <span className={fieldHint}>
+                留空则自动保存到 ~/novels/ 目录；也可填写绝对路径或 ~/ 开头的自定义位置。
+              </span>
             </div>
           </div>
           <details className={prefsArea}>
@@ -429,7 +439,14 @@ export default function HomePage() {
       {isLoading ? (
         <div className={emptyState}>加载中...</div>
       ) : filtered.length === 0 ? (
-        <div className={emptyState}>{search ? '没有匹配的项目' : '还没有项目，点击"新建项目"开始创作'}</div>
+        search ? (
+          <div className={emptyState}>没有匹配的项目</div>
+        ) : (
+          <div className={emptyState}>
+            <p style={{ marginBottom: '1rem' }}>还没有项目，从一个小说标题开始</p>
+            <button className={primaryBtn} onClick={() => setShowCreate(true)}>创建第一部小说</button>
+          </div>
+        )
       ) : (
         <>
           <div className={grid}>
@@ -446,7 +463,7 @@ export default function HomePage() {
                   </span>
                 )}
                 <p className={projectMeta}>
-                  {p.chapterCount} 章 · {p.targetWords.toLocaleString()} 字
+                  目标 {p.chapterCount} 章 · {p.targetWords.toLocaleString()} 字
                 </p>
                 <p className={projectPath} title={p.path}>
                   {p.path}
@@ -456,9 +473,9 @@ export default function HomePage() {
           </div>
           {totalPages > 1 && (
             <div className={pagination}>
-              <button className={pageBtn} disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
-              <span className={pageInfo}>{page} / {totalPages}</span>
-              <button className={pageBtn} disabled={page >= totalPages} onClick={() => setPage(page + 1)}>下一页</button>
+              <button className={pageBtn} disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>上一页</button>
+              <span className={pageInfo}>{currentPage} / {totalPages}</span>
+              <button className={pageBtn} disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)}>下一页</button>
             </div>
           )}
         </>
