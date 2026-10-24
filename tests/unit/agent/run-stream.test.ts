@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { eq, asc } from 'drizzle-orm';
 import { RunStream } from '../../../src/agent/run-stream';
 import { db, ensureDbReady } from '../../../src/db/drizzle';
@@ -165,5 +165,32 @@ describe('RunStream', () => {
     rs.subscribe(0, (_e, data) => received.push((data as { delta?: string }).delta || ''));
     await new Promise((r) => setTimeout(r, 100));
     expect(received).toEqual(['历史1', '历史2']);
+  });
+
+  it('flush 失败保留缓冲，下一次 flush 兜底落盘（不永久丢事件）', async () => {
+    const rs = new RunStream(runId, convId);
+    rs.push('agent', { type: 'text_delta', delta: 'hello' });
+
+    // 拦截首次 insert 使落盘失败；drizzle 链式调用 insert(...).values(...).onConflictDoNothing()
+    const insertSpy = vi.spyOn(db, 'insert').mockImplementationOnce(
+      ((() => ({
+        values: () => ({ onConflictDoNothing: () => Promise.reject(new Error('injected flush failure')) }),
+      })) as unknown) as typeof db.insert,
+    );
+
+    await rs.flush(); // doFlush 内部捕获错误，不向上抛出；缓冲保留在 pending
+
+    // 首次 flush 失败：DB 应无事件（未被 ssilent 丢弃，仍在缓冲中）
+    const empty = await db.select().from(runEvents).where(eq(runEvents.runId, runId));
+    expect(empty).toHaveLength(0);
+
+    // 恢复真实 insert，第二次 flush 兜底落盘成功
+    insertSpy.mockRestore();
+    await rs.flush();
+
+    const rows = await db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(asc(runEvents.seq));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].seq).toBe(1);
+    expect(rows[0].data).toEqual({ type: 'text_delta', delta: 'hello' });
   });
 });

@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { eq, desc } from 'drizzle-orm';
 import { mkdirSync, writeFileSync, existsSync, readdirSync, readFileSync, copyFileSync, statSync, unlinkSync, rmSync, realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { pinyin } from 'pinyin-pro';
 import { db } from '../../db/drizzle';
 import { projects, conversations } from '../../db/schema';
 import { generateId } from '../../utils/id';
@@ -54,6 +56,35 @@ async function findProjectByCanonicalPath(canon: string) {
   return null;
 }
 
+/** 标题 → 目录名（slug）：中文转无调拼音，非字母数字折叠为连字符。
+ * 用于未显式指定保存位置时派生项目目录，让写作者不必理解文件系统路径。 */
+function slugifyTitle(title: string): string {
+  const pinyinStr = pinyin(title, { toneType: 'none', type: 'array' }).join('');
+  const slug = pinyinStr
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'novel';
+}
+
+/** 展开 `~` 前缀为家目录；其余原样返回。 */
+function expandTilde(p: string): string {
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+/** 用户提供的保存位置 → 绝对路径（支持 `~` 前缀）。 */
+function resolveUserPath(rawPath: string): string {
+  return path.resolve(expandTilde(rawPath.trim()));
+}
+
+/** 未显式提供保存位置时的默认目录：~/novels/<标题拼音>。 */
+function defaultProjectPath(title: string): string {
+  return resolveUserPath(path.join('~', 'novels', slugifyTitle(title || '未命名项目')));
+}
+
 projectsRouter.get('/', async (c) => {
   const all = await db.select().from(projects).orderBy(desc(projects.createdAt));
   const enriched = all.map((p) => ({
@@ -65,11 +96,23 @@ projectsRouter.get('/', async (c) => {
 
 projectsRouter.post('/', async (c) => {
   const body = await c.req.json();
-  if (!body.path || typeof body.path !== 'string') {
-    return c.json({ error: 'path is required' }, 400);
-  }
   const id = generateId('proj_');
-  const userPath = path.resolve(body.path);
+  const title = typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '未命名项目';
+  const explicitPath = typeof body.path === 'string' && body.path.trim() !== '';
+
+  // 保存位置可选：未提供时默认 ~/novels/<标题拼音>；`~` 前缀展开为家目录。
+  let userPath = explicitPath ? resolveUserPath(body.path as string) : defaultProjectPath(title);
+
+  // 未显式指定目录而默认目录已被占用（同名标题）→ 自动追加 -2/-3… 序号，
+  // 避免「两部同名小说」在默认路径下冲突后又被 409 拦截。
+  if (!explicitPath && existsSync(path.join(userPath, '.novel'))) {
+    let n = 2;
+    do {
+      userPath = defaultProjectPath(`${title}-${n}`);
+      n++;
+    } while (existsSync(path.join(userPath, '.novel')));
+  }
+
   // Prevent creating directories in sensitive system locations
   const sensitive = ['/etc', '/proc', '/sys', '/dev', '/boot', '/usr', '/bin', '/sbin', '/lib'];
   if (sensitive.some((p) => userPath === p || userPath.startsWith(p + '/'))) {
@@ -106,7 +149,7 @@ projectsRouter.post('/', async (c) => {
   }
   const [project] = await db.insert(projects).values({
     id,
-    title: body.title || '未命名项目',
+    title,
     path: userPath,
     genre: body.genre || 'general',
     // 下限钳制：0/负数/非法值会使每章字数目标失真（0 → Infinity，字数校验静默失效）
@@ -173,7 +216,10 @@ function inferStageFromDisk(novelDir: string): string {
 // Import an existing .novel/ directory
 projectsRouter.post('/import', async (c) => {
   const body = await c.req.json();
-  const userPath = path.resolve(body.path);
+  if (typeof body.path !== 'string' || !body.path.trim()) {
+    return c.json({ error: 'path is required' }, 400);
+  }
+  const userPath = resolveUserPath(body.path);
   const novelDir = path.join(userPath, '.novel');
 
   if (!existsSync(novelDir)) {

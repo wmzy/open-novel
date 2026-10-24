@@ -30,6 +30,7 @@ import { css, cx } from '@linaria/core';
 import {
   panel, toolbar, select, iconBtn, messages, statusStrip, statusDot,
   inputArea, textarea, sendBtn, stopBtn, jumpBtn, emptyState,
+  emptyFlow, emptyFlowArrow, emptyChips, emptyChip,
   agentWarning, agentBadge, autocompleteDropdown, autocompleteItem,
   autocompleteCmd, autocompleteDesc, cmdBadge, cmdBadgeApp, cmdBadgeAgent,
   askBox, askMessage, askOptions, askOptionBtn, askCheckbox, askInput,
@@ -766,6 +767,37 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
     }
   };
 
+  /** 空态起始提示：按当前阶段与技能类型给出可点击示例，点击填入输入框。 */
+  const starterChips = useMemo(() => {
+    const chips: Array<{ label: string; text: string }> = [];
+    if (effectiveStage === 'concept') {
+      if (skillId === 'wuxia') {
+        chips.push({
+          label: '写一部武侠小说',
+          text: '我要写一部武侠小说，请先用采访式提问帮我确定故事的核心概念',
+        });
+      }
+      chips.push({ label: '描述我的故事灵感', text: '我有一个故事灵感：' });
+      chips.push({
+        label: '引导我完成概念设计',
+        text: '请用采访式提问帮我完成概念阶段的设计，从一句话梗概开始',
+      });
+    } else {
+      chips.push({ label: '推进当前阶段', text: '请推进当前阶段' });
+      chips.push({ label: '描述我的故事灵感', text: '我有一个故事灵感：' });
+    }
+    chips.push({ label: '查看全部命令', text: '/' });
+    return chips;
+  }, [effectiveStage, skillId]);
+
+  /** 点击起始提示：填入输入框并聚焦；'/' 直接打开命令面板。 */
+  const fillSuggestion = (text: string) => {
+    setInput(text);
+    setShowCommands(text.startsWith('/') && !text.includes(' '));
+    setActiveCmdIndex(0);
+    textareaRef.current?.focus();
+  };
+
   const handleNewChat = () => {
     setActiveConversationId(null);
     resetConversation();
@@ -863,8 +895,9 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           value={selectedModel}
           onChange={(e) => setSelectedModel(e.target.value)}
           disabled={isRunning}
+          title="选择模型（默认模型 = 由 agent 自行决定）"
         >
-          <option value="default">Default</option>
+          <option value="default">默认模型</option>
           {availableModels.map((m) => (
             <option key={m.id} value={m.id}>{m.label}</option>
           ))}
@@ -906,7 +939,28 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           <div className={emptyState}>
             <div>开始对话</div>
             <div className={emptyHint}>
-              输入消息开始与 AI 助手协作创作
+              描述你的故事灵感，AI 将带你逐阶段完成创作
+            </div>
+            <div className={emptyFlow}>
+              {STAGES.map((s, i) => (
+                <span key={s.id}>
+                  {i > 0 && <span className={emptyFlowArrow}> → </span>}
+                  {s.label}
+                </span>
+              ))}
+            </div>
+            <div className={emptyChips}>
+              {starterChips.map((chip) => (
+                <button
+                  key={chip.label}
+                  type="button"
+                  className={emptyChip}
+                  disabled={isRunning}
+                  onClick={() => fillSuggestion(chip.text)}
+                >
+                  {chip.label}
+                </button>
+              ))}
             </div>
           </div>
         )}

@@ -95,11 +95,10 @@ test.describe('ProjectPage', () => {
     await page.goto(`/projects/${projectId}`);
     await page.waitForSelector('[data-testid="sidebar"]');
     const sidebar = page.locator('[data-testid="sidebar"]');
-    await expect(sidebar.locator('a', { hasText: '总览' })).toBeVisible();
-    await expect(sidebar.locator('a', { hasText: '概念' })).toBeVisible();
-    await expect(sidebar.locator('a', { hasText: '角色' })).toBeVisible();
-    await expect(sidebar.locator('a', { hasText: '大纲' })).toBeVisible();
-    await expect(sidebar.locator('a', { hasText: '伏笔' })).toBeVisible();
+    // exact 匹配：'角色' 是 '角色关系' 的子串，非精确匹配会触发 strict mode violation
+    for (const view of ['总览', '概念', '角色', '大纲', '伏笔']) {
+      await expect(sidebar.getByRole('button', { name: view, exact: true })).toBeVisible();
+    }
   });
 
   test('shows workflow progress', async ({ page }) => {
@@ -116,7 +115,7 @@ test.describe('ProjectPage', () => {
     const sidebar = page.locator('[data-testid="sidebar"]');
     const views = ['概念', '世界观', '角色', '大纲', '场景', '伏笔'];
     for (const view of views) {
-      await sidebar.locator('a', { hasText: view }).click();
+      await sidebar.getByRole('button', { name: view, exact: true }).click();
       await page.waitForTimeout(200);
     }
     expect(errors).toEqual([]);
@@ -237,9 +236,10 @@ test.describe('Complete workflow', () => {
     // Verify chat panel is visible
     await expect(page.locator('[data-testid="chat-panel"]')).toBeVisible();
 
-    // Navigate to concept view
-    await page.click('text=故事概念');
-    await page.waitForTimeout(500);
+    // Navigate to concept view via sidebar（“故事概念”标题只在概念视图内存在，
+    // 直接 click text= 在总览页永远等不到该文本）
+    await page.locator('[data-testid="sidebar"]').locator('button', { hasText: '概念' }).click();
+    await page.waitForSelector('text=故事概念');
 
     // Navigate back to dashboard
     await page.click('text=总览');

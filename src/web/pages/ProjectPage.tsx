@@ -428,6 +428,20 @@ export default function ProjectPage() {
     if (!id) return;
     const es = new EventSource(`/api/projects/${id}/events`);
 
+    // 原生 EventSource 连接断开时自动重连（onerror 不 close 即保留默认重连）。
+    // 但该 SSE 端点不 emit id，断线窗口内的 file-changed/project-updated 无法重放——
+    // 首次 open 之后再次 open 即视为重连，全量回填项目与章节 + 刷新当前预览，
+    // 避免窗口断线期间 agent 写的文件让视图陈旧。
+    let opened = false;
+    es.onopen = () => {
+      if (!opened) { opened = true; return; }
+      refetchProject();
+      queryClient.invalidateQueries({ queryKey: ['project', id] });
+      queryClient.invalidateQueries({ queryKey: ['chapters', id] });
+      const cur = previewFileRef.current;
+      if (cur) readFileRef.current(cur).then((content) => { if (content) setPreviewContent(content); });
+    };
+
     es.addEventListener('project-updated', () => {
       refetchProject();
       queryClient.invalidateQueries({ queryKey: ['project', id] });

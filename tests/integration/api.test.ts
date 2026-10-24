@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import app from '../../src/api-app';
 import { ensureDbReady } from '../../src/db/drizzle';
@@ -36,6 +37,72 @@ describe('API Integration', () => {
     const data = await res.json();
     expect(data.project).toBeDefined();
     expect(data.project.title).toBe('Test Novel');
+  });
+
+  it('POST /api/projects defaults path to ~/novels/<拼音 slug> when omitted', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const ts = Date.now();
+      const res = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: `测试${ts}`, genre: 'general' }),
+      });
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      // 中文标题转无调拼音（测试 → ceshi），非字母数字折叠。
+      expect(data.project.path).toBe(path.join(home, 'novels', `ceshi${ts}`));
+      expect(fs.existsSync(data.project.path)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/projects expands ~ prefix in explicit path', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const res = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Tilde Test', genre: 'general', path: '~/my-novel-dir' }),
+      });
+      expect(res.ok).toBe(true);
+      const data = await res.json();
+      expect(data.project.path).toBe(path.join(home, 'my-novel-dir'));
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('POST /api/projects dedupes default dir for same title', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'on-home-'));
+    vi.stubEnv('HOME', home);
+    try {
+      const first = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '同名小说', genre: 'general' }),
+      });
+      expect(first.ok).toBe(true);
+      const second = await app.request('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '同名小说', genre: 'general' }),
+      });
+      expect(second.ok).toBe(true);
+      const p1 = (await first.json()).project;
+      const p2 = (await second.json()).project;
+      expect(p1.path).toBe(path.join(home, 'novels', 'tongmingxiaoshuo'));
+      // 同名 → 追加序号，避免 409 拦截
+      expect(p2.path).toBe(path.join(home, 'novels', 'tongmingxiaoshuo-2'));
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('POST /api/projects with intent writes .novel/intent.md', async () => {

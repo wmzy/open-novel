@@ -43,7 +43,21 @@ function WorkflowProgress({ currentStage, onStageClick }: Props) {
     <div data-testid="workflow-progress">
       <div className={container}>
         {STAGES.map((s, i) => (
-          <div key={s.id} className={`${step} ${i < currentIdx ? stepCompleted : i === currentIdx ? stepActive : ''}`} onClick={() => onStageClick(s.viewId)} />
+          <div
+            key={s.id}
+            className={`${step} ${i < currentIdx ? stepCompleted : i === currentIdx ? stepActive : ''}`}
+            role="button"
+            tabIndex={0}
+            aria-label={`切换到${s.label}阶段`}
+            title={`${s.label}${i < currentIdx ? '（已完成）' : i === currentIdx ? '（当前）' : ''}`}
+            onClick={() => onStageClick(s.viewId)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onStageClick(s.viewId);
+              }
+            }}
+          />
         ))}
       </div>
       <div className={labels}>

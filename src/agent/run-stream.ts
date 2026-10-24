@@ -2,6 +2,7 @@ import { and, eq, gt, asc } from 'drizzle-orm';
 import { db } from '../db/drizzle';
 import { runEvents, messages } from '../db/schema';
 import { generateId } from '../utils/id';
+import { logger } from '../api/middleware/logger';
 
 /** 与窗口事件同构的记录。 */
 export interface RunEventRecord {
@@ -176,18 +177,42 @@ export class RunStream {
     this.window = [];
   }
 
+  /** 连续落盘失败次数（成功一次即清零）。两次失败视为持久性故障，停止自动重试。 */
+  private flushFailures = 0;
+
   /** 落盘缓冲的内部实现。 */
   private async doFlush(): Promise<void> {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-    const buf = this.pending;
-    if (buf.length === 0) return;
-    this.pending = [];
+    const batch = this.pending.slice();
+    if (batch.length === 0) return;
+
     try {
       await db.insert(runEvents).values(
-        buf.map((e) => ({ id: generateId('rev_'), runId: this.runId, seq: e.seq, type: e.type, data: e.data })),
-      );
+        batch.map((e) => ({ id: generateId('rev_'), runId: this.runId, seq: e.seq, type: e.type, data: e.data })),
+      ).onConflictDoNothing();
+      // 只移除本批已写入的 seq；落盘 await 期间新 push 的事件保留待下次 flush，
+      // 避免并发 push 时误删尚未落盘的新事件。
+      const written = new Set(batch.map((e) => e.seq));
+      this.pending = this.pending.filter((e) => !written.has(e.seq));
+      this.flushFailures = 0;
     } catch (err) {
-      console.error('[run-stream] flush failed for run', this.runId, err);
+      // 缓冲保留（不回退进窗口仍保留在 pending），供下次 flush/close 兜底重试。
+      // 此前实现先 this.pending = [] 再 insert，失败即永久丢事件。
+      this.flushFailures++;
+      logger.warn(
+        {
+          runId: this.runId,
+          pending: this.pending.length,
+          failures: this.flushFailures,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'run-stream flush failed; buffer retained for retry',
+      );
+      // 重试一次：短延迟后再次落盘。close() 的 doFlush 仍会兜底第三次尝试。
+      if (this.flushFailures === 1) {
+        this.timer = setTimeout(() => { this.doFlush().catch(() => {}); }, FLUSH_INTERVAL_MS);
+        this.timer.unref?.();
+      }
     }
   }
 }

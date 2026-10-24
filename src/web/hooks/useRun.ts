@@ -64,6 +64,9 @@ export function useRun(conversationId?: string) {
   const [runtimeUsage, setRuntimeUsage] = useState<{ used: number; size: number; costUsd?: number } | null>(null);
   const [availableCommands, setAvailableCommands] = useState<AgentCommand[]>([]);
   const [pendingAsk, setPendingAsk] = useState<AskPrompt | null>(null);
+  // 活跃 run 数量：曾是 ref 派生值，读 ref 不触发重渲染——并行 run 场景下
+  // 其中一个结束时无 state 变化，ChatPanel 的「(N active)」徽标显示过期值。改真实 state。
+  const [activeRunCount, setActiveRunCount] = useState(0);
   const activeRunsRef = useRef(new Set<string>());
   const abortControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef<string | null>(conversationId || null);
@@ -78,6 +81,11 @@ export function useRun(conversationId?: string) {
   // 刷新桥接模式：conversation 流先把活跃 run 的 delta 累计成占位 assistant 消息，
   // run 结束后后端又推固化的完整消息——内容一致时合并而非追加（避免重复显示）。
   const bridgePlaceholderRef = useRef(false);
+  // 流式 delta 合并缓冲 + rAF 句柄。曾是渲染体内的 let 变量：conversation 流 effect
+  // 与 sendMessage 的 SSE 循环各自捕获不同渲染副本，交错时 delta 丢失。改 ref 统一持有。
+  const pendingTextDeltaRef = useRef('');
+  const pendingThinkingDeltaRef = useRef('');
+  const rafIdRef = useRef<number | null>(null);
 
   // mount/刷新时连 conversation 流——一次性排空历史 messages + 活跃 run 事件。
   // 刷新后自动追回错过的响应内容，无需轮询。
@@ -244,6 +252,7 @@ export function useRun(conversationId?: string) {
 
       const { runId, conversationId: returnedConvId } = await res.json();
       activeRunsRef.current.add(runId);
+      setActiveRunCount(activeRunsRef.current.size);
       if (returnedConvId) conversationIdRef.current = returnedConvId;
 
       // Add assistant message placeholder（runId 挂在消息上，失败时供重试端点使用）
@@ -410,21 +419,16 @@ export function useRun(conversationId?: string) {
     }
   }, []);
 
-  // Batch text_delta updates to reduce re-renders
-  let pendingTextDelta = '';
-  let pendingThinkingDelta = '';
-  let rafId: number | null = null;
-
   function flushDeltas() {
-    if (!pendingTextDelta && !pendingThinkingDelta) return;
+    const text = pendingTextDeltaRef.current;
+    const thinking = pendingThinkingDeltaRef.current;
+    if (!text && !thinking) return;
 
-    // 同步捕获并重置：原先把 pendingTextDelta='' 写在 setMessages 的 updater 里（延迟执行），
-    // 与新到达的 delta 竞态——updater 未跑时新 delta 追加到同一 pending，导致错位合并。
-    const text = pendingTextDelta;
-    const thinking = pendingThinkingDelta;
-    pendingTextDelta = '';
-    pendingThinkingDelta = '';
-    rafId = null;
+    // 同步捕获并重置：不写在 setMessages 的 updater 里（延迟执行）——
+    // updater 未跑时新 delta 追加到同一缓冲，导致错位合并。
+    pendingTextDeltaRef.current = '';
+    pendingThinkingDeltaRef.current = '';
+    rafIdRef.current = null;
 
     setMessages((prev) => {
       const updated = [...prev];
@@ -472,21 +476,20 @@ export function useRun(conversationId?: string) {
 
     // Handle text/thinking deltas with batching
     if (type === 'text_delta') {
-      pendingTextDelta += String(event.delta || '');
-      if (!rafId) rafId = requestAnimationFrame(flushDeltas);
+      pendingTextDeltaRef.current += String(event.delta || '');
+      if (rafIdRef.current === null) rafIdRef.current = requestAnimationFrame(flushDeltas);
       return;
     }
 
     if (type === 'thinking_delta') {
-      const delta = String(event.delta || '');
-      pendingThinkingDelta += delta;
-      if (!rafId) rafId = requestAnimationFrame(flushDeltas);
+      pendingThinkingDeltaRef.current += String(event.delta || '');
+      if (rafIdRef.current === null) rafIdRef.current = requestAnimationFrame(flushDeltas);
       return;
     }
 
     // Flush any pending deltas before other event types
-    if (rafId) {
-      cancelAnimationFrame(rafId);
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
       flushDeltas();
     }
 
@@ -601,15 +604,16 @@ export function useRun(conversationId?: string) {
     // 流结束时强制 flush：最后一批经 rAF 排队但尚未触发的文本/thinking delta，
     // 若不在此处 flush 会丢失——实时视图渲染 events[]（非空时忽略 content），
     // 而后端持久化完整，故表现为「刷新后才看到完整消息」。
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
     }
     flushDeltas();
 
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     if (runId) activeRunsRef.current.delete(runId);
+    setActiveRunCount(activeRunsRef.current.size);
     if (activeRunsRef.current.size === 0) {
       setIsRunning(false);
       setStatus('');
@@ -660,6 +664,7 @@ export function useRun(conversationId?: string) {
       catch { /* ignore */ }
     }
     activeRunsRef.current.clear();
+    setActiveRunCount(0);
     setIsRunning(false);
     setStatus('');
     setContextSize(null);
@@ -697,7 +702,7 @@ export function useRun(conversationId?: string) {
     availableCommands,
     pendingAsk,
     resolveAsk,
-    activeRunCount: activeRunsRef.current.size,
+    activeRunCount,
     sendMessage,
     cancel,
     conversationId: conversationIdRef.current,

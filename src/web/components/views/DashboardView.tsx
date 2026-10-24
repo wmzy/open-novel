@@ -183,6 +183,24 @@ const warnCard = css`
   text-align: center;
 `;
 
+/** 新项目欢迎卡：引导完成第一步。 */
+const welcomeCard = css`
+  background: color-mix(in srgb, var(--haze-color-primary) 6%, var(--haze-color-bg));
+  border: 1px solid var(--haze-color-primary);
+  border-radius: 8px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 2rem;
+  font-size: 0.85rem;
+  color: var(--haze-color-text-secondary);
+  line-height: 1.6;
+`;
+
+/** 欢迎卡步骤列表。 */
+const welcomeSteps = css`
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+`;
+
 interface Props {
   projectId: string;
 }
@@ -260,6 +278,8 @@ export default function DashboardView({ projectId }: Props) {
   const progress = Math.min(100, Math.round((totalWords / targetWords) * 100));
   const currentStageIdx = STAGES.findIndex((s) => s.id === project?.currentStage);
   const stageLabel = currentStageIdx >= 0 ? STAGES[currentStageIdx].label : project?.currentStage || '-';
+  // 新项目（概念阶段且无任何章节）：显示欢迎引导卡，指引入门第一步。
+  const isFreshProject = project?.currentStage === 'concept' && (chapters?.length ?? 0) === 0 && totalWords === 0;
   // 样章门：写作阶段需至少 3 个有效章节。口径与服务端一致（wordCount ≥ 100）
   const effectiveChapters = (chapters || []).filter((ch: { wordCount?: number }) => (ch.wordCount || 0) >= 100).length;
   const sampleGateIncomplete = project?.currentStage === 'writing' && effectiveChapters < 3;
@@ -269,6 +289,17 @@ export default function DashboardView({ projectId }: Props) {
   return (
     <div>
       <h3>总览</h3>
+
+      {isFreshProject && (
+        <div className={welcomeCard}>
+          <b>开始你的第一部小说</b>
+          <ol className={welcomeSteps}>
+            <li>在下方对话框描述你的故事灵感，或点击一条示例提示；</li>
+            <li>AI 将按「概念 → 世界观 → 角色 → 大纲 → 场景 → 样章 → 写作」逐阶段推进，每个阶段的产出会出现在左侧文档中；</li>
+            <li>随时在对话中提出修改意见，不满意可回滚到任意快照。</li>
+          </ol>
+        </div>
+      )}
 
       <div className={heroCard}>
         <div className={heroHead}>

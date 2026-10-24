@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { css } from '@linaria/core';
+import { toast } from 'sonner';
 import { pageContainer, pageTitle, card, input } from '@/styles/shared';
 import NavHeader from '@/web/components/NavHeader';
 
@@ -13,6 +14,14 @@ const label = css`
   font-size: 0.875rem;
   font-weight: 500;
   margin-bottom: 0.25rem;
+`;
+
+const formHint = css`
+  display: block;
+  font-size: 0.72rem;
+  color: var(--haze-color-text-secondary);
+  margin-top: 0.35rem;
+  line-height: 1.4;
 `;
 
 /* 设置页面根布局 */
@@ -62,15 +71,21 @@ export default function SettingsPage() {
 
   const saveSettings = useMutation({
     mutationFn: async (body: Record<string, string>) => {
-      await fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      toast.success('设置已保存');
+    },
+    onError: () => toast.error('保存失败，请重试'),
   });
 
   const [preferredAgent, setPreferredAgent] = useState('');
 
   useEffect(() => {
-    if (settings?.preferred_agent) setPreferredAgent(settings.preferred_agent);
+    // 同步后端值（含清空回退到「选择...」的情况；旧逻辑 if(settings?.preferred_agent) 无法回退为空）。
+    setPreferredAgent(settings?.preferred_agent ?? '');
   }, [settings]);
 
   return (
@@ -87,6 +102,7 @@ export default function SettingsPage() {
               <option key={a.id} value={a.id} disabled={!a.available}>{a.name} {!a.available ? '(未安装)' : ''}</option>
             ))}
           </select>
+          <span className={formHint}>默认 agent：未在会话面板手动选择时生效（手动选择会覆盖此项）。</span>
         </div>
         <h3 className={agentSectionTitle}>可用 Agent</h3>
         {agents?.map((a: { id: string; name: string; available: boolean; version?: string; installUrl?: string }) => (
