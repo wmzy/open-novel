@@ -220,10 +220,10 @@ export default function HelpPage() {
               <h2 className={sectionTitle}>快速开始</h2>
               <div className={sectionBody}>
                 <p className={paragraph}>
-                  Open Novel 通过调用本机 AI 编码 agent 完成从立意到成稿的全流程创作。开始前请确认前置条件：
+                  Open Novel 内置 Pi Agent SDK，通过你配置的模型 API 完成从立意到成稿的全流程创作。开始前请确认前置条件：
                 </p>
                 <ul className={ul}>
-                  <li>本机已安装 <code>claude</code>、<code>opencode</code> 或 <code>omp</code> 之一，并位于 PATH 中</li>
+                  <li>在「设置 → 内置 Pi 模型」填写 provider、模型与 API Key（订阅用户可填本地反代地址）</li>
                   <li>启动开发服务器：<code>npm run dev</code>（默认端口 3006）</li>
                 </ul>
                 <p className={paragraph}>创建第一个项目：</p>
@@ -540,7 +540,7 @@ export default function HelpPage() {
               <div className={sectionBody}>
                 <p className={paragraph}>进入写作阶段后，通过右侧聊天面板驱动 AI 创作正文：</p>
                 <ol className={ol}>
-                  <li>在面板顶部选择 Agent（<code>claude</code> / <code>opencode</code> / <code>omp</code>，自动选首个可用者）</li>
+                  <li>在面板顶部选择模型（默认使用设置中的模型）</li>
                   <li>确认阶段已切到「写作」、技能已匹配题材</li>
                   <li>在输入框填写指令，例如「请写第 N 章正文，约 4000 字」</li>
                   <li>发送后，AI 的流式输出实时显示在面板中，完成后正文写入对应章节文件</li>
@@ -631,7 +631,7 @@ export default function HelpPage() {
               <div className={sectionBody}>
                 <h3 className={h3}>AI 写作中途卡住 / 超时？</h3>
                 <p className={paragraph}>
-                  Agent 子进程默认超时 30 分钟（<code>AGENT_TIMEOUT_MS</code>）。单章通常在几分钟内完成；若长时间无输出，检查本机 agent 进程与网络，再重试。
+                  内置 Pi 运行默认超时 30 分钟（<code>AGENT_TIMEOUT_MS</code>）。单章通常在几分钟内完成；若长时间无输出，检查模型 API/反代是否可达，再重试。
                 </p>
                 <h3 className={h3}>章节字数与预期偏差较大？</h3>
                 <p className={paragraph}>

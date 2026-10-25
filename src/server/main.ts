@@ -8,9 +8,7 @@ import app from '../api-app';
 import { ensureDbReady, closeDb } from '../db/drizzle';
 import { startPeriodicBackup } from '../db/backup';
 import { initPlugins } from '../plugins/registry';
-import { deploySubagents } from '../agent/subagents';
 import { reconcileStaleRuns } from '../agent/run';
-import { killOrphanAgentChildren, killAllAgentChildren } from '../agent/child-registry';
 import { config } from '../config';
 import { isLoopbackHost } from '../api/middleware/auth';
 import { nodeRequestToFetchRequest, writeFetchResponse } from './request-adapter';
@@ -64,16 +62,11 @@ if (config.auth.token) {
 
 await ensureDbReady();
 initPlugins();
-deploySubagents();
 
 // 启动对账：上次进程遗留的 queued/running run 置为 failed（幂等）。
 // 放在 ensureDbReady 之后，保证 active-run/retry 口径一致。
 const staleRuns = await reconcileStaleRuns();
 if (staleRuns > 0) logger.info({ staleRuns }, 'reconciled stale runs to failed');
-
-// 孤儿 agent 子进程对账：崩溃遗留的 agent CLI 继续写盘会击穿项目串行锁。
-const orphans = await killOrphanAgentChildren();
-if (orphans > 0) logger.info({ orphans }, 'killed orphan agent children');
 
 // Periodic DB backup — protects against crash-induced WAL corruption.
 // Backups go to ./data/backups/, pruned to the 10 most recent.
@@ -115,9 +108,6 @@ async function gracefulShutdown(signal: string) {
   if (shuttingDown) return; // Second signal forces immediate exit.
   shuttingDown = true;
   logger.info({ signal }, 'shutting down…');
-
-  // 0. 终止在跑的 agent 子进程——本实例退出后它们会变成孤儿继续写盘。
-  killAllAgentChildren();
 
   // 1. Stop accepting new connections.
   server.close();

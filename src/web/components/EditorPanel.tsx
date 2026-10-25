@@ -101,7 +101,7 @@ interface Props {
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 type EditorMode = 'edit' | 'preview' | 'rewrite';
 
-export default function EditorPanel({ projectId, chapterNum, agentId = 'claude', skillId = 'novel' }: Props) {
+export default function EditorPanel({ projectId, chapterNum, agentId = 'pi', skillId = 'novel' }: Props) {
   const { data: chapter } = useQuery({
     queryKey: ['chapter-content', projectId, chapterNum],
     queryFn: async () => {

@@ -8,8 +8,7 @@ import { db } from '../../db/drizzle';
 import { projects } from '../../db/schema';
 import { getActiveRunForProject } from '../../agent/run';
 import { createSnapshotSafe } from '../../agent/snapshot';
-import { getAgentDef } from '../../agent/registry';
-import { resolveAgentExecutable } from '../../agent/executables';
+
 import { config } from '../../config';
 import { resyncChaptersFromDisk } from './chapters';
 import { parseChapterNumber, stripChapterMarker } from '../../shared/chapter-names';
@@ -254,22 +253,9 @@ interface BackfillResult {
 async function startSummaryBackfill(
   projectId: string,
   projectGenre: string | null,
-  preferredAgentId?: string,
 ): Promise<BackfillResult> {
   try {
-    const order = ['claude', 'opencode', 'omp'];
-    const candidateIds = preferredAgentId ? [preferredAgentId, ...order] : order;
-    let agentId = '';
-    for (const id of candidateIds) {
-      const def = getAgentDef(id);
-      if (def && resolveAgentExecutable(def)) {
-        agentId = id;
-        break;
-      }
-    }
-    if (!agentId) {
-      return { started: false, reason: 'no-agent', message: '本机没有可用的 CLI agent，已跳过自动补全' };
-    }
+    const agentId = 'pi';
 
     const host = config.host === '0.0.0.0' || config.host === '::' ? '127.0.0.1' : config.host;
     const hostForUrl = host.includes(':') ? `[${host}]` : host;
@@ -351,7 +337,6 @@ manuscriptRouter.post('/:id/import-manuscript/commit', async (c) => {
   const finalized = body.finalized !== false;
   const overwrite = body.overwrite === true;
   const wantBackfill = body.backfill === true;
-  const preferredAgentId = typeof body.agentId === 'string' && body.agentId.trim() ? body.agentId.trim() : undefined;
 
   // 二次锁检查：JSON 校验期间可能有新 run 启动
   const lockedAgain = rejectIfRunActive(c, projectId);
@@ -534,7 +519,7 @@ manuscriptRouter.post('/:id/import-manuscript/commit', async (c) => {
 
   // 摘要/角色状态补全：显式请求时启动真正的 enrich run（不阻塞导入响应）
   const backfill = wantBackfill
-    ? await startSummaryBackfill(projectId, project.genre, preferredAgentId)
+    ? await startSummaryBackfill(projectId, project.genre)
     : undefined;
 
   return c.json({

@@ -5,13 +5,21 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { chapters, projects } from '../../db/schema';
 import { generateId } from '../../utils/id';
-import { resolveNovelDir } from '../../shared/project-dir';
+import { resolveNovelDir, resolveProjectDir } from '../../shared/project-dir';
 import { parseChapterNumber, stripChapterMarker } from '../../shared/chapter-names';
 import { getActiveRunForProject } from '../../agent/run';
 import { scheduleSemanticIndexing } from '../../agent/semantic-index';
 import { parseForeshadowFile, serializeForeshadows } from '../../shared/foreshadow';
 import { readChapterStatuses, setChapterStatus, removeChapterStatus, shiftChapterStatuses } from '../../shared/chapter-status';
 import { createSnapshot, isReviewOpInFlight } from '../../agent/snapshot';
+import {
+  readCanon,
+  readChapterContract,
+  recordContractOverride,
+  removeChapterContract,
+  shiftChapterContracts,
+  validateChapterContract,
+} from '../../shared/canon';
 
 /** 章节状态枚举：草稿 / 审阅中 / 已修订 / 已定稿。 */
 export const CHAPTER_STATUSES = ['draft', 'review', 'revised', 'finalized'] as const;
@@ -436,6 +444,31 @@ chaptersRouter.patch('/:num', async (c) => {
   if (typeof body.status === 'string') {
     // 校验 status 取值，非法值忽略
     if ((CHAPTER_STATUSES as readonly string[]).includes(body.status)) {
+      // 合同门禁：定稿前跑确定性校验；blocker 只能通过 force 旁路（留痕）。
+      if (body.status === 'finalized') {
+        try {
+          const projectDir = await resolveProjectDir(projectId);
+          const contract = await readChapterContract(projectDir, num);
+          if (contract) {
+            const novelDir = await resolveNovelDir(projectId);
+            const content = await readChapterContent(novelDir, num);
+            const canon = await readCanon(projectDir);
+            const findings = validateChapterContract({ content, contract, canon });
+            const blockers = findings.filter((f) => f.severity === 'blocker');
+            if (blockers.length > 0) {
+              if (body.force !== true) {
+                return c.json({
+                  error: 'contract-gate',
+                  message: `第${num}章存在 ${blockers.length} 条合同阻断项；修正后重试，或携带 force: true 强制定稿（会留痕）`,
+                  findings,
+                  blockers: blockers.length,
+                }, 409);
+              }
+              await recordContractOverride(projectDir, num, findings, typeof body.forceReason === 'string' ? body.forceReason : undefined);
+            }
+          }
+        } catch { /* 合同文件损坏/目录不可用时不阻断定稿 */ }
+      }
       dbUpdates.status = body.status;
       statusPersisted = body.status;
     }
@@ -564,6 +597,13 @@ chaptersRouter.delete('/:num', async (c) => {
         await removeChapterStatus(novelDir, num);
       }
     } catch { /* 状态文件缺失/损坏，忽略 */ }
+
+    // 章节合同同步：删除/重编号时不能留下孤儿合同。
+    try {
+      const projectDir = await resolveProjectDir(projectId);
+      if (renumber) await shiftChapterContracts(projectDir, num);
+      else await removeChapterContract(projectDir, num);
+    } catch { /* 合同目录不可用，忽略 */ }
 
     // state.json.lastUpdatedChapter 一致性：删除章（含重编号平移）后章号语义已变。
     // 旧缺陷：重编号只平移伏笔引用，lastUpdatedChapter 仍指向移位前的章号。

@@ -24,11 +24,11 @@ vi.mock('../../../src/db/drizzle', () => ({
 
 const META = { projectId: 'p1', agentId: 'a1', skillId: 's1', stage: 'draft', conversationId: 'c1' };
 
-/** Attach a minimal stub child onto a run, returning the kill spy. */
-function stubChild(run: RunSession, killed: boolean) {
-  const kill = vi.fn();
-  run.child = { killed, kill } as unknown as NonNullable<RunSession['child']>;
-  return kill;
+/** Attach a minimal abort hook onto a run, returning the abort spy. */
+function stubAbort(run: RunSession) {
+  const abort = vi.fn();
+  run.abort = abort;
+  return abort;
 }
 
 describe('createRun', () => {
@@ -38,7 +38,7 @@ describe('createRun', () => {
     expect(run.stream).toBeDefined();
     expect(run.stream.currentSeq).toBe(1);
     expect(run.stream.isClosed).toBe(false);
-    expect(run.child).toBeNull();
+    expect(run.abort).toBeNull();
     expect(run.error).toBeNull();
     expect(run.cancelRequested).toBe(false);
     expect(run.createdAt).toBeTypeOf('number');
@@ -146,38 +146,35 @@ describe('finishRun', () => {
 });
 
 describe('cancelRun', () => {
-  it('finishes as canceled when there is no child', () => {
+  it('finishes as canceled when there is no abort hook', () => {
     const run = createRun(META);
-    expect(run.child).toBeNull();
+    expect(run.abort).toBeNull();
     cancelRun(run);
     expect(run.cancelRequested).toBe(true);
     expect(run.status).toBe('canceled');
   });
 
-  it('is a no-op on an already-terminal run: no SIGTERM, no status change', () => {
+  it('is a no-op on an already-terminal run: no abort, no status change', () => {
     const run = createRun(META);
-    const kill = stubChild(run, false);
+    const abort = stubAbort(run);
     finishRun(run, 'succeeded');
     cancelRun(run);
     expect(run.status).toBe('succeeded');
-    expect(kill).not.toHaveBeenCalled();
+    expect(abort).not.toHaveBeenCalled();
   });
 
-  it('marks cancelRequested, sends SIGTERM, and leaves status non-terminal when child exists', () => {
+  it('marks cancelRequested, calls abort, and leaves status non-terminal while Pi settles', () => {
     const run = createRun(META);
-    const kill = stubChild(run, false);
+    const abort = stubAbort(run);
     cancelRun(run);
     expect(run.cancelRequested).toBe(true);
-    expect(kill).toHaveBeenCalledTimes(1);
-    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(abort).toHaveBeenCalledTimes(1);
     expect(run.status).toBe('queued');
   });
 
-  it('falls back to finishRun(canceled) when the child is already killed', () => {
+  it('falls back to finishRun(canceled) without an abort hook', () => {
     const run = createRun(META);
-    const kill = stubChild(run, true);
     cancelRun(run);
-    expect(kill).not.toHaveBeenCalled();
     expect(run.status).toBe('canceled');
   });
 });

@@ -66,10 +66,10 @@ test.describe('SettingsPage', () => {
     expect(errors).toEqual([]);
   });
 
-  test('shows agent selection', async ({ page }) => {
+  test('shows built-in Pi model configuration', async ({ page }) => {
     await page.goto('/settings');
-    await page.waitForSelector('text=首选 Agent');
-    await expect(page.locator('select')).toBeVisible();
+    await page.waitForSelector('text=内置 Pi 模型（BYOK）');
+    await expect(page.locator('select').first()).toBeVisible();
   });
 });
 
@@ -176,7 +176,7 @@ test.describe('API endpoints', () => {
 
   test('update settings', async ({ request }) => {
     const res = await request.patch('/api/settings', {
-      data: { preferred_agent: 'claude' },
+      data: { pi_thinking_level: 'low' },
     });
     expect(res.ok()).toBeTruthy();
   });

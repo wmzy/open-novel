@@ -7,7 +7,6 @@ import { ensureDbReady } from './db/drizzle';
 import { initPlugins } from './plugins/registry';
 import { onError } from './api/middleware/error-handler';
 import { reconcileStaleRuns } from './agent/run';
-import { killOrphanAgentChildren } from './agent/child-registry';
 import { config } from './config';
 import { requestLogger } from './api/middleware/logger';
 import { securityHeaders, rateLimit } from './api/middleware/security';
@@ -23,6 +22,8 @@ import conversationsRouter from './api/routes/conversations';
 import searchRouter from './api/routes/search';
 import exportRouter from './api/routes/export';
 import checkRouter from './api/routes/check';
+import canonRouter from './api/routes/canon';
+import contractsRouter from './api/routes/contracts';
 import rewriteRouter from './api/routes/rewrite';
 import namingRouter from './api/routes/naming';
 import renameRouter from './api/routes/rename';
@@ -62,8 +63,6 @@ app.use('/api/*', async (_c, next) => {
     // 启动对账：上次进程遗留的 queued/running run 置为 failed（幂等）。
     // 放在 dbReady 之后、首个请求处理之前，保证 active-run/retry 口径一致。
     void reconcileStaleRuns();
-    // 孤儿 agent 子进程对账：崩溃遗留的 agent CLI 继续写盘会击穿项目串行锁。
-    void killOrphanAgentChildren();
   }
   return next();
 });
@@ -105,6 +104,8 @@ app.route('/api/projects/:projectId/chapters', chaptersRouter);
 app.route('/api/projects/:projectId/search', searchRouter);
 app.route('/api/projects/:projectId/export', exportRouter);
 app.route('/api/projects/:projectId/check', checkRouter);
+app.route('/api/projects/:projectId/canon', canonRouter);
+app.route('/api/projects/:projectId/contracts', contractsRouter);
 app.route('/api/projects/:projectId/rewrite', rewriteRouter);
 app.route('/api/projects/:projectId/naming', namingRouter);
 app.route('/api/projects/:projectId/rename', renameRouter);

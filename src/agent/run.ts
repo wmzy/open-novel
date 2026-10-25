@@ -15,7 +15,8 @@ export interface RunSession {
   status: RunStatus;
   /** 统一事件流：push/subscribe/落盘/close 固化。取代原 events 窗口 + clients 集合 + eventStore。 */
   stream: RunStream;
-  child: ReturnType<typeof import('node:child_process').spawn> | null;
+  /** 内置 Pi 的取消钩子：调用 session.abort()，由 promise 结算后收尾。 */
+  abort: (() => void) | null;
   createdAt: number;
   updatedAt: number;
   error: string | null;
@@ -23,11 +24,10 @@ export interface RunSession {
   finished: Promise<void>;
   _finishResolve: () => void;
   /**
-   * 挂起的 ACP elicitation 请求。
+   * 挂起的交互提问（Pi ask 工具）。
    *
-   * key = askId，value = resolver。acp-bridge 的 elicitation/create handler
-   * registerAsk 注册后 await；前端回传时 runs.ts 的 POST /ask/:askId
-   * 调 resolveAsk 唤醒，handler 返回用户答案给 omp。
+   * key = askId，value = resolver。Pi 的 ask 工具调用 registerAsk 后 await；
+   * 前端回传时 runs.ts 的 POST /ask/:askId 调 resolveAsk 唤醒。
    */
   _pendingAsks: Map<string, (response: { action: 'accept' | 'cancel'; content?: unknown }) => void>;
   /** 每个挂起提问的自动取消定时器（askTimeoutMs 到期自动 cancel，防死锁）。 */
@@ -40,7 +40,7 @@ export interface RunSession {
   cancelReason: string | null;
   /**
    * ask 挂起/清空时的超时计时钩子（由 runs.ts launchAndTrack 注入）。
-   * 提问挂起期间 run 处于暂停等待状态（agent 子进程阻塞在 stdin/协议上），
+   * 提问挂起期间 run 处于暂停等待状态（Pi session 等待工具结果），
    * 超时计时应同步暂停，用户回答后恢复——避免用户长时间思考被误杀。
    */
   _pauseTimeout?: () => void;
@@ -62,7 +62,7 @@ export function createRun(meta: { projectId: string; agentId: string; skillId: s
     stage: meta.stage,
     status: 'queued',
     stream: new RunStream(id, meta.conversationId),
-    child: null,
+    abort: null,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     error: null,
@@ -145,11 +145,13 @@ export function finishRun(run: RunSession, status: RunStatus) {
 export function cancelRun(run: RunSession) {
   if (['succeeded', 'failed', 'canceled'].includes(run.status)) return;
   run.cancelRequested = true;
-  if (run.child && !run.child.killed) {
-    run.child.kill('SIGTERM');
-  } else {
-    finishRun(run, 'canceled');
+  if (run.abort) {
+    // 内置 Pi：abort 后由 run 的 promise 结算并走统一收尾；
+    // 这里不直接 finishRun，否则 SSE 会在最后一批事件落盘前关闭。
+    run.abort();
+    return;
   }
+  finishRun(run, 'canceled');
 }
 
 /**

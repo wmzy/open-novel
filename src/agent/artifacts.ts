@@ -146,7 +146,7 @@ export async function syncFilesToDb(projectId: string, paths: Set<string>, proje
     // 会把 .novel/retro/里程碑-chapter-50.md 等含数字的报告误同步为章节。
     const chapterNum = parseChapterNumber(path.basename(filePath));
     if (chapterNum === null) continue;
-    // Agent (e.g. claude code) writes with absolute paths since its cwd is the
+    // Agent (e.g. Pi) may write with absolute paths since its cwd is the
     // project dir; path.join would double the prefix. Use the path as-is when absolute.
     const fullPath = path.isAbsolute(filePath) ? filePath : path.join(projectDir, filePath);
 

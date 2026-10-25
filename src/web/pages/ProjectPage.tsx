@@ -29,6 +29,7 @@ const SceneView = lazy(() => import('@/web/components/views/SceneView'));
 const ForeshadowView = lazy(() => import('@/web/components/views/ForeshadowView'));
 const StoryArcView = lazy(() => import('@/web/components/views/StoryArcView'));
 const CharacterGraphView = lazy(() => import('@/web/components/views/CharacterGraphView'));
+const CanonView = lazy(() => import('@/web/components/views/CanonView'));
 const WuxiaView = lazy(() => import('@/web/components/views/WuxiaView'));
 const WritingView = lazy(() => import('@/web/components/views/WritingView'));
 
@@ -51,6 +52,7 @@ const RECONNECT_QUERY_FAMILIES = [
   'foreshadow-stats',
   'timeline',
   'character-graph',
+  'canon',
   'degraded-chapters',
   'state-characters',
 ] as const;
@@ -368,6 +370,7 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: {
   if (activeView === 'foreshadow') return <ForeshadowView projectId={projectId} />;
   if (activeView === 'story-arc') return <StoryArcView projectId={projectId} />;
   if (activeView === 'character-graph') return <CharacterGraphView projectId={projectId} />;
+  if (activeView === 'canon') return <CanonView projectId={projectId} />;
   if (activeView === 'wuxia') return <WuxiaView projectId={projectId} />;
   if (activeView === 'sample') return <WritingView projectId={projectId} onViewChange={onViewChange} variant="sample" />;
   if (activeView === 'writing') return <WritingView projectId={projectId} onViewChange={onViewChange} />;

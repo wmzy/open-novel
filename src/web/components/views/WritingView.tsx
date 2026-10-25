@@ -206,25 +206,40 @@ export default function WritingView({
   const queryClient = useQueryClient();
 
   /** 手动流转章节状态（草稿/审阅中/已修订/已定稿）。 */
-  const updateStatus = async (num: number, status: string) => {
+  const updateStatus = async (num: number, status: string, force = false) => {
     try {
       const res = await fetch(`/api/projects/${projectId}/chapters/${num}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, ...(force ? { force: true, forceReason: '用户界面确认' } : {}) }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({} as Record<string, unknown>));
+        if (!force && res.status === 409 && data.error === 'contract-gate') {
+          const findings = Array.isArray(data.findings) ? data.findings as Array<{ severity?: string; message?: string }> : [];
+          const detail = findings
+            .slice(0, 6)
+            .map((f) => `- ${f.severity === 'blocker' ? '阻断' : f.severity === 'major' ? '重要' : '提示'}：${f.message ?? ''}`)
+            .join('\n');
+          const ok = window.confirm(`${String(data.message ?? '章节合同未通过')}\n\n${detail}\n\n仍要强制定稿吗？强制定稿会留痕。`);
+          if (ok) {
+            await updateStatus(num, status, true);
+          }
+          return;
+        }
+        throw new Error(typeof data.message === 'string' ? data.message : `HTTP ${res.status}`);
+      }
       queryClient.invalidateQueries({ queryKey: ['chapters', projectId] });
       // 定稿只记录单章成熟度；与顶部「审阅」（批次合并 draft→main 定稿镜像）独立，
       // 提示用户两处都需操作，避免「标了定稿却以为已发布」
       if (status === 'finalized') {
-        toast.info('已标记为定稿（章节成熟度）', {
+        toast.info(force ? '已强制定稿（已留痕）' : '已标记为定稿（章节成熟度）', {
           description: '如需将改动同步到定稿镜像（main），请点击顶部「审阅」按钮合并',
         });
       }
-    } catch {
+    } catch (e) {
       // 状态更新失败：toast 提示（下拉值随查询缓存自动回滚）
-      toast.error('章节状态更新失败');
+      toast.error(e instanceof Error ? e.message : '章节状态更新失败');
     }
   };
   const { data: chapters } = useQuery<ChapterRow[]>({

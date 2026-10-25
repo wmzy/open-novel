@@ -22,6 +22,7 @@ import {
   type Foreshadow,
 } from '../shared/foreshadow';
 import { getSubagentGuidance } from './subagents';
+import { buildCanonContext, buildContractContext } from '../shared/canon';
 
 export interface ComposePromptOptions {
   message: string;
@@ -51,7 +52,7 @@ export interface ComposePromptOptions {
   /** Deepen 深化循环上下文：注入当前 stage 产出文件 + critique（Revise 轮），省去 agent Read 往返。 */
   deepenContext?: { round: number };
 
-  /** 当前 agent CLI ID（'claude' | 'omp' | 'opencode'）。用于注入 subagent 使用指导。 */
+  /** 当前 Agent ID（内置 Pi）。保留字段以兼容现有调用方。 */
   agentId?: string;
 
   /** 异常中断恢复：上一轮被中断，本轮用户输入"继续"。注入中断现场。 */
@@ -126,18 +127,18 @@ const DECISION_PROMPTS: Record<string, string> = {
 /** 规划阶段的完成/落盘指令（尾部）。采访式与自治式共用。 */
 const STAGE_TAIL: Record<string, string> = {
   concept: `
-概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept/ 目录——每个 ## 要素一个独立 .md 文件（如 concept/核心主题.md），同时创建 .novel/concept/index.md 索引文件（含要素标题表）。并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
+概念完成后（前提清晰、核心冲突明确、主要角色已定义），将结果保存到 .novel/concept/ 目录——每个 ## 要素一个独立 .md 文件（如 concept/核心主题.md），同时创建 .novel/concept/index.md 索引文件（含要素标题表）。并通过 open_novel_api 工具调用 PATCH /api/projects/{projectId}（body: { "currentStage": "world" }）将项目阶段更新为 "world"。`,
 
   world: `
-世界观完成后，保存到 .novel/world/ 目录——每个 ## 节一个独立 .md 文件（如 world/社会结构.md），同时创建 .novel/world/index.md 索引文件。并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
+世界观完成后，保存到 .novel/world/ 目录——每个 ## 节一个独立 .md 文件（如 world/社会结构.md），同时创建 .novel/world/index.md 索引文件。并通过 open_novel_api 工具调用 PATCH /api/projects/{projectId}（body: { "currentStage": "characters" }）将项目阶段更新为 "characters"。`,
 
   characters: `
 每个主要角色必须落出驱动力三角（外在目标 / 内在需求 / 核心缺陷）。
-角色档案完成后，保存到 .novel/characters/profiles.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "outline" }）将项目阶段更新为 "outline"。`,
+角色档案完成后，保存到 .novel/characters/profiles.md，并通过 open_novel_api 工具调用 PATCH /api/projects/{projectId}（body: { "currentStage": "outline" }）将项目阶段更新为 "outline"。`,
 
   outline: `
 
-**脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-brief。以生成的脚手架为起点并加以打磨。
+**脚手架提示**：你可以通过 open_novel_api 工具调用 POST /api/projects/{projectId}/generate-templates（或请用户手动调用），自动生成与项目 chapterCount 匹配的逐章大纲脚手架（幕、节拍、字数分配）。不落盘预览可用 GET /api/projects/{projectId}/templates/outline-brief。以生成的脚手架为起点并加以打磨。
 大纲完成后，保存到 .novel/outline/ 目录——每章一个独立文件 chapters/第N章.md，同时创建 .novel/outline/index.md 索引（含三幕结构 + 章节标题表）。同时生成 .novel/outline-meta.json，记录三幕分界与每章视点角色，格式如下：
 \`\`\`json
 {
@@ -179,15 +180,15 @@ actBreaks 为第一幕结束章号、第二幕结束章号；pov 为该章的视
   scenes: `
 确保主动场景（目标→冲突→灾难/转折）与被动场景（反应→困境→新决定）交替，避免连续同型。
 
-**脚手架提示**：你可以请用户调用（或自己通过 Bash/curl 调用）端点 POST /api/projects/{projectId}/generate-templates，自动生成与项目 chapterCount 匹配的逐章场景脚手架（主动 Scene / 被动 Sequel 配对）。不落盘预览可用 GET /api/projects/{projectId}/templates/scenes。以生成的脚手架为起点并加以打磨。
-场景表完成后，保存到 .novel/scenes.md，并通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "sample" }）将项目阶段更新为 "sample"。`,
+**脚手架提示**：你可以通过 open_novel_api 工具调用 POST /api/projects/{projectId}/generate-templates（或请用户手动调用），自动生成与项目 chapterCount 匹配的逐章场景脚手架（主动 Scene / 被动 Sequel 配对）。不落盘预览可用 GET /api/projects/{projectId}/templates/scenes。以生成的脚手架为起点并加以打磨。
+场景表完成后，保存到 .novel/scenes.md，并通过 open_novel_api 工具调用 PATCH /api/projects/{projectId}（body: { "currentStage": "sample" }）将项目阶段更新为 "sample"。`,
 
   sample: `
 **样章完成核验（落盘清单）**——3 章样章全部写完后逐项核对：
 - 3 个章节正文文件（.novel/chapters/第N章.md；章节号即真实章节号，不另设样章编号）
 - .novel/sample-feedback.md（3 篇样章复盘 + 末尾的大纲修订汇总）
 - 大纲修订（.novel/outline/ 相关章节卡片与承诺等级已按复盘更新）
-全部就绪后，通过调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
+全部就绪后，通过 open_novel_api 工具调用 PATCH /api/projects/{projectId}（body: { "currentStage": "writing" }）将项目阶段更新为 "writing"。`,
 };
 
 /** 自治协议（替代采访式，用于无人值守的夜间探索等场景）。结构与 INTERVIEW_PROTOCOL 平行。 */
@@ -325,18 +326,17 @@ const STAGE_INSTRUCTIONS: Record<string, string> = {
 **写章流程（职责分离）**：
 
 1. **你的核心职责是写正文**——专注产出高质量的章节散文，写完后保存到 .novel/chapters/ 目录。
-2. **正文写完后，委托 state-patcher SubAgent 完成状态更新**——告知它章节文件路径和章号，让它自行：
+2. **正文写完后，以 state-patcher 视角完成状态更新**（不要另起外部子进程，直接在当前会话内继续）：
    - 在 .novel/chapters/第N章.summary.md 生成本章语义摘要
    - 更新 .novel/character-states.md（角色位置/情绪/目标/关系变化）
    - 更新 .novel/progress.md（当前进度、最近章节摘要、下一步提示）
    - 更新 .novel/state.json（lastUpdatedChapter、timeline、activeForeshadows）
    - 更新 .novel/foreshadow.json（伏笔状态）
    - 更新 .novel/character-knowledge.json（POV 知情边界：已确认知道的事实写入 knows 并标注 learnedIn 章号；明确尚不知道的事写入 doesNotKnow。只记正文已确认的信息）
-3. **如果当前 Agent 不支持 SubAgent**（如 OpenCode），则你需要自行完成上述状态更新。参见下方 SubAgent 使用指导。
-4. **正文写作和状态更新不要混在一起**——先把正文写完保存，再做状态更新。避免写到一半停下来更新状态文件。
-5. **知情边界必须落盘**：无论是否委托 SubAgent，写完后都要确认「.novel/character-knowledge.json」已更新——POV 角色已确认知道的事实写入「knows」（尽量标注「learnedIn」章号），明确尚不知道的事写入「doesNotKnow」；某条事实在本章获知后，要从「doesNotKnow」移除并迁入「knows」。这是下一章 POV 越界检查的依据。
+3. **正文写作和状态更新不要混在一起**——先把正文写完保存，再做状态更新。避免写到一半停下来更新状态文件。
+4. **知情边界必须落盘**：写完后都要确认「.novel/character-knowledge.json」已更新——POV 角色已确认知道的事实写入「knows」（尽量标注「learnedIn」章号），明确尚不知道的事写入「doesNotKnow」；某条事实在本章获知后，要从「doesNotKnow」移除并迁入「knows」。这是下一章 POV 越界检查的依据。
 
-写完一章后，建议通过以下 API 自检质量：POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。
+写完一章后，建议通过 open_novel_api 调用 POST /api/projects/{projectId}/check/ai-patterns（body: {chapterNum: N}）检测 AI 味；如发现评分偏高，参照返回的 issues 逐条修改。
 ${WRITING_OUTPUT_PROTOCOL}`,
   sample: `**本阶段为自治写作阶段**：写 3 章样章检验声口与节奏，把发现的问题反馈回灌大纲。本章大纲与出场角色档案已注入上方上下文，无需再 Read。
 
@@ -351,7 +351,7 @@ ${WRITING_OUTPUT_PROTOCOL}`,
    - **节奏体感**：本章场景推进的松紧、断章钩子是否有效？
    - **世界观落地**：设定在正文中是否自然融入，有无与卡片冲突之处？
    - **大纲需修正点**：写作过程暴露出的大纲问题（节拍失效/动机牵强/信息顺序不当等）
-3. 委托 state-patcher SubAgent 更新章节摘要与状态文件（与写作阶段相同的职责分离；含 .novel/character-knowledge.json 的 POV 知情边界；不支持 SubAgent 时自行完成）
+3. 以 state-patcher 视角更新章节摘要与状态文件（与写作阶段相同的职责分离；含 .novel/character-knowledge.json 的 POV 知情边界），全部在当前会话内完成
 
 **3 章全部完成后（反馈回灌）**：
 1. 按三篇复盘中的「大纲需修正点」修订对应的大纲章节卡片与承诺等级
@@ -360,7 +360,7 @@ ${STAGE_TAIL.sample}
 ${WRITING_OUTPUT_PROTOCOL}`,
 
   drafting: `为小说撰写真正的散文正文。聚焦叙事流畅度、对话、描写与节奏，产出打磨过的草稿正文。${WRITING_OUTPUT_PROTOCOL}`,
-  revision: `审阅和改进已有内容。重点检查：(1) 剧情连贯性和逻辑漏洞；(2) 伏笔是否被遗忘（POST /api/projects/{projectId}/check/foreshadows）；(3) 人物行为是否偏离设定（POST /api/projects/{projectId}/check/ooc，body: {chapterNum: N}）；(4) 文笔AI味（POST /api/projects/{projectId}/check/ai-patterns，body: {chapterNum: N}）。根据检查报告逐章修订。`,
+  revision: `审阅和改进已有内容。重点检查：(1) 剧情连贯性和逻辑漏洞；(2) 伏笔是否被遗忘（open_novel_api POST /api/projects/{projectId}/check/foreshadows）；(3) 人物行为是否偏离设定（open_novel_api POST /api/projects/{projectId}/check/ooc，body: {chapterNum: N}）；(4) 文笔AI味（open_novel_api POST /api/projects/{projectId}/check/ai-patterns，body: {chapterNum: N}）。根据检查报告逐章修订。`,
   polish: `最终润色。聚焦行文质量——用词精准度、句式节奏、对话自然度、描写具体化。删除抽象情绪标签和万能形容词，用具体细节替代。${WRITING_OUTPUT_PROTOCOL}`,
 };
 
@@ -970,6 +970,10 @@ async function buildWritingContextLayers(
     sections.push(`### 本章大纲（第${currentChapter}章）\n${outline.content}\n\n${commitmentFraming(currentChapter, outline)}`);
   }
 
+  // 章节合同：POV/出场/beat/揭示/字数预算。存在时作为硬约束注入。
+  const contractLayer = await buildContractContext(projectDir, currentChapter);
+  if (contractLayer) sections.push(contractLayer);
+
   // 精排窗口（写作驱动精化：近章须达 beat 级，远粗是设计而非未完成）
   const state = await getStateTable(projectDir);
   const refineFrom = state.lastUpdatedChapter + 1;
@@ -1006,6 +1010,14 @@ async function buildWritingContextLayers(
     if (povKnowledge) sections.push(povKnowledge);
   }
 
+  // Canon 台账：结构化实体/事实/知情边界，补齐 Markdown 设定之外的可校验事实。
+  const canonLayer = await buildCanonContext(
+    projectDir,
+    currentChapter,
+    [cast.pov, ...cast.full, ...cast.brief],
+  );
+  if (canonLayer) sections.push(canonLayer);
+
   const rolling = await buildRollingSummaryContext(projectDir);
   if (rolling) {
     sections.push(`### 滚动摘要层（最近 3 章详摘，更早章节简摘）\n${rolling}`);
@@ -1039,17 +1051,20 @@ const TOOL_INSTRUCTIONS = `## Available Tools
 
 You have access to the following tools:
 
-- **Read** — Read a file. Use: { "file_path": "path/to/file" }
-- **Write** — Write a file (creates or overwrites). Use: { "file_path": "path/to/file", "content": "file content" }
-- **Edit** — Edit a file with find-and-replace. Use: { "file_path": "path/to/file", "old_string": "text to find", "new_string": "replacement text" }
-- **Bash** — Run a shell command. Use: { "command": "command to run" }
-- **提问工具 (ask)** — 向用户呈现可点击选项让其做选择。使用方式：调用 ask 工具，提供 questions 数组，每题含 id、question、options（3-5 个选项，每项含 label 和 description）。
+- **read** — Read a file. Use: { "path": "path/to/file", "offset": 0, "limit": 200 }
+- **write** — Write a file (creates or overwrites). Use: { "path": "path/to/file", "content": "file content" }
+- **edit** — Precise text replacement. Use: { "path": "path/to/file", "edits": [{ "oldText": "text to find", "newText": "replacement text" }] }
+- **grep** — Search file contents. Use: { "pattern": "regex", "path": "optional/dir", "glob": "*.md", "limit": 50 }
+- **find** — Find files by glob. Use: { "pattern": "**/*.md", "path": "optional/dir", "limit": 50 }
+- **ls** — List directory contents. Use: { "path": "optional/dir", "limit": 100 }
+- **open_novel_api** — Call the local open-novel HTTP API (project-scoped). Use: { "method": "PATCH", "path": "/api/projects/{projectId}", "body": { "currentStage": "world" } }
+- **ask** — Ask the user to choose between options. Use: { "questions": [{ "id": "q1", "question": "...", "options": [{ "label": "A", "description": "..." }] }] }
 
 ## Important Tool Usage Rules
 
-1. **Always Read before Write** — You MUST read a file before writing to it. The Write tool requires the file to have been read first. If you need to create a new file or overwrite an existing one, read it first (even if it's empty or a template).
-2. **Use Edit for partial changes** — When modifying specific parts of a file, use Edit instead of Write to preserve unchanged content.
-3. **Use 提问工具 (ask)** — When you need user input to proceed (e.g., choosing between approaches, clarifying requirements). NEVER present A/B/C options as text tables/lists in your reply expecting the user to type back a letter — always call the ask tool so the user gets clickable options.`;
+1. **Always read before write** — Read an existing file before overwriting it, and use edit for partial changes to preserve unchanged content.
+2. **Use edit, not write, for partial changes** — edits[].oldText must match exactly; multiple disjoint edits go in one call.
+3. **Use ask** — When you need user input to proceed (e.g., choosing between approaches, clarifying requirements). NEVER present A/B/C options as text tables/lists in your reply expecting the user to type back a letter — always call the ask tool so the user gets clickable options.`;
 
 const OUTPUT_FORMAT = `## Output Format
 
@@ -1085,6 +1100,7 @@ export async function composePrompt(options: ComposePromptOptions): Promise<stri
       const p = project[0];
       projectMeta = { targetWords: p.targetWords, chapterCount: p.chapterCount };
       projectContext = [
+        `Project ID: ${projectId}`,
         `Project: ${p.title}`,
         `Genre: ${p.genre}`,
         `Theme: ${p.theme || 'Not specified'}`,
@@ -1290,5 +1306,7 @@ ${questionRule}
     parts.push(`\n[上下文边界]\n- 当前用户请求是"这次要做什么"，请只按本轮请求行动。\n- 工作区与已确认的小说状态只用于判断"背景是什么"，不能替代本轮明确请求。\n- 历史对话只能辅助理解上下文，不要把上一轮的待办、工具意图或未完成动作当成本轮指令，除非用户在本轮明确延续。\n- 如果当前请求与历史看起来无关或冲突，以当前请求为准。\n\n## User Request\n${message}`);
   }
 
-  return parts.join('\n');
+  // 阶段指令里的 {projectId} 是给模型看的占位符；这里替换成真实 ID，
+  // 否则 open_novel_api 会收到字面量路径。
+  return parts.join('\n').replaceAll('{projectId}', projectId);
 }

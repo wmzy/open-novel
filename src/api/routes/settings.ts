@@ -6,10 +6,14 @@ import { generateId } from '../../utils/id';
 import {
   EMBEDDING_SECRET_SETTING_KEYS,
 } from '../../shared/semantic';
+import { PI_SECRET_SETTING_KEYS } from '../../agent/pi/config';
 
 const settingsRouter = new Hono();
 
-const SECRET_KEYS = new Set<string>(EMBEDDING_SECRET_SETTING_KEYS);
+const SECRET_KEYS = new Set<string>([
+  ...EMBEDDING_SECRET_SETTING_KEYS,
+  ...PI_SECRET_SETTING_KEYS,
+]);
 
 /**
  * GET /api/settings
@@ -20,15 +24,18 @@ const SECRET_KEYS = new Set<string>(EMBEDDING_SECRET_SETTING_KEYS);
 settingsRouter.get('/', async (c) => {
   const all = await db.select().from(userSettings);
   const settings: Record<string, string> = {};
-  let apiKeySet = false;
+  let embeddingKeySet = false;
+  let piKeySet = false;
   for (const s of all) {
     if (SECRET_KEYS.has(s.key)) {
-      apiKeySet = apiKeySet || s.value.trim().length > 0;
+      if (s.key === 'pi_api_key') piKeySet = piKeySet || s.value.trim().length > 0;
+      else embeddingKeySet = embeddingKeySet || s.value.trim().length > 0;
       continue;
     }
     settings[s.key] = s.value;
   }
-  settings.embedding_apiKeySet = apiKeySet ? 'true' : 'false';
+  settings.embedding_apiKeySet = embeddingKeySet ? 'true' : 'false';
+  settings.pi_apiKeySet = piKeySet ? 'true' : 'false';
   return c.json({ settings });
 });
 

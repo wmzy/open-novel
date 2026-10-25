@@ -2,11 +2,7 @@ import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { createRun, emitEvent, finishRun, cancelRun, getActiveRunForProject } from '../../agent/run';
 import { composePrompt } from '../../agent/prompt-composer';
-import { getAgentDef } from '../../agent/registry';
-import { detectAgents } from '../../agent/detection';
-import { launchAgent } from '../../agent/launch';
-import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
-import { runAcpTurn, isAcpFailure } from '../../agent/acp-bridge';
+import { startPiAgent } from '../../agent/pi/runtime';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { ensureContextArtifacts } from '../../agent/context-manager';
 import { createSnapshot } from '../../agent/snapshot';
@@ -14,7 +10,7 @@ import { resolveProjectDir } from '../../shared/project-dir';
 import { config } from '../../config';
 import { db } from '../../db/drizzle';
 import { runs as runsTable } from '../../db/schema';
-import { sanitizeStderr, transformStreamEvents } from './runs';
+import { transformStreamEvents } from './runs';
 
 const rewriteRouter = new Hono();
 
@@ -50,14 +46,15 @@ rewriteRouter.post('/', async (c) => {
   if (!instruction || typeof instruction !== 'string' || instruction.trim().length < 1) {
     return c.json({ error: 'instruction is required' }, 400);
   }
-  if (!agentId) return c.json({ error: 'agentId is required' }, 400);
-
-  // 校验 agent 可用
-  const def = getAgentDef(agentId);
-  if (!def) return c.json({ error: 'Agent not found' }, 404);
-  const agents = await detectAgents();
-  const detected = agents.find((a) => a.id === agentId);
-  if (!detected?.available) return c.json({ error: 'Agent not available' }, 400);
+  const requestedAgentId = agentId?.trim() || 'pi';
+  const LEGACY_AGENT_ALIASES = new Set(['claude', 'opencode', 'omp']);
+  if (requestedAgentId !== 'pi' && !LEGACY_AGENT_ALIASES.has(requestedAgentId)) {
+    return c.json({
+      error: 'Agent not found',
+      message: '仅支持内置 Pi SDK',
+    }, 404);
+  }
+  const effectiveAgentId = 'pi';
 
   // 项目级串行锁：重写与写作 run 同样不能并行（同写 state/章节文件）
   const activeRun = getActiveRunForProject(projectId);
@@ -83,110 +80,85 @@ rewriteRouter.post('/', async (c) => {
     skillId,
     stage: 'revision',
     projectDir,
-    agentId,
+    agentId: effectiveAgentId,
   });
 
   // 创建 run（不绑定对话；RunStream 需要 conversationId 但重写不固化消息）
-  const run = createRun({ projectId, agentId, skillId: skillId || '', stage: 'revision', conversationId: `rewrite_${Date.now()}` });
-  await db.insert(runsTable).values({ id: run.id, agent: agentId, status: 'running', mode: 'rewrite' });
-
-  // 启动 agent 子进程
-  const { child } = launchAgent(def, composedPrompt, projectDir, [], model);
-  run.child = child;
-  run.status = 'running';
+  const run = createRun({ projectId, agentId: effectiveAgentId, skillId: skillId || '', stage: 'revision', conversationId: `rewrite_${Date.now()}` });
+  await db.insert(runsTable).values({ id: run.id, agent: effectiveAgentId, status: 'running', mode: 'rewrite' });
 
   // 看门狗：超时取消
-  const timeoutTimer = setTimeout(() => cancelRun(run), config.agent.timeoutMs);
+  const timeoutTimer = setTimeout(() => {
+    run.cancelReason = 'timeout';
+    cancelRun(run);
+  }, config.agent.timeoutMs);
   timeoutTimer.unref();
 
-  // 解析流
-  const onStreamComplete = () => {
-    if (child.stdin && !child.stdin.destroyed) child.stdin.end();
-  };
-  const emit = (event: unknown) => emitEvent(run, 'agent', event);
-  const isAcp = def.streamFormat === 'acp-json-rpc';
-  const handler = isAcp
-    ? { feed: () => {}, flush: () => {} }
-    : def.streamFormat === 'claude-stream-json'
-      ? createClaudeStreamHandler(emit, onStreamComplete)
-      : createJsonEventHandler(emit);
+  const attempt = startPiAgent({
+    prompt: composedPrompt,
+    cwd: projectDir,
+    model,
+    onEvent: (event) => emitEvent(run, 'agent', event),
+  });
+  run.abort = attempt.abort;
+  run.status = 'running';
 
-  // ACP 正常结束后的 stopReason（omp 常驻进程需主动 kill，exit code 无意义，改用此判定成败）
-  let acpStopReason: string | null = null;
+  void attempt.promise
+    .then(async (result) => {
+      clearTimeout(timeoutTimer);
+      run.abort = null;
 
-  if (!isAcp) {
-    child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
-  }
-  child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
+      const canceled = run.cancelRequested || result.aborted;
+      const code = canceled ? 1 : result.code;
 
-  if (isAcp) {
-    runAcpTurn(child, composedPrompt, projectDir, [], emit, model, run.id)
-      .then(({ stopReason }) => {
-        acpStopReason = stopReason;
-        // omp 是常驻进程，会话结束后不自行退出。主动 kill 触发 child.on('close') 收尾链路。
-        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
-      })
-      .catch((err) => {
-        acpStopReason = 'error';
-        emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' });
-        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
+      // 从 RunStream（DB + 内存窗口合并）读取全部事件
+      await run.stream.flush();
+      const allEvents = await run.stream.replay(0);
+      const agentEvents = allEvents
+        .filter((e) => e.event === 'agent')
+        .map((e) => e.data as Record<string, unknown>);
+      const writtenPaths = collectWrittenPaths(agentEvents);
+
+      if (writtenPaths.size > 0) {
+        emitEvent(run, 'artifacts', { count: writtenPaths.size, paths: [...writtenPaths] });
+      }
+
+      // 收尾顺序与主 runs.ts 对齐：'end' 事件最后发，前端收到时管道已完全收尾。
+      if (writtenPaths.size > 0) {
+        await syncFilesToDb(projectId, writtenPaths, projectDir).catch(() => {});
+      }
+
+      // 兜底：补全缺失的章节摘要与状态表（仅重写成功时）
+      if (code === 0 && writtenPaths.size > 0) {
+        await ensureContextArtifacts(projectDir, writtenPaths).catch(() => {});
+      }
+      await createSnapshot(projectDir, `Rewrite ${run.id.slice(0, 8)}: ${writtenPaths.size} files modified`).catch(() => {});
+
+      await db.update(runsTable)
+        .set({
+          status: canceled ? 'canceled' : code === 0 ? 'succeeded' : 'failed',
+          finishedAt: new Date(),
+        })
+        .where(eq(runsTable.id, run.id)).execute();
+
+      // 固化事件流（重写不绑定对话，消息固化静默跳过；close 同时清理订阅者）。
+      await run.stream.close(transformStreamEvents, {
+        failed: code !== 0,
+        failLabel: canceled ? run.cancelReason || 'canceled' : result.error,
+        artifacts: writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null,
+      }).catch(() => {});
+
+      finishRun(run, canceled ? 'canceled' : code === 0 ? 'succeeded' : 'failed');
+    })
+    .catch((err) => {
+      clearTimeout(timeoutTimer);
+      run.abort = null;
+      emitEvent(run, 'agent', {
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
       });
-  }
-
-  child.on('error', (err) => {
-    clearTimeout(timeoutTimer);
-    emitEvent(run, 'agent', { type: 'error', message: err.message });
-    handler.flush();
-    finishRun(run, 'failed');
-    db.update(runsTable).set({ status: run.status, finishedAt: new Date() }).where(eq(runsTable.id, run.id)).execute();
-  });
-
-  child.on('close', async (code) => {
-    clearTimeout(timeoutTimer);
-    handler.flush();
-
-    // ACP 模式：omp 常驻进程被 SIGTERM 终止，exit code 无意义。
-    // 只有显式失败才算失败；null（close 競态）按成功处理。
-    if (isAcp) {
-      code = isAcpFailure(acpStopReason) ? 1 : 0;
-    }
-
-    // 从 RunStream（DB + 内存窗口合并）读取全部事件
-    await run.stream.flush();
-    const allEvents = await run.stream.replay(0);
-    const agentEvents = allEvents
-      .filter((e) => e.event === 'agent')
-      .map((e) => e.data as Record<string, unknown>);
-    const writtenPaths = collectWrittenPaths(agentEvents);
-
-    if (writtenPaths.size > 0) {
-      emitEvent(run, 'artifacts', { count: writtenPaths.size, paths: [...writtenPaths] });
-    }
-
-    // 收尾顺序与主 runs.ts 对齐：'end' 事件最后发，前端收到时管道已完全收尾。
-    if (writtenPaths.size > 0) {
-      await syncFilesToDb(projectId, writtenPaths, projectDir).catch(() => {});
-    }
-
-    // 兜底：补全缺失的章节摘要与状态表（仅重写成功时）
-    if (code === 0 && writtenPaths.size > 0) {
-      await ensureContextArtifacts(projectDir, writtenPaths).catch(() => {});
-    }
-    await createSnapshot(projectDir, `Rewrite ${run.id.slice(0, 8)}: ${writtenPaths.size} files modified`).catch(() => {});
-
-    await db.update(runsTable)
-      .set({ status: code === 0 ? 'succeeded' : 'failed', finishedAt: new Date() })
-      .where(eq(runsTable.id, run.id)).execute();
-
-    // 固化事件流（重写不绑定对话，消息固化静默跳过；close 同时清理订阅者，
-    // 旧缺陷：从不 close → 订阅者内存泄漏 + 未 flush 事件丢失）。
-    await run.stream.close(transformStreamEvents, {
-      failed: code !== 0,
-      artifacts: writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null,
-    }).catch(() => {});
-
-    finishRun(run, code === 0 ? 'succeeded' : 'failed');
-  });
+      finishRun(run, 'failed');
+    });
 
   return c.json({ runId: run.id }, 201);
 });

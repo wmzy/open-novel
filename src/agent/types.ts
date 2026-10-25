@@ -1,33 +1,14 @@
 export type RuntimeModelOption = { id: string; label: string };
 
-export type RuntimeBuildOptions = {
-  model?: string | null;
-  /** 用于 ACP 协议：prompt 由调用方经协议传，launchAgent 不 write。 */
-  promptDeferred?: boolean;
-};
-
-export type RuntimeAgentDef = {
+/** /api/agents 返回的内置 Agent 描述（仅 Pi）。 */
+export type DetectedAgent = {
   id: string;
   name: string;
-  bin: string;
-  versionArgs: string[];
-  fallbackModels: RuntimeModelOption[];
-  buildArgs: (prompt: string, extraAllowedDirs?: string[], options?: RuntimeBuildOptions) => string[];
-  streamFormat: string;
-  fallbackBins?: string[];
-  promptViaStdin?: boolean;
-  promptInputFormat?: 'text' | 'stream-json';
-  /** ACP 协议：stdin/stdout 双向 JSON-RPC，prompt 由 runAcpTurn 经协议发。 */
-  usesAcp?: boolean;
-  installUrl?: string;
-  docsUrl?: string;
-};
-
-export type DetectedAgent = Omit<RuntimeAgentDef, 'buildArgs' | 'fallbackModels' | 'fallbackBins'> & {
   models: RuntimeModelOption[];
   available: boolean;
-  path?: string;
+  streamFormat?: string;
   version?: string | null;
+  error?: string;
 };
 
 /** Events emitted by the stream parser */
@@ -53,21 +34,16 @@ export type AgentCommand = {
 };
 
 /**
- * ACP elicitation（向用户提问的选择框）。
+ * 向用户提问的选择框。
  *
- * omp skill 调 select/confirm/input 时，经 ACP elicitation/create 请求到 client。
- * open-novel 把它转成此结构经 SSE 推给前端，前端渲染选择框，用户答后回传。
- *
- * schema 取自 ACP ElicitationFormMode.requestedSchema.properties.value：
- * - type='string' + enum → 单选
- * - type='string' 无 enum → 文本输入
- * - type='boolean' → 确认（是/否）
- * - type='array' → 多选
+ * 内置 Pi 的 `ask` 自定义工具把问题转成此结构，经 SSE 推给前端；
+ * 前端渲染选择题/输入框，用户回答后经 /api/runs/:id/ask/:askId 回传。
+ * 字段保留 select/confirm/input/multiselect 以兼容旧事件。
  */
 export type AskPrompt = {
   /** 唯一 id，前端回传时带上以匹配 pending promise。 */
   askId: string;
-  /** omp 的 ask 语义（映射自 schema.type）。 */
+  /** 提问语义。 */
   kind: 'select' | 'confirm' | 'input' | 'multiselect';
   /** agent 的问题文本。 */
   message: string;
@@ -77,11 +53,7 @@ export type AskPrompt = {
   optionsMulti?: string[];
   /** 文本输入提示（kind='input' 时）。 */
   placeholder?: string;
-  /**
-   * claude CLI 的 AskUserQuestion 工具调用 id。
-   * 存在时回答走 POST /api/runs/:id/tool-result（stdin tool_result），
-   * 而不是 ACP 的 POST /api/runs/:id/ask/:askId。
-   */
+  /** 旧外部 Agent 的 AskUserQuestion 工具调用 id（兼容字段；内置 Pi 不使用）。 */
   toolUseId?: string;
 };
 

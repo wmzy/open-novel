@@ -1,6 +1,6 @@
 # open-novel
 
-AI 辅助小说写作应用：通过调用外部 AI 编码 agent（`claude` / `opencode` CLI）完成从立意到成稿的全流程创作，前端实时展示 agent 的流式输出与文件操作。
+AI 辅助小说写作应用：内置 [Pi Agent SDK](https://github.com/earendil-works/pi)，通过用户自己的模型 API（BYOK）完成从立意到成稿的全流程创作，前端实时展示 agent 的流式输出与文件操作。
 
 ## 工作流
 
@@ -16,6 +16,7 @@ concept → world → characters → outline → scenes → sample → writing
 - **drafting / revision / polish** 是写作子模式（`/draft`、`/revision`、`/polish` 命令），
   不是独立主线阶段，与 writing 共用分层上下文。
 - **质量检查**：章节视图提供反 AI 味、伏笔、OOC 与事实核查。事实核查覆盖 POV 知情越界（`.novel/character-knowledge.json`）、人名/别名笔误与设定时间线矛盾；默认只报告、不阻断写作。
+- **Canon 台账与章节合同**：`.novel/canon/` 保存实体、有效事实、角色知情边界与 append-only 变更日志；`.novel/contracts/第N章.json` 保存 POV / 出场 / beat / 揭示 / 字数合同。写作时自动注入；定稿前做确定性校验，存在 blocker（POV 缺失、提前揭示）返回 409 `contract-gate`，可强制定稿并留痕。侧边栏「设定台账」可查看。
 - **导入手稿**：首页「导入手稿」支持 txt/md/epub，自动识别「第N章/回/节」、`Chapter N`、Markdown `#`/`##` 与数字标题切章（兼容中文数字、UTF-8 BOM、GBK/GB18030）；预览中可合并/拆分/改名，确认后写入已有或新建项目的 `.novel/chapters/` 并可标记定稿，可选自动触发章节摘要/角色状态补全（enrich run）。
 - **导出**：顶部「导出」菜单支持 Markdown（含设定/纯正文）、TXT、EPUB 3 电子书与 DOCX（Word）；EPUB/DOCX 均按章号顺序输出，章节标题为 Heading 1，正文首行缩进 2 字符，缺章/质检归档会通过 `x-export-warnings` 提示。
 - **批量写作**：输入 `/batch 10-20` 或「写第10到20章」（单批 ≤10 章），每章是串行锁下的真实 run；支持暂停（当前章写完）、继续、取消与失败章恢复，进度落盘 `.novel/batch.json`，刷新/重启后可继续。
@@ -28,7 +29,7 @@ concept → world → characters → outline → scenes → sample → writing
 | 前端 | React 19 · Vite 8 · React Query · Linaria（CSS-in-JS） |
 | API | Hono（进程内 + 可独立部署的 Node 服务） |
 | 数据库 | Drizzle ORM · PGlite（嵌入式开发）/ postgres（生产） |
-| Agent | spawn 子进程 + SSE 流式解析（claude-stream-json） |
+| Agent | 内置 `@earendil-works/pi-coding-agent`（进程内 SDK）+ SSE 事件流 |
 | 测试 | Vitest（单元 + 集成） · Playwright（E2E） |
 
 ## 开发
@@ -43,7 +44,9 @@ npm run build         # 构建：dist/client（前端）+ dist/server/api.js（�
 npm start             # 生产启动 node dist/server/api.js
 ```
 
-需要本机已安装 `claude` 或 `opencode` CLI 并在 PATH 中，agent 检测会自动发现它们。
+首次启动后，在「设置 → 内置 Pi 模型」填写 provider、模型与 API Key。无需安装任何外部 Agent CLI。
+
+订阅用户（Claude Code / Codex 等）可以先在本地启动一个反向代理，把订阅暴露成 OpenAI/Anthropic 兼容接口，再在设置里填写反代 Base URL、模型 ID 与（可选的）Key。反代只监听 `127.0.0.1`，不要暴露到公网。
 
 ## 配置
 
@@ -57,7 +60,11 @@ npm start             # 生产启动 node dist/server/api.js
 | `DATABASE_URL` | — | 设置则用 postgres，否则用嵌入式 PGlite |
 | `PGLITE_DATA_DIR` | `./data/pglite` | PGlite 数据目录 |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `200` / `60000` | API 限流 |
-| `AGENT_TIMEOUT_MS` | `1800000` | agent 子进程超时（30 分钟） |
+| `AGENT_TIMEOUT_MS` | `1800000` | 单次 Pi run 超时（30 分钟） |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` | — | 可选：作为 Pi 的初始凭据（也可在设置页保存） |
+| `OPEN_NOVEL_HOME` | `~/.open-novel` | Pi 资源/会话元数据目录 |
+
+**模型配置（BYOK）**：详见 [订阅反代接入](docs/订阅反代接入.md)。优先在「设置 → 内置 Pi 模型」填写 provider / 模型 / API Key；也可以设置上表的环境变量作为初始值。自定义 provider（Ollama、LM Studio、本地订阅反代）需要填写 Base URL 与 API 协议。密钥只保存在服务端，接口不回显。
 
 **访问控制（可选）**：服务默认只监听 `127.0.0.1`。需要局域网或容器访问时，显式设置 `HOST=0.0.0.0`，并强烈建议同时设置 `AUTH_TOKEN`：
 
@@ -80,7 +87,7 @@ AUTH_TOKEN="$(openssl rand -hex 24)" HOST=0.0.0.0 npm start
 ```
 src/
   api/            Hono 路由与中间件
-  agent/          agent 子系统（spawn、流解析、prompt 组装、运行状态机）
+  agent/         内置 Pi 运行时、prompt 组装、运行状态机
   db/             Drizzle schema 与初始化
   plugins/        插件加载（plugins/ 目录下的技能包）
   server/         生产服务入口（静态服务 + SPA fallback）

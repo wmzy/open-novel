@@ -1,17 +1,14 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
-import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun, resolveAsk, getActiveRunForProject } from '../../agent/run';
+import { createRun, getRun, emitEvent, finishRun, cancelRun, subscribeRun, resolveAsk, registerAsk, getActiveRunForProject } from '../../agent/run';
 import type { RunSession } from '../../agent/run';
 import { composePrompt } from '../../agent/prompt-composer';
-import { getAgentDef } from '../../agent/registry';
-import { detectAgents } from '../../agent/detection';
-import { launchAgent } from '../../agent/launch';
-import { createClaudeStreamHandler, createJsonEventHandler } from '../../agent/stream-parser';
-import { runAcpTurn, isAcpFailure } from '../../agent/acp-bridge';
+import { startPiAgent } from '../../agent/pi/runtime';
 import { collectWrittenPaths, syncFilesToDb } from '../../agent/artifacts';
 import { detectAiPatterns, detectDegradation, buildExcludeGrams } from '../../agent/quality-checker';
-import type { AgentEvent, StreamEvent } from '../../agent/types';
+import type { AgentEvent, AskPrompt, StreamEvent } from '../../agent/types';
 import { ensureContextArtifacts, getStateTable } from '../../agent/context-manager';
+import { readCanon, readChapterContract, validateChapterContract } from '../../shared/canon';
 import { readFile, readdir, rename, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createSnapshot, restoreSnapshot, listSnapshots, createUserSnapshot, resetMainBranch } from '../../agent/snapshot';
@@ -434,6 +431,9 @@ export function transformStreamEvents(rawEvents: Record<string, unknown>[]): { c
           events.push({ kind: 'usage', inputTokens: u?.input_tokens as number | undefined, outputTokens: u?.output_tokens as number | undefined, costUsd: e.costUsd as number | undefined });
           break;
         }
+        case 'ask':
+          events.push({ kind: 'ask', ask: e.ask as AskPrompt });
+          break;
         case 'error':
           events.push({ kind: 'raw', line: String(e.message || '') });
           break;
@@ -456,13 +456,22 @@ const runsRouter = new Hono();
 
 runsRouter.post('/', async (c) => {
   const body = await c.req.json();
-  const { projectId, agentId, skillId, stage, message, conversationId, model,
+  const { projectId, skillId, stage, message, conversationId, model,
           mode = 'generate', targetFile, revisionNote, autonomous = false,
           trimHistory: shouldTrim = false, deepenRound, interruptedResume } = body;
   const planMode = body.planMode === true;
-
-  const def = getAgentDef(agentId);
-  if (!def) return c.json({ error: 'Agent not found' }, 404);
+  const requestedAgentId = typeof body.agentId === 'string' && body.agentId.trim()
+    ? body.agentId.trim()
+    : 'pi';
+  // 兼容旧客户端/localStorage：旧 ID 只是别名，仍统一走内置 Pi，不启动任何外部 CLI。
+  const LEGACY_AGENT_ALIASES = new Set(['claude', 'opencode', 'omp']);
+  if (requestedAgentId !== 'pi' && !LEGACY_AGENT_ALIASES.has(requestedAgentId)) {
+    return c.json({
+      error: 'Agent not found',
+      message: '仅支持内置 Pi SDK',
+    }, 404);
+  }
+  const agentId = 'pi';
 
   // stage 枚举校验：拒绝 typo/未知阶段——未知 stage 会静默走通用指令且不注入
   // 写作上下文，浪费一次 agent 调用。合法集 = 7 主阶段 + 写作子模式 + 隐藏阶段。
@@ -473,10 +482,6 @@ runsRouter.post('/', async (c) => {
   if (stage !== undefined && !VALID_RUN_STAGES.has(stage)) {
     return c.json({ error: 'invalid-stage', message: `未知阶段：${stage}` }, 400);
   }
-
-  const agents = await detectAgents();
-  const detected = agents.find((a) => a.id === agentId);
-  if (!detected?.available) return c.json({ error: 'Agent not available' }, 400);
 
   // 提前解析 projectDir：trimHistory 需要读取 deepen-log.md
   const projectDir = await resolveProjectDir(projectId);
@@ -688,7 +693,6 @@ runsRouter.post('/', async (c) => {
    * @returns The RunSession for this attempt.
    */
   async function launchAndTrack(retryOf: string | null, existingRun?: RunSession): Promise<RunSession> {
-  if (!def) throw new Error('Agent definition missing');
   // retry 复用同一 run/stream，前端 SSE 不断流、事件累积在同一流中
   if (!existingRun) {
     // 二次锁检查：composePrompt 是异步耗时路径，两个并发请求可能同时通过
@@ -724,18 +728,17 @@ runsRouter.post('/', async (c) => {
     }).execute();
   }
 
-  // Launch agent
-  const { child } = launchAgent(def, composedPrompt, projectDir, [], model);
-  run.child = child;
-
-  // Watchdog: cancel the run if the agent subprocess exceeds the configured timeout.
+  // Watchdog: cancel the run if the agent exceeds the configured timeout.
   // unref() so the timer never keeps the event loop (and process) alive.
   // ask 挂起时暂停计时（用户思考时间不计入超时），回答后恢复。
   let timeoutTimer: NodeJS.Timeout | null = null;
   let timeoutRemaining = config.agent.timeoutMs;
   let timeoutStartedAt = Date.now();
   const armTimeout = () => {
-    timeoutTimer = setTimeout(() => cancelRun(run), timeoutRemaining);
+    timeoutTimer = setTimeout(() => {
+      run.cancelReason = 'timeout';
+      cancelRun(run);
+    }, timeoutRemaining);
     timeoutTimer.unref?.();
   };
   const pauseTimeout = () => {
@@ -768,21 +771,10 @@ runsRouter.post('/', async (c) => {
     }
   } catch { /* noop */ }
 
-  // Parse stream
-  const onStreamComplete = () => {
-    if (child.stdin && !child.stdin.destroyed) {
-      child.stdin.end();
-    }
-  };
-  // P1-a: 流层 watchdog — 累积 text_delta 做重复率检测，退化时自动 kill
+  // P1-a: 流层 watchdog — 累积 text_delta 做重复率检测，退化时自动 abort
   let watchdogBuffer = '';
   let watchdogTriggered = false;
   const emitWithWatchdog = (event: StreamEvent) => {
-    // claude CLI 的 AskUserQuestion：子进程阻塞等待 stdin tool_result，
-    // 与 ACP registerAsk 同样属于「暂停等待用户输入」——暂停超时计时，回答后恢复。
-    if (event.type === 'tool_use' && event.name === 'AskUserQuestion') {
-      run._pauseTimeout?.();
-    }
     if (event.type === 'text_delta' && typeof event.delta === 'string') {
       if (watchdogTriggered) return;
       watchdogBuffer = (watchdogBuffer + event.delta).slice(-WATCHDOG_WINDOW_SIZE);
@@ -796,6 +788,7 @@ runsRouter.post('/', async (c) => {
             count: result.count,
             ratio: Math.round(result.ratio * 100),
           });
+          run.cancelReason = 'degradation';
           cancelRun(run);
           return;
         }
@@ -804,58 +797,42 @@ runsRouter.post('/', async (c) => {
     emitEvent(run, 'agent', event);
   };
 
-  // ACP 协议（omp）：不读 stdout 原始流，而是经 runAcpTurn 驱动 JSON-RPC 会话
-  const isAcp = def.streamFormat === 'acp-json-rpc';
-  // ACP 正常结束后的 stopReason（omp 常驻进程需主动 kill，exit code 无意义，改用此判定成败）
-  let acpStopReason: string | null = null;
-  const handler = isAcp
-    ? { feed: () => {}, flush: () => {} }
-    : def.streamFormat === 'claude-stream-json'
-      ? createClaudeStreamHandler(emitWithWatchdog, onStreamComplete)
-      : createJsonEventHandler(emitWithWatchdog);
-
-  if (!isAcp) {
-    child.stdout?.on('data', (chunk: Buffer) => handler.feed(chunk.toString()));
-  }
-  child.stderr?.on('data', (chunk: Buffer) => emitEvent(run, 'stderr', { text: sanitizeStderr(chunk.toString()) }));
-
-  // ACP: 驱动协议会话，事件经 emitWithWatchdog 注入
-  if (isAcp) {
-    runAcpTurn(child, composedPrompt, projectDir, [], emitWithWatchdog, model, run.id)
-      .then(({ stopReason }) => {
-        acpStopReason = stopReason;
-        if (stopReason === 'refusal' || stopReason === 'max_turn_requests') {
-          emitEvent(run, 'agent', { type: 'error', message: `ACP stop: ${stopReason}` });
-        }
-        // omp 是常驻进程，会话结束后不自行退出。主动 kill 触发 child.on('close') 收尾链路。
-        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
-      })
-      .catch((err) => {
-        acpStopReason = 'error';
-        emitEvent(run, 'agent', { type: 'error', message: err?.message || 'ACP turn failed' });
-        if (!child.killed && child.exitCode === null) child.kill('SIGTERM');
-      });
-  }
-
-  child.on('error', (err) => {
-    if (timeoutTimer) clearTimeout(timeoutTimer);
-    emitEvent(run, 'agent', { type: 'error', message: err.message });
-    handler.flush();
-    finishRun(run, 'failed');
-    db.update(runsTable).set({ status: run.status, finishedAt: new Date() }).where(eq(runsTable.id, run.id)).execute();
+  // 内置 Pi：进程内创建 session；事件直接进入 emitWithWatchdog。
+  // promise 不在这里 await —— POST 需要先返回 runId，收尾在 finalizePiRun 中完成。
+  const attempt = startPiAgent({
+    prompt: composedPrompt,
+    cwd: projectDir,
+    model,
+    // 阶段推进/模板生成/质量检查走受限的自定义工具，不再暴露 bash。
+    allowBash: false,
+    api: {
+      baseUrl: `http://127.0.0.1:${config.port}`,
+      token: config.auth.token,
+      projectId,
+    },
+    onEvent: emitWithWatchdog,
+    onAsk: async (ask) => {
+      emitEvent(run, 'agent', { type: 'ask', ask });
+      return registerAsk(run, ask.askId);
+    },
   });
+  run.abort = attempt.abort;
+  void attempt.promise
+    .then(finalizePiRun)
+    .catch((err) => finalizePiRun({ code: 1, aborted: false, error: err instanceof Error ? err.message : String(err) }));
 
-  child.on('close', async (code) => {
+  return run;
+
+  /**
+   * Pi run 收尾：等价于原 child close handler。
+   * 注意：retry 分支必须 return 且不 close stream，让同一 run 继续接收新 attempt 事件。
+   */
+  async function finalizePiRun(result: { code: number; aborted: boolean; error?: string; retryable?: boolean }): Promise<void> {
     if (timeoutTimer) clearTimeout(timeoutTimer);
-    handler.flush();
+    run.abort = null;
 
-    // ACP 模式：omp 常驻进程被 SIGTERM 终止，exit code 无意义。
-    // 用 stopReason 判定：只有显式失败（refusal/max_turn_requests/error）才算失败；
-    // null（close 在 runAcpTurn resolve 前触发，如 timeout/进程退出）按成功处理，
-    // 避免误丢已产生的 agent 响应。
-    if (isAcp) {
-      code = isAcpFailure(acpStopReason) ? 1 : 0;
-    }
+    const canceled = run.cancelRequested || result.aborted;
+    let code = canceled ? 1 : result.code;
 
     // 从 RunStream 读取全部事件（DB + 内存窗口合并），提取写入路径 + emit artifacts
     await run.stream.flush();
@@ -889,6 +866,38 @@ runsRouter.post('/', async (c) => {
     const canArchive = code === 0 && (stage === 'writing' || stage === 'sample' || stage === 'drafting');
     if (writtenPaths.size > 0) {
       await qualityGateCheck(run, projectDir, writtenPaths, excludeGrams, canArchive).catch(() => {});
+    }
+
+    // 合同校验：存在章节合同时跑确定性 POV/出场/揭示/字数检查。
+    // 只报告，不归档；真正阻断发生在用户把章节状态改为 finalized 的 PATCH。
+    if (code === 0 && writtenPaths.size > 0) {
+      try {
+        const canon = await readCanon(projectDir);
+        for (const p of writtenPaths) {
+          const chapterNum = isChapterBody(p);
+          if (chapterNum === null) continue;
+          const contract = await readChapterContract(projectDir, chapterNum);
+          if (!contract) continue;
+          const fullPath = resolveWrittenPath(projectDir, p);
+          if (!fullPath) continue;
+          const content = await readFile(fullPath, 'utf-8');
+          const findings = validateChapterContract({ content, contract, canon });
+          if (findings.length === 0) continue;
+          const blockers = findings.filter((f) => f.severity === 'blocker').length;
+          const majors = findings.filter((f) => f.severity === 'major').length;
+          emitEvent(run, 'agent', {
+            type: 'contract-check',
+            chapter: chapterNum,
+            findings,
+            blockers,
+            majors,
+          });
+          emitEvent(run, 'agent', {
+            type: 'status',
+            label: `第${chapterNum}章合同校验：${blockers} 阻断 / ${majors} 重要 / ${findings.length - blockers - majors} 提示`,
+          });
+        }
+      } catch { /* 合同文件损坏/不可读时不阻断 run 收尾 */ }
     }
 
     // P2: 字数校验 — 偏差超阈值的章节通知前端
@@ -945,7 +954,7 @@ runsRouter.post('/', async (c) => {
     // P1: 零产出自动重试 — writing 阶段产出 0 个文件时自动重试一次。
     // 根因：agent 有时读上下文后空转退出（~30%概率），不写任何文件。
     // 不重试会浪费一轮对话额度且打断写作流程。
-    if (code === 0 && writtenPaths.size === 0 && (stage === 'writing' || stage === 'drafting' || stage === 'sample') && retryOf === null) {
+    if (code === 0 && writtenPaths.size === 0 && (stage === 'writing' || stage === 'drafting' || stage === 'sample') && retryOf === null && result.retryable !== false) {
       emitEvent(run, 'agent', {
         type: 'status',
         label: 'Agent 未产出任何文件，正在自动重试…',
@@ -970,7 +979,7 @@ runsRouter.post('/', async (c) => {
     // Update run record（revise 模式附带 diff 进 payload）
     // 放在重试检查之后：retry 提前 return 时行保持 running，最终尝试统一在此落库。
     const updateSet: Record<string, unknown> = {
-      status: code === 0 ? 'succeeded' : 'failed',
+      status: canceled ? 'canceled' : code === 0 ? 'succeeded' : 'failed',
       finishedAt: new Date(),
     };
     if (reviseDiff !== undefined) {
@@ -986,11 +995,11 @@ runsRouter.post('/', async (c) => {
     const finalArtifacts = writtenPaths.size > 0 ? { count: writtenPaths.size, paths: [...writtenPaths] } : null;
     await run.stream.close(transformStreamEvents, {
       failed: code !== 0,
-      failLabel: acpStopReason || undefined,
+      failLabel: canceled ? run.cancelReason || 'canceled' : result.error,
       artifacts: finalArtifacts,
     });
 
-    finishRun(run, code === 0 ? 'succeeded' : 'failed');
+    finishRun(run, canceled ? 'canceled' : code === 0 ? 'succeeded' : 'failed');
 
     // 批量写作：本章 run 若已由前端登记（lastRunId），服务端在结束时自行推进
     // 状态机——成功→下一章/暂停/完成，失败→resumeChapter。前端也会调用
@@ -1027,9 +1036,7 @@ runsRouter.post('/', async (c) => {
       }, 1500);
       timer.unref?.();
     }
-  });
-
-  return run;
+  }
   } // end launchAndTrack
 
   // 启动首次尝试（二次锁检查命中时返回 409）
@@ -1102,17 +1109,9 @@ runsRouter.get('/:id/events', async (c) => {
 runsRouter.post('/:id/tool-result', async (c) => {
   const run = getRun(c.req.param('id'));
   if (!run) return c.json({ error: 'Not found' }, 404);
-  const body = await c.req.json();
-  if (run.child?.stdin) {
-    const msg = JSON.stringify({
-      type: 'tool_result',
-      tool_use_id: body.toolUseId,
-      content: body.content,
-      is_error: body.isError || false,
-    });
-    run.child.stdin.write(msg + '\n');
-  }
-  // AskUserQuestion 已回答：恢复超时计时
+  await c.req.json().catch(() => ({}));
+  // 内置 Pi 的提问/工具结果不经过 stdin 协议；保留端点兼容旧前端，
+  // 仅恢复超时计时。
   run._resumeTimeout?.();
   return c.json({ ok: true });
 });

@@ -33,22 +33,6 @@ const settingsLayout = css`
   overflow-y: auto;
 `;
 
-const agentSectionTitle = css`
-  margin-top: 2rem;
-  margin-bottom: 1rem;
-`;
-
-const agentItem = css`
-  margin-bottom: 0.5rem;
-  padding: 0.5rem;
-  background: var(--haze-color-bg-secondary);
-  border-radius: 6px;
-`;
-
-const installLink = css`
-  margin-left: 0.5rem;
-`;
-
 const buttonRow = css`
   display: flex;
   align-items: center;
@@ -86,6 +70,34 @@ const sectionTitle = css`
   font-weight: 600;
 `;
 
+/* 订阅反代 / 本地模型快捷预设：只填充表单，不触发保存 */
+const PI_PRESETS = [
+  {
+    id: 'openai-proxy',
+    label: 'OpenAI 兼容反代',
+    provider: 'custom',
+    api: 'openai-completions',
+    defaultBaseUrl: 'http://127.0.0.1:8080/v1',
+    hint: '模型 ID 填反代声明的名称（如反代暴露的 gpt-5 / claude-sonnet-4-5）。',
+  },
+  {
+    id: 'anthropic-proxy',
+    label: 'Anthropic 兼容反代',
+    provider: 'anthropic',
+    api: 'anthropic-messages',
+    defaultBaseUrl: 'http://127.0.0.1:8080',
+    hint: '模型 ID 填反代声明的名称；Base URL 填反代根地址。',
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama 本地',
+    provider: 'custom',
+    api: 'openai-completions',
+    defaultBaseUrl: 'http://127.0.0.1:11434/v1',
+    hint: 'Ollama 的 Base URL 必须带 /v1；模型 ID 填 ollama list 中的名称。',
+  },
+] as const;
+
 export default function SettingsPage() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({
@@ -113,17 +125,68 @@ export default function SettingsPage() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
+      qc.invalidateQueries({ queryKey: ['agents'] });
+      qc.invalidateQueries({ queryKey: ['models'] });
       toast.success('设置已保存');
     },
     onError: () => toast.error('保存失败，请重试'),
   });
 
-  const [preferredAgent, setPreferredAgent] = useState('');
+  // ===== 内置 Pi 模型（BYOK）=====
+  const [piProvider, setPiProvider] = useState('anthropic');
+  const [piModel, setPiModel] = useState('');
+  const [piBaseUrl, setPiBaseUrl] = useState('');
+  const [piApi, setPiApi] = useState('anthropic-messages');
+  const [piThinking, setPiThinking] = useState('medium');
+  const [piApiKey, setPiApiKey] = useState('');
 
   useEffect(() => {
-    // 同步后端值（含清空回退到「选择...」的情况；旧逻辑 if(settings?.preferred_agent) 无法回退为空）。
-    setPreferredAgent(settings?.preferred_agent ?? '');
+    setPiProvider(settings?.pi_provider ?? 'anthropic');
+    setPiModel(settings?.pi_model ?? '');
+    setPiBaseUrl(settings?.pi_base_url ?? '');
+    setPiApi(settings?.pi_api ?? 'anthropic-messages');
+    setPiThinking(settings?.pi_thinking_level ?? 'medium');
   }, [settings]);
+
+  const piKeyConfigured = settings?.pi_apiKeySet === 'true';
+  const piAgent = agents?.find((a: { id: string }) => a.id === 'pi') as
+    | { id: string; name: string; available: boolean; models?: Array<{ id: string; label: string }> }
+    | undefined;
+
+  const savePi = () => {
+    if (piProvider === 'custom' && !piBaseUrl.trim()) {
+      toast.error('自定义 provider 必须填写 API Base URL');
+      return;
+    }
+    const body: Record<string, string> = {
+      pi_provider: piProvider,
+      pi_model: piModel.trim(),
+      pi_base_url: piBaseUrl.trim(),
+      pi_api: piApi,
+      pi_thinking_level: piThinking,
+    };
+    if (piApiKey.trim()) body.pi_api_key = piApiKey.trim();
+    saveSettings.mutate(body, { onSuccess: () => setPiApiKey('') });
+  };
+
+  const applyPiPreset = (preset: (typeof PI_PRESETS)[number]) => {
+    setPiProvider(preset.provider);
+    setPiApi(preset.api);
+    setPiBaseUrl((prev) => (prev.trim() ? prev : preset.defaultBaseUrl));
+    toast.info(`${preset.label}：${preset.hint}`);
+  };
+
+  const testPi = useMutation({
+    mutationFn: async () => {
+      const res = await fetch('/api/agents/pi/test', { method: 'POST' });
+      return res.json() as Promise<{ ok: boolean; provider: string; model: string; message: string }>;
+    },
+    onSuccess: (data) => {
+      if (data.ok) toast.success(`配置可解析：${data.model}`);
+      else toast.error(data.message || '配置不完整');
+    },
+    onError: () => toast.error('配置检查失败'),
+  });
 
   // ===== 语义检索（可选，默认关闭）=====
   const [embeddingEnabled, setEmbeddingEnabled] = useState(false);
@@ -158,23 +221,143 @@ export default function SettingsPage() {
       <div className={pageContainer}>
       <h1 className={pageTitle}>设置</h1>
       <div className={card}>
-        <div className={formGroup}>
-          <label className={label}>首选 Agent</label>
-          <select className={input} value={preferredAgent} onChange={(e) => { setPreferredAgent(e.target.value); saveSettings.mutate({ preferred_agent: e.target.value }); }}>
-            <option value="">选择...</option>
-            {agents?.map((a: { id: string; name: string; available: boolean }) => (
-              <option key={a.id} value={a.id} disabled={!a.available}>{a.name} {!a.available ? '(未安装)' : ''}</option>
-            ))}
+        <h3 className={sectionTitle}>内置 Pi 模型（BYOK）</h3>
+        <span className={formHint}>
+          Pi 已内置在应用中，无需安装 Claude Code / OpenCode / OMP。填写你自己的 API Key；
+          订阅用户可先启动本地反向代理，把订阅暴露成 OpenAI/Anthropic 兼容接口，再在此填反代地址。
+        </span>
+
+        <div className={formGroup} style={{ marginTop: '1rem' }}>
+          <label className={label}>Provider</label>
+          <select
+            className={input}
+            value={piProvider}
+            onChange={(e) => {
+              const provider = e.target.value;
+              setPiProvider(provider);
+              const defaults: Record<string, string> = {
+                anthropic: 'anthropic-messages',
+                openai: 'openai-responses',
+                deepseek: 'openai-completions',
+                google: 'google-generative-ai',
+                openrouter: 'openai-completions',
+                custom: 'openai-completions',
+              };
+              setPiApi(defaults[provider] ?? 'openai-completions');
+            }}
+          >
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="google">Google Gemini</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="custom">自定义 / 本地反代</option>
           </select>
-          <span className={formHint}>默认 agent：未在会话面板手动选择时生效（手动选择会覆盖此项）。</span>
-        </div>
-        <h3 className={agentSectionTitle}>可用 Agent</h3>
-        {agents?.map((a: { id: string; name: string; available: boolean; version?: string; installUrl?: string }) => (
-          <div key={a.id} className={agentItem}>
-            <strong>{a.name}</strong> — {a.available ? `✓ ${a.version}` : `✗ 未安装`}
-            {a.installUrl && !a.available && <a href={a.installUrl} target="_blank" rel="noopener" className={installLink}>安装指南</a>}
+          <span className={formHint}>自定义 provider 支持 Ollama、LM Studio 与任意 OpenAI-compatible 反代。</span>
+          <div className={buttonRow} style={{ marginTop: '0.5rem' }}>
+            {PI_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={secondaryBtn}
+                onClick={() => applyPiPreset(preset)}
+              >
+                {preset.label}
+              </button>
+            ))}
           </div>
-        ))}
+          <span className={formHint}>
+            快捷预设只填充表单，不会自动保存。反代场景的模型 ID 必须填反代声明的名称，不能用订阅官方模型名；
+            Ollama 的 Base URL 必须带 <code>/v1</code>。
+          </span>
+        </div>
+
+        <div className={formGroup}>
+          <label className={label}>模型 ID</label>
+          <input
+            className={input}
+            value={piModel}
+            onChange={(e) => setPiModel(e.target.value)}
+            placeholder="例如 claude-sonnet-4-5 / gpt-4o / deepseek-chat"
+            list="pi-model-options"
+            autoComplete="off"
+          />
+          <datalist id="pi-model-options">
+            {piAgent?.models?.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </datalist>
+          <span className={formHint}>留空时自动选当前 provider 首个可用模型。自定义 provider 建议显式填写。</span>
+        </div>
+
+        <div className={formGroup}>
+          <label className={label}>API Base URL（可选 / 反代必填）</label>
+          <input
+            className={input}
+            value={piBaseUrl}
+            onChange={(e) => setPiBaseUrl(e.target.value)}
+            placeholder="http://127.0.0.1:8080/v1"
+            autoComplete="off"
+          />
+          <span className={formHint}>
+            内置 provider 可留空。订阅反代示例：OpenAI 兼容填 <code>http://127.0.0.1:&lt;port&gt;/v1</code>；
+            Anthropic 兼容填反代根地址。反代只监听 127.0.0.1，不要暴露到公网。
+          </span>
+        </div>
+
+        <div className={formGroup}>
+          <label className={label}>API 协议</label>
+          <select className={input} value={piApi} onChange={(e) => setPiApi(e.target.value)}>
+            <option value="openai-completions">openai-completions</option>
+            <option value="openai-responses">openai-responses</option>
+            <option value="anthropic-messages">anthropic-messages</option>
+            <option value="google-generative-ai">google-generative-ai</option>
+          </select>
+          <span className={formHint}>内置 provider 通常无需修改；反代按其实际协议选择。</span>
+        </div>
+
+        <div className={formGroup}>
+          <label className={label}>API Key</label>
+          <input
+            className={input}
+            type="password"
+            value={piApiKey}
+            onChange={(e) => setPiApiKey(e.target.value)}
+            placeholder={piKeyConfigured ? '已保存（留空保持不变）' : 'sk-...；本地反代可留空'}
+            autoComplete="new-password"
+          />
+          <span className={formHint}>密钥只保存在服务端，接口不会回显。留空保存不会覆盖已保存的密钥。</span>
+        </div>
+
+        <div className={formGroup}>
+          <label className={label}>思考等级</label>
+          <select className={input} value={piThinking} onChange={(e) => setPiThinking(e.target.value)}>
+            <option value="off">off</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="max">max</option>
+          </select>
+        </div>
+
+        <div className={buttonRow}>
+          <button type="button" className={primaryBtn} onClick={savePi} disabled={saveSettings.isPending}>
+            {saveSettings.isPending ? '保存中...' : '保存模型设置'}
+          </button>
+          <button type="button" className={secondaryBtn} onClick={() => testPi.mutate()} disabled={testPi.isPending}>
+            {testPi.isPending ? '检查中...' : '测试已保存配置'}
+          </button>
+          <button
+            type="button"
+            className={secondaryBtn}
+            disabled={!piKeyConfigured || saveSettings.isPending}
+            onClick={() => saveSettings.mutate({ pi_api_key: '' })}
+          >
+            清除已保存密钥
+          </button>
+        </div>
+        <span className={formHint}>
+          当前状态：{piAgent?.available ? `可用（${piAgent.models?.length ?? 0} 个模型）` : '待配置'}。
+          保存后重新进入项目即可使用；测试配置只校验 provider/model/auth，不产生生成费用。
+        </span>
       </div>
 
       <div className={card} style={{ marginTop: '1.5rem' }}>

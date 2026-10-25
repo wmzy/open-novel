@@ -16,12 +16,6 @@ export const config = {
     token: process.env.AUTH_TOKEN?.trim() || undefined,
   },
 
-  // Agent paths
-  agentPaths: {
-    claude: process.env.CLAUDE_PATH || 'claude',
-    opencode: process.env.OPENCODE_PATH || 'opencode',
-  },
-
   // Database
   db: {
     url: process.env.DATABASE_URL,
@@ -33,7 +27,7 @@ export const config = {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
   },
 
-  // Agent subprocess timeout (ms). Default 30 minutes; overridable via AGENT_TIMEOUT_MS.
+  // Pi run timeout (ms). Default 30 minutes; overridable via AGENT_TIMEOUT_MS.
   agent: {
     timeoutMs: parseInt(process.env.AGENT_TIMEOUT_MS || '1800000', 10),
     // 提问（elicitation）最长挂起时长（ms）。挂起期间超时计时暂停、用户思考不计入，

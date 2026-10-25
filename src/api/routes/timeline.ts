@@ -9,7 +9,6 @@ import {
   buildRelationshipGraph,
   type OutlineChapter,
 } from '../../shared/diagram-builders';
-import { getAgentDef } from '../../agent/registry';
 import { createRun, finishRun, getActiveRunForProject } from '../../agent/run';
 import { createSnapshot } from '../../agent/snapshot';
 import { resolveProjectDir } from '../../shared/project-dir';
@@ -200,7 +199,7 @@ timelineRouter.put('/:id/interaction', async (c) => {
 
 /**
  * SSE：批量预填所有缺「角色交互」字段的章节。
- * 逐章调 AI，每章完成后推送进度；已有字段的跳过。仅支持 CLI agent（非 ACP）。
+ * 逐章调内置 Pi，每章完成后推送进度；已有字段的跳过。
  */
 timelineRouter.post('/:id/fill', async (c) => {
   const projectId = c.req.param('id');
@@ -214,12 +213,15 @@ timelineRouter.post('/:id/fill', async (c) => {
     }, 409);
   }
   const novelDir = await resolveNovelDir(projectId);
-  const agentId = c.req.query('agent') || 'claude';
-  const def = getAgentDef(agentId);
-  if (!def) return c.json({ error: `agent not found: ${agentId}` }, 400);
-  if (def.usesAcp) {
-    return c.json({ error: '批量预填暂不支持 ACP agent，请用 claude 等 CLI agent' }, 400);
+  const requestedAgentId = c.req.query('agent') || 'pi';
+  const LEGACY_AGENT_ALIASES = new Set(['claude', 'opencode', 'omp']);
+  if (requestedAgentId !== 'pi' && !LEGACY_AGENT_ALIASES.has(requestedAgentId)) {
+    return c.json({
+      error: 'agent not found',
+      message: '仅支持内置 Pi SDK',
+    }, 400);
   }
+  const agentId = 'pi';
 
   const cards = await readAllChapterCards(novelDir);
   if (cards.length === 0) {
@@ -279,9 +281,7 @@ timelineRouter.post('/:id/fill', async (c) => {
           cast: ch.cast,
         };
         const prompt = buildFillPrompt(input);
-        const aiResponse = await callAgentOnce(def, prompt, novelDir, FILL_CHAPTER_TIMEOUT_MS, (child) => {
-          run.child = child;
-        });
+        const aiResponse = await callAgentOnce(prompt, novelDir, FILL_CHAPTER_TIMEOUT_MS);
 
         if (run.cancelRequested) {
           canceled = true;

@@ -208,7 +208,7 @@ const MIN_SELECTION = 50;
 interface Props {
   projectId: string;
   chapterNum: number;
-  /** 默认 'claude'，与 ChatPanel 保持一致 */
+  /** 默认 'pi'，与 ChatPanel 保持一致 */
   agentId?: string;
   skillId?: string;
 }
@@ -222,7 +222,7 @@ function cleanRewriteResult(raw: string): string {
   return text;
 }
 
-export default function RewritePanel({ projectId, chapterNum, agentId = 'claude', skillId = 'novel' }: Props) {
+export default function RewritePanel({ projectId, chapterNum, agentId = 'pi', skillId = 'novel' }: Props) {
   const queryClient = useQueryClient();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 

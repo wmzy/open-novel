@@ -16,32 +16,11 @@ export function useAgents() {
 }
 
 /**
- * 默认 agent 解析：优先用户「设置 → 首选 Agent」（DB 持久化），
- * 其次按 claude → opencode → omp 顺序取首个可用，无可用回退 'claude'。
- * 前提：此前「首选 Agent」仅写库从不读取，是无效果的死配置——现接入为默认来源。
- * 显式选择（localStorage open-novel:agentId）仍由 useAgentSelection 优先，不受影响。
+ * 内置 Pi 是唯一 Agent；保留 hook 以兼容现有组件与 localStorage 选择逻辑。
+ * 旧存储值（claude/opencode/omp）在 useAgentSelection 中会被判为不可用并回退。
  */
 export function useDefaultAgent(): string {
-  const { data: agents } = useAgents();
-  const { data: settings } = useQuery<{ preferred_agent?: string }>({
-    queryKey: ['settings'],
-    queryFn: async () => {
-      const res = await fetch('/api/settings');
-      if (!res.ok) throw new Error('Failed to fetch settings');
-      const data = await res.json();
-      return data.settings as { preferred_agent?: string };
-    },
-    staleTime: 60_000,
-  });
-  const avail = agents?.filter((a) => a.available) ?? [];
-  const preferred = settings?.preferred_agent;
-  // 首选 agent 已卸载/不可用 → 静默回退优先级顺序，不阻塞默认解析。
-  if (preferred && avail.some((a) => a.id === preferred)) return preferred;
-  const order = ['claude', 'opencode', 'omp'];
-  for (const id of order) {
-    if (avail.some((a) => a.id === id)) return id;
-  }
-  return 'claude';
+  return 'pi';
 }
 
 const AGENT_STORAGE_KEY = 'open-novel:agentId';

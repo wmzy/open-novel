@@ -30,7 +30,6 @@ import {
   readCharacterRoster,
   type CharacterKnowledge,
 } from '../../agent/context-manager';
-import { getAgentDef } from '../../agent/registry';
 import { callAgentOnce } from '../../agent/agent-once';
 
 const checkRouter = new Hono();
@@ -224,7 +223,7 @@ async function readRecentSummaries(
 /**
  * 写后事实核查（非阻断、只报告）：
  * - 机械检查（始终运行）：POV 知情越界启发式 + 名册人名近似笔误；
- * - 语义检查（deep=true 时）：调用一次 CLI agent，按 POV 泄漏 / 姓名别名 / 设定时间线三类返回 JSON。
+ * - 语义检查（deep=true 时）：调用一次内置 Pi，按 POV 泄漏 / 姓名别名 / 设定时间线三类返回 JSON。
  *
  * body: { chapterNum: number, agentId?: string, deep?: boolean }
  * deep 默认 true；agentId 也可用 query ?agent= 传入。
@@ -305,40 +304,28 @@ checkRouter.post('/fact-check', async (c) => {
   let semanticError: string | undefined;
   const deep = body.deep !== false;
   if (deep) {
-    const agentId = (body.agentId ?? c.req.query('agent') ?? '').trim();
-    if (!agentId) {
-      // 未指定 agent：降级为只返回机械检查结果（非阻断）
-      semanticError = '未指定 agent，已仅返回机械检查结果';
-    } else {
-      const def = getAgentDef(agentId);
-      if (!def) return c.json({ error: `agent not found: ${agentId}` }, 400);
-      if (def.usesAcp) {
-        return c.json({ error: '语义核查暂不支持 ACP agent，请使用 claude 等 CLI agent' }, 400);
-      }
+    const prompt = buildFactCheckPrompt({
+      chapter: chapterNum,
+      chapterText,
+      pov: cast.pov,
+      roster,
+      knowledge,
+      timeline: state.timeline,
+      previousSummary: await readRecentSummaries(projectDir, chapterNum),
+      outline: outline.content,
+    });
 
-      const prompt = buildFactCheckPrompt({
-        chapter: chapterNum,
-        chapterText,
-        pov: cast.pov,
-        roster,
-        knowledge,
-        timeline: state.timeline,
-        previousSummary: await readRecentSummaries(projectDir, chapterNum),
-        outline: outline.content,
-      });
-
-      try {
-        const output = await callAgentOnce(def, prompt, projectDir, FACT_CHECK_TIMEOUT_MS);
-        const parsed = parseFactCheckResponse(output, chapterNum);
-        if (parsed === null) {
-          semanticError = 'AI 输出无法解析为事实核查 JSON，已仅返回机械检查结果';
-        } else {
-          semantic = parsed;
-        }
-      } catch (e) {
-        // 语义核查失败不阻断：保留机械检查结果，前端展示错误提示
-        semanticError = e instanceof Error ? e.message : String(e);
+    try {
+      const output = await callAgentOnce(prompt, projectDir, FACT_CHECK_TIMEOUT_MS);
+      const parsed = parseFactCheckResponse(output, chapterNum);
+      if (parsed === null) {
+        semanticError = 'AI 输出无法解析为事实核查 JSON，已仅返回机械检查结果';
+      } else {
+        semantic = parsed;
       }
+    } catch (e) {
+      // 语义核查失败不阻断：保留机械检查结果，前端展示错误提示
+      semanticError = e instanceof Error ? e.message : String(e);
     }
   }
 

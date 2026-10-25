@@ -192,10 +192,52 @@ describe('composePrompt', () => {
           stage: 'concept',
           projectDir: tempDir,
         });
-        // TOOL_INSTRUCTIONS 应列出环境无关的「提问工具 (ask)」名称
-        expect(prompt).toContain('提问工具 (ask)');
+        // TOOL_INSTRUCTIONS 应列出内置 Pi 的 ask 工具
+        expect(prompt).toContain('**ask** — Ask the user to choose between options');
         // 行为指令应使用「提问工具」
         expect(prompt).toContain('用提问工具就');
+      });
+
+      it('注入 canon 台账与章节合同', async () => {
+        await fs.mkdir(path.join(tempDir, '.novel', 'contracts'), { recursive: true });
+        await fs.mkdir(path.join(tempDir, '.novel', 'canon'), { recursive: true });
+        await fs.writeFile(
+          path.join(tempDir, '.novel', 'contracts', '第1章.json'),
+          JSON.stringify({
+            chapter: 1,
+            pov: '林岚',
+            cast: ['林岚'],
+            beats: ['发现密信'],
+            mustReveal: ['密信'],
+            mustNotReveal: ['真凶身份'],
+            wordBudget: { target: 1000 },
+            status: 'frozen',
+          }),
+          'utf-8',
+        );
+        await fs.writeFile(
+          path.join(tempDir, '.novel', 'canon', 'canon.json'),
+          JSON.stringify({
+            version: 1,
+            entities: [{ id: 'e1', name: '林岚', type: 'character', aliases: ['阿岚'], status: 'active' }],
+            facts: [{ id: 'f1', subject: '林岚', predicate: 'location', object: '山门', validFrom: 1, status: 'active', confidence: 'confirmed' }],
+            knowledge: { 林岚: { knows: ['师父遇害'], doesNotKnow: [] } },
+          }),
+          'utf-8',
+        );
+
+        const prompt = await composePrompt({
+          message: '写第1章',
+          projectId: 'p',
+          stage: 'writing',
+          projectDir: tempDir,
+          agentId: 'pi',
+        });
+        expect(prompt).toContain('章节合同（第1章，已冻结');
+        expect(prompt).toContain('禁止提前揭示：真凶身份');
+        expect(prompt).toContain('Canon 台账');
+        expect(prompt).toContain('location = 山门');
+        expect(prompt).toContain('已知：师父遇害');
       });
 
       it('writing 阶段指令采用职责分离（正文与状态更新分离）', async () => {
@@ -205,9 +247,9 @@ describe('composePrompt', () => {
           stage: 'writing',
           projectDir: tempDir,
         });
-        // 职责分离：写正文委托 state-patcher，不再内联五步指令
+        // 职责分离：写正文后由当前 Pi 会话以 state-patcher 视角回写状态
         expect(prompt).toContain('写章流程（职责分离）');
-        expect(prompt).toContain('委托 state-patcher SubAgent 完成状态更新');
+        expect(prompt).toContain('以 state-patcher 视角完成状态更新');
         // 五个状态文件均作为 state-patcher 的委托项列出
         expect(prompt).toContain('.novel/chapters/第N章.summary.md');
         expect(prompt).toContain('.novel/character-states.md');
@@ -362,18 +404,17 @@ describe('composePrompt', () => {
       expect(prompt).toContain(STAGE_FEATURES.concept);
     });
 
-    describe('subagent guidance injection (职责分离)', () => {
-      it('agentId=omp 注入 SubAgent 使用指导，含五个状态文件', async () => {
+    describe('内置 Pi 的职责分离指导', () => {
+      it('writing 阶段注入内置 Pi 的自检/状态回写指导', async () => {
         const prompt = await composePrompt({
           message: 'hi',
           projectId: 'p',
           stage: 'writing',
           projectDir: tempDir,
-          agentId: 'omp',
+          agentId: 'pi',
         });
-        expect(prompt).toContain('## SubAgent 使用指导');
-        expect(prompt).toContain('task 工具');
-        expect(prompt).toContain('### state-patcher（状态更新）');
+        expect(prompt).toContain('## 职责分离（内置 Pi）');
+        expect(prompt).toContain('不要声称已经调用子代理');
         expect(prompt).toContain('.novel/chapters/第N章.summary.md');
         expect(prompt).toContain('.novel/character-states.md');
         expect(prompt).toContain('.novel/progress.md');
@@ -381,30 +422,14 @@ describe('composePrompt', () => {
         expect(prompt).toContain('.novel/foreshadow.json');
       });
 
-      it('agentId=opencode 注入内联状态更新指导（不支持 SubAgent）', async () => {
-        const prompt = await composePrompt({
-          message: 'hi',
-          projectId: 'p',
-          stage: 'writing',
-          projectDir: tempDir,
-          agentId: 'opencode',
-        });
-        expect(prompt).toContain('不支持 SubAgent 委托');
-        // OpenCode 自行完成五个状态文件更新
-        expect(prompt).toContain('.novel/character-states.md');
-        expect(prompt).toContain('.novel/progress.md');
-        expect(prompt).toContain('.novel/foreshadow.json');
-      });
-
-      it('未指定 agentId 时不注入 subagent 指导', async () => {
+      it('未指定 agentId 时不注入职责分离指导', async () => {
         const prompt = await composePrompt({
           message: 'hi',
           projectId: 'p',
           stage: 'writing',
           projectDir: tempDir,
         });
-        expect(prompt).not.toContain('## SubAgent 使用指导');
-        expect(prompt).not.toContain('不支持 SubAgent 委托');
+        expect(prompt).not.toContain('## 职责分离（内置 Pi）');
       });
     });
   });
