@@ -32,6 +32,9 @@ const CharacterGraphView = lazy(() => import('@/web/components/views/CharacterGr
 const CanonView = lazy(() => import('@/web/components/views/CanonView'));
 const WuxiaView = lazy(() => import('@/web/components/views/WuxiaView'));
 const WritingView = lazy(() => import('@/web/components/views/WritingView'));
+const CostPanel = lazy(() => import('@/web/components/CostPanel'));
+const PromptPresetPanel = lazy(() => import('@/web/components/PromptPresetPanel'));
+const PublishExportDialog = lazy(() => import('@/web/components/PublishExportDialog'));
 
 /** Sidebar chapters 回退常量——避免每次渲染新建数组导致 memo 失效。 */
 const EMPTY_CHAPTERS: Array<{ number: number; title: string | null }> = [];
@@ -372,6 +375,8 @@ function ViewRouter({ activeView, projectId, onViewChange, agentId, skillId }: {
   if (activeView === 'story-arc') return <StoryArcView projectId={projectId} />;
   if (activeView === 'character-graph') return <CharacterGraphView projectId={projectId} />;
   if (activeView === 'canon') return <CanonView projectId={projectId} />;
+  if (activeView === 'presets') return <PromptPresetPanel projectId={projectId} />;
+  if (activeView === 'costs') return <CostPanel projectId={projectId} />;
   if (activeView === 'wuxia') return <WuxiaView projectId={projectId} />;
   if (activeView === 'sample') return <WritingView projectId={projectId} onViewChange={onViewChange} variant="sample" />;
   if (activeView === 'writing') return <WritingView projectId={projectId} onViewChange={onViewChange} />;
@@ -416,6 +421,8 @@ export default function ProjectPage() {
   const [syncing, setSyncing] = useState(false);
   const [snapshotSaving, setSnapshotSaving] = useState(false);
   const [showReview, setShowReview] = useState(false);
+  /** 平台文本导出/敏感词扫描对话框（P2 发布适配）。 */
+  const [showPublish, setShowPublish] = useState(false);
   const [showSnapshots, setShowSnapshots] = useState(false);
   const review = useReview(id!);
 
@@ -785,6 +792,9 @@ export default function ProjectPage() {
                 <button onClick={() => handleExport('docx')} title="导出 Word 文档（正文稿）">
                   DOCX
                 </button>
+                <button onClick={() => setShowPublish(true)} title="平台发布纯文本（起点/番茄/七猫/晋江）与全本敏感词扫描">
+                  平台文本 / 敏感词
+                </button>
               </div>
             </details>
             <button className={previewToggle} onClick={handleUndo} title="回滚到历史快照（快照之后产生的文件将被删除）">回滚</button>
@@ -831,6 +841,19 @@ export default function ProjectPage() {
       >
         <ChatPanel key={id} projectId={id!} agentId={activeAgentId} onAgentChange={setActiveAgentId} skillId={project.skillId} stage={project.currentStage} onStageChange={handleStageChange} />
       </div>
+      {showPublish && (
+        <Suspense fallback={null}>
+          <PublishExportDialog
+            projectId={id!}
+            projectTitle={project.title}
+            onClose={() => setShowPublish(false)}
+            onOpenChapter={(n) => {
+              setShowPublish(false);
+              setActiveView(`chapter-${n}`);
+            }}
+          />
+        </Suspense>
+      )}
       {showReview && (
         <ReviewPanel
           review={review.review}

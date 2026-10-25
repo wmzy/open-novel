@@ -1,0 +1,43 @@
+name: Eval Nightly
+
+# P2 长程评测（docs/改进计划-内置Pi-SDK.md §7）：夜间跑 300 章一致性评测。
+# 产物 JSON 随 artifact 上传；P0 命中率跌破 90% 等门槛失败时 job 直接红灯。
+# LLM judge 在 CI 无凭据，默认不请求（本地 EVAL_JUDGE=1 可选执行）。
+on:
+  schedule:
+    - cron: '0 19 * * *' # UTC 19:00 = 北京时间次日 03:00
+  workflow_dispatch:
+    inputs:
+      chapters:
+        description: '评测章节数（默认 300）'
+        required: false
+        default: '300'
+
+jobs:
+  consistency-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 长程一致性评测
+        run: EVAL_CHAPTERS=${{ inputs.chapters || '300' }} node scripts/eval-consistency.mjs
+
+      - name: 上传评测结果 JSON
+        if: always() # 失败时也上传产物，便于诊断命中率/性能数字
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: tests/eval/results/*.json
+          if-no-files-found: warn

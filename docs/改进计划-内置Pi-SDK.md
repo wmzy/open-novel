@@ -262,4 +262,73 @@ Pi 只认兼容 API。订阅用户需在本地启动一个反代，把订阅转�
 
 仍待后续：
 
-- P2 编辑器/分发/发布/评测（段落级 diff/合并、Docker、成本面板、发布适配、长程评测）。
+- ~~P2 编辑器/分发/发布/评测~~ → 已在第三轮完成（见第 13 节）。
+
+## 13. 第三轮实施记录（2026-10-26）：P2 体验与分发全部落地
+
+七个 P2 条目全部实施（两波并行子任务 + 主线集成）：
+
+- **编辑器内联 AI（润色/扩写/续写 + 段落级 diff/合并）**：
+  `src/shared/inline-edit.ts` 纯函数层（三动作中文 prompt、段落合并计划
+  原位替换/追加/整体替换三策略）+ `POST /api/projects/:id/inline` 同步端点
+  （run 锁、callPiOnce）+ EditorPanel 内联工具条（选区感知：有选区出
+  润色/扩写、光标在文末出续写；结果先 diff 预览、应用/放弃，应用走既有
+  防抖保存）。34 用例（含 jsdom 组件全流程）。
+- **成本面板**：`runtime_usage` 事件补 `model` 字段；
+  `GET /api/projects/:id/costs/summary`（byModel/byRun/byChapter/byDay
+  聚合，章节归属用 artifacts 写盘清单精确解析）+ `/budget`
+  （`cost_budget_usd` 设置、超支判断）；CostPanel（预算进度条、超支横幅、
+  四张聚合表）挂入侧栏「成本」视图。rewrite run 无 conversation 不计入
+  （runs 表无归属，不摊派）。
+- **发布适配**：`publish-formats.ts` 表驱动四平台纯文本格式（起点/晋江
+  章名行+单空行、番茄标题后空行、七猫段落无空行，全部剥 markdown）；
+  `sensitive-words.ts` 内置 81 词 + 项目级 `.novel/sensitive-words.txt`
+  扩展，`GET /export/sensitive-scan` 全本扫描；`validateEpub` 结构校验
+  （mimetype stored 首位、container.xml、OPF manifest/spine 闭环）接入
+  epub 导出自检；导出菜单新增「平台文本 / 敏感词」对话框（可跳章）。
+  37 用例；平台规则标注 [假设：通行约定]。
+- **提示词预设版本化 + SKILL.md 导入 + 组装预览**：
+  `.novel/prompt-presets/`（manifest + append-only vN.md + current 指针）、
+  `bindings.json` 阶段绑定、`importFromSkillFile`（剥 YAML frontmatter）；
+  `/api/projects/:id/presets` CRUD/版本/绑定/导入（run 锁）+ `/preview`
+  组装预览（预设边界标记 + token 估算）；PromptPresetPanel 挂侧栏
+  「提示词预设」视图。**composePrompt 已接线消费**：generate 模式注入
+  当前阶段绑定预设（写作族子阶段复用 writing 绑定，decompose/enrich
+  专用路径不注入，损坏静默跳过）。
+- **Docker/npx/Release 打包**：多阶段 Dockerfile（node:22-slim、非 root、
+  HEALTHCHECK node fetch、状态收敛 /data 含 HOME）、docker-compose.yml
+  （named volume + AUTH_TOKEN 示例）、`bin/open-novel.mjs` 启动器 +
+  package.json bin/files、release.yml（tag → typecheck/测试/build →
+  tarball+sha256 → GitHub Release）、README「部署」章节。podman 全程
+  E2E 实测（build/run/健康检查/AUTH_TOKEN 401/数据卷持久化）。
+  修复 pnpm 11 `ERR_PNPM_IGNORED_BUILDS`（allowBuilds 补齐）。
+- **长程评测 + 夜间 CI**：`tests/eval/consistency.eval.test.ts`
+  （EVAL_RUN 门控，常规 CI skip）；`scripts/eval-consistency.mjs` 薄壳 +
+  `pnpm eval:consistency`；100/300 章实跑：P0 命中 100%（30/30、90/90）、
+  干净章零误报、buildCanonContext ≤1ms；可选 LLM judge（无 Key 优雅
+  跳过）；eval-nightly.yml（cron + artifact）。
+- **PR 式审阅行内评论**：`.novel/review/comments.jsonl`（append-only、
+  后写覆盖 resolve、O_APPEND 原子追加）；review 路由新增
+  GET/POST `/comments`、PATCH `/comments/:id`（写操作 run 锁、路径校验，
+  GET 在 run 中放行）；ReviewPanel 改 PR 式：文件展开 diff、行级评论
+  （行号锚点 + 解决勾选）、💬 徽标与「N 文件 / M 未解决评论」汇总条。
+  git accept/reject 语义与不变量零改动。31 用例。
+
+已验证：
+
+- `pnpm typecheck` 通过；`pnpm lint` 0 error（41 历史warning）；`pnpm build` 通过。
+- `pnpm vitest run --changed --maxWorkers=4`：102 files / 1484 tests 通过
+  （1 skipped 为 eval 门控文件，符合设计）。
+- 生产构建冒烟：costs summary/budget 空态、presets 创建（拼音 slug）/
+  绑定/preview（边界标记 + tokensApprox）、inline 无 Key 优雅 500、
+  qidian 平台导出、sensitive-scan 干净零命中、review comments 写入与
+  byFile 分组全部实测通过。
+- 打包：podman build/run/健康检查/AUTH_TOKEN 鉴权/数据卷持久化 E2E 通过。
+
+仍待后续（P3 候选）：
+
+- 富文本/Markdown WYSIWYG 编辑器（当前内联 AI 基于纯文本 textarea）。
+- npm 实际发布（package.json bin/files 已就绪，需 registry 凭据）；
+  Docker 镜像发布（workflow 留 TODO）。
+- run 级实时成本提醒（当前打开成本面板才提醒）；语义回忆向量化模型可配。
+- LLM judge 接入夜间 CI（需 CI 凭据注入）。

@@ -2,8 +2,20 @@
   "name": "open-novel",
   "version": "0.1.0",
   "type": "module",
-  "private": true,
   "license": "MIT",
+  "bin": {
+    "open-novel": "bin/open-novel.mjs"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "plugins/",
+    "drizzle/",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=22.19.0"
   },
@@ -18,6 +30,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "eval:consistency": "node scripts/eval-consistency.mjs",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",

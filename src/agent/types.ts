@@ -20,7 +20,7 @@ export type StreamEvent =
   | { type: 'tool_result'; toolUseId: string; content: string; isError: boolean }
   | { type: 'usage'; usage?: unknown; costUsd?: number | null }
   | { type: 'context_size'; chars: number; tokens: number }
-  | { type: 'runtime_usage'; used: number; size: number; costUsd?: number | null }
+  | { type: 'runtime_usage'; used: number; size: number; costUsd?: number | null; model?: string | null }
   | { type: 'error'; message: string }
   | { type: 'commands'; commands: AgentCommand[] }
   | { type: 'ask'; ask: AskPrompt }

@@ -82,7 +82,42 @@ AUTH_TOKEN="$(openssl rand -hex 24)" HOST=0.0.0.0 npm start
 
 **语义检索（可选，默认关闭）**：在「设置 → 语义检索」配置 OpenAI 兼容的嵌入服务（Base URL / 模型 / API Key）。配置后章节正文与摘要会发送到该服务建立索引，搜索支持 `mode=semantic|hybrid`，写作阶段还会注入最多 3 个语义相关的更早章节片段。API Key 只存服务端、不回显；未配置时搜索、提示词与索引行为均保持不变。向量以 `real[]` 存储并在 JS 侧计算余弦（当前 PGlite 未内置 pgvector），未配置/调用失败时自动回退文本检索。
 
-## 项目结构
+## 部署
+
+除本地开发（`npm run dev`）外，提供两种自托管方式，均要求 Node ≥ 22.19（Docker 方式由镜像保证）。
+
+### Docker Compose（推荐）
+
+```bash
+git clone https://github.com/wmzy/open-novel.git
+cd open-novel
+docker compose up -d --build
+docker compose ps   # STATUS 显示 (healthy) 即就绪
+```
+
+- **数据卷**：所有可写状态都持久化在 named volume `open-novel-data`（容器内 `/data`）——PGlite 数据库（`/data/pglite`）、定时备份（`/data/backups`）、Pi 会话元数据（`/data/pi-agent`）与默认项目目录（`/data/novels`）。删除容器不丢数据；整体迁移/备份可 `tar` 该 volume（`docker run --rm -v open-novel-data:/data -v "$PWD":/out alpine tar czf /out/open-novel-data.tgz /data`）。若改用 bind mount，宿主目录需 `chown 1000:1000`（容器内 node 用户 uid）。
+- **健康检查**：镜像内置 `HEALTHCHECK`（`node` 调 `/api/health`，30s 间隔；数据库异常时报告 `degraded` 并判为不健康），Compose 直接继承，无需配置。
+- **安全**：容器必须监听 `0.0.0.0`（镜像已设置），端口映射后通常可被局域网访问，**务必设置 `AUTH_TOKEN`**：在 `docker-compose.yml` 取消 `AUTH_TOKEN` 注释并替换为 `openssl rand -hex 24` 的输出；浏览器首次访问 `http://<host>:3006/api/health?token=<AUTH_TOKEN>` 完成登录，详见上文「访问控制」。
+
+### npx / 发布包
+
+```bash
+# 发布到 npm 后：
+npx open-novel@latest
+
+# 或从 GitHub Release 下载 tarball（https://github.com/wmzy/open-novel/releases/latest），
+# tarball 不打包 node_modules，需自行安装生产依赖：
+curl -LO https://github.com/wmzy/open-novel/releases/download/v0.1.0/open-novel-0.1.0.tar.gz
+tar xzf open-novel-0.1.0.tar.gz && cd open-novel-0.1.0
+pnpm install --prod --frozen-lockfile   # 或 npm install --omit=dev
+node bin/open-novel.mjs
+```
+
+- **数据位置**：`bin/open-novel.mjs` 启动器把数据收敛到 `OPEN_NOVEL_HOME`（默认 `~/.open-novel/`：`pglite/` 数据库、`backups/` 备份、`pi-agent/` 会话元数据），不会在当前目录散落 `./data`；项目默认仍在 `~/novels/`。`PORT` / `HOST` / `OPEN_NOVEL_HOME` / `PGLITE_DATA_DIR` 等环境变量均可覆盖（全表见「配置」）。
+- **安全默认**：启动器沿用服务的单机默认——只监听 `127.0.0.1`。需要局域网访问时 `HOST=0.0.0.0 AUTH_TOKEN=... node bin/open-novel.mjs`。
+- 从源码运行（未构建）会得到明确报错并退出：请先 `pnpm build` 或改用发布包。
+
+
 
 ```
 src/

@@ -1,0 +1,68 @@
+name: Release
+
+# 推送 v* tag 触发：构建 → 测试 → 打 tar.gz → 创建 GitHub Release。
+# 用法：更新 package.json version 后 git tag vX.Y.Z && git push origin vX.Y.Z
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # 创建 Release 与上传产物
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # CI 允许全量：单元 + 集成测试。E2E 需要浏览器且已在 ci.yml 覆盖，这里不重复。
+      - name: Unit & integration tests
+        run: pnpm vitest run --maxWorkers=4
+
+      - name: Build
+        run: npm run build
+
+      - name: Package release tarball
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 package.json version $PKG_VERSION 不一致；请先更新版本号再打 tag"
+            exit 1
+          fi
+          STAGE="open-novel-$VERSION"
+          mkdir -p "pkg/$STAGE"
+          # tarball 只含运行所需：构建产物 + 启动器 + 插件 + migration + 安装清单。
+          # 不打包 node_modules——用户侧 pnpm install --prod 安装（见 README「部署」）。
+          # pnpm-workspace.yaml（allowBuilds）必须随包，否则全新安装触发
+          # ERR_PNPM_IGNORED_BUILDS 直接失败。
+          cp -r dist bin plugins drizzle package.json pnpm-lock.yaml pnpm-workspace.yaml README.md LICENSE "pkg/$STAGE/"
+          tar -czf "open-novel-$VERSION.tar.gz" -C pkg "$STAGE"
+          sha256sum "open-novel-$VERSION.tar.gz" > "open-novel-$VERSION.tar.gz.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            open-novel-*.tar.gz
+            open-novel-*.tar.gz.sha256
+          generate_release_notes: true
+
+      # TODO: Docker 镜像发布（ghcr.io）。当前无 registry 凭据，暂不启用；
+      # 启用时追加 docker/build-push-action 步骤（push ghcr.io/<owner>/open-novel），
+      # 并确认 GITHUB_TOKEN 具备 packages:write 权限。

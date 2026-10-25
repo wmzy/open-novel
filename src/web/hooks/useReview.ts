@@ -21,6 +21,28 @@ export interface ReviewResult {
   totalRemoved: number;
   /** run 进行中时后端返回占位（不跑 git/不做 checkpoint），任务结束后失效重拉。 */
   runInProgress?: boolean;
+  /** run 占位时附带的活动 run id。 */
+  runId?: string;
+}
+
+/** 行内评论（PR 式审阅）：与后端 src/shared/review-comments.ts 的 ReviewComment 对应。 */
+export interface ReviewComment {
+  id: string;
+  file: string;
+  /** 行号锚点；省略 = 文件级评论。 */
+  line?: number;
+  body: string;
+  author?: string;
+  /** ISO 时间戳。 */
+  createdAt: string;
+  resolved: boolean;
+  resolvedAt?: string;
+}
+
+export interface ReviewCommentsResult {
+  comments: ReviewComment[];
+  byFile: Record<string, ReviewComment[]>;
+  unresolvedCount: number;
 }
 
 /**
@@ -103,5 +125,67 @@ export function useReview(projectId: string) {
     acceptFile: (path: string) => fileMut.mutateAsync({ op: 'accept', path }),
     rejectFile: (path: string) => fileMut.mutateAsync({ op: 'reject', path }),
     fileBusy: fileMut.isPending,
+  };
+}
+
+/**
+ * 行内评论 hook（PR 式审阅）：GET /review/comments + 新增/解决 mutations。
+ * 评论是纯 .novel 元数据，GET 在 run 进行中后端也放行；
+ * 评论变化不失效 review 主查询（评论不改变 diff）。
+ */
+export function useReviewComments(projectId: string | undefined) {
+  const qc = useQueryClient();
+
+  const query = useQuery({
+    queryKey: ['review-comments', projectId],
+    queryFn: async () => {
+      const res = await fetch(`/api/projects/${projectId}/review/comments`);
+      if (!res.ok) throw new Error('拉取评论失败');
+      return (await res.json()) as ReviewCommentsResult;
+    },
+    enabled: !!projectId,
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['review-comments', projectId] });
+
+  const addMut = useMutation({
+    mutationFn: async ({ file, line, body }: { file: string; line?: number; body: string }) => {
+      const res = await fetch(`/api/projects/${projectId}/review/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file, line, body }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || '添加评论失败');
+      }
+      return res.json();
+    },
+    onSuccess: invalidate,
+  });
+
+  const resolveMut = useMutation({
+    mutationFn: async ({ id, resolved }: { id: string; resolved: boolean }) => {
+      const res = await fetch(`/api/projects/${projectId}/review/comments/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resolved }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error || '更新评论失败');
+      }
+      return res.json();
+    },
+    onSuccess: invalidate,
+  });
+
+  return {
+    comments: query.data,
+    addComment: addMut.mutateAsync,
+    resolveComment: resolveMut.mutateAsync,
+    commentBusy: addMut.isPending || resolveMut.isPending,
   };
 }

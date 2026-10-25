@@ -9,7 +9,8 @@ import { extractChapterOutline, identifyCast, buildCastLayer, buildPovKnowledgeL
 import { buildReverseDecomposePrompt } from './reverse-decomposer';
 import { buildEnrichPrompt } from './enricher';
 import { STAGE_OUTPUT_FILES, isCritiqueRound } from '../shared/deepen';
-import { isWritingStage } from '../shared/stages';
+import { isWritingStage, STAGES } from '../shared/stages';
+import { resolveActivePresetPrompt } from '../shared/prompt-presets';
 import { parseChapterNumber } from '../shared/chapter-names';
 import {
   assembleWithBudget,
@@ -1392,6 +1393,22 @@ ${questionRule}
   const subagentGuidance = getSubagentGuidance(agentId);
   if (subagentGuidance) {
     parts.push(`\n${subagentGuidance}`);
+  }
+
+  // 阶段提示词预设：项目级 .novel/prompt-presets 中绑定到当前阶段的版本化预设，
+  // 作为用户自定义补充层注入（介于创作者指令与内置阶段指令之间）。
+  // 写作族子阶段（drafting/revision/polish 等）复用 writing 绑定；decompose/enrich
+  // 有专用提示词构建路径，不注入。预设损坏时静默跳过，不阻断 run。
+  if (!isRevise) {
+    const presetStage = isWritingStage(currentStage) ? 'writing' : currentStage;
+    if (STAGES.some((s) => s.id === presetStage)) {
+      try {
+        const preset = await resolveActivePresetPrompt(projectDir, presetStage);
+        if (preset) {
+          parts.push(`\n## 阶段提示词预设：${preset.name}（v${preset.version}）\n\n${preset.content}`);
+        }
+      } catch { /* 预设文件损坏/版本缺失：跳过注入 */ }
+    }
   }
 
   if (skillContent && !isRevise) {

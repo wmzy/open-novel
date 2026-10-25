@@ -203,6 +203,7 @@ describe('startPiAgent', () => {
         | Extract<StreamEvent, { type: 'runtime_usage' }>
         | undefined;
       expect(runtimeUsage?.used).toBe(17);
+      expect(runtimeUsage?.model).toBe('fake-model');
     } finally {
       await fs.rm(cwd, { recursive: true, force: true });
     }

@@ -33,6 +33,9 @@ import foreshadowsRouter from './api/routes/foreshadows';
 import retroRouter from './api/routes/retro';
 import batchRouter from './api/routes/batch';
 import contextRouter from './api/routes/context';
+import inlineRouter from './api/routes/inline';
+import costsRouter from './api/routes/costs';
+import presetsRouter from './api/routes/presets';
 
 const app = new Hono();
 
@@ -114,6 +117,9 @@ app.route('/api/projects/:projectId/review', reviewRouter);
 app.route('/api/projects/:projectId/foreshadows', foreshadowsRouter);
 app.route('/api/projects/:projectId/batch', batchRouter);
 app.route('/api/projects/:projectId/context', contextRouter);
+app.route('/api/projects/:projectId/inline', inlineRouter);
+app.route('/api/projects/:projectId/costs', costsRouter);
+app.route('/api/projects/:projectId/presets', presetsRouter);
 app.route('/api/projects/:projectId', retroRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);

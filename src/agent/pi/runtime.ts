@@ -159,7 +159,7 @@ function textFromToolResult(result: unknown): string {
   return '';
 }
 
-function usageEvent(message: { usage?: unknown }, contextWindow: number): StreamEvent | null {
+function usageEvent(message: { usage?: unknown }, contextWindow: number, model: string | null): StreamEvent | null {
   const usage = message.usage as
     | {
         input?: number;
@@ -179,10 +179,12 @@ function usageEvent(message: { usage?: unknown }, contextWindow: number): Stream
     used: totalTokens,
     size: contextWindow,
     costUsd: usage.cost?.total ?? null,
+    // 成本面板按模型聚合需要 model id；旧事件无此字段，消费方按 null 处理
+    model,
   };
 }
 
-function mapPiEvent(event: AgentSessionEvent, onEvent: (event: StreamEvent) => void, contextWindow: number): void {
+function mapPiEvent(event: AgentSessionEvent, onEvent: (event: StreamEvent) => void, contextWindow: number, model: string | null): void {
   switch (event.type) {
     case 'message_update': {
       const assistantEvent = event.assistantMessageEvent;
@@ -218,7 +220,7 @@ function mapPiEvent(event: AgentSessionEvent, onEvent: (event: StreamEvent) => v
     }
     case 'message_end': {
       if (event.message.role !== 'assistant') return;
-      const runtimeUsage = usageEvent(event.message, contextWindow);
+      const runtimeUsage = usageEvent(event.message, contextWindow, model);
       if (runtimeUsage) onEvent(runtimeUsage);
       onEvent({
         type: 'usage',
@@ -261,6 +263,8 @@ function mapPiEvent(event: AgentSessionEvent, onEvent: (event: StreamEvent) => v
 async function createPiSession(options: PiRunOptions): Promise<{
   session: AgentSession;
   contextWindow: number;
+  /** 解析后的模型 id（runtime_usage 事件按模型聚合用）。 */
+  modelId: string;
 }> {
   const { runtime, settings } = await createPiModelRuntime();
   // 模型优先级：显式 model > 阶段默认（pi_stage_models 按 stage 解析）> 全局设置。
@@ -316,7 +320,7 @@ async function createPiSession(options: PiRunOptions): Promise<{
     customTools,
   });
 
-  return { session, contextWindow: model.contextWindow };
+  return { session, contextWindow: model.contextWindow, modelId: model.id };
 }
 
 /**
@@ -341,7 +345,7 @@ export function startPiAgent(options: PiRunOptions): PiRunHandle {
 
       const unsubscribe = session.subscribe((event) => {
         try {
-          mapPiEvent(event, options.onEvent, contextWindow);
+          mapPiEvent(event, options.onEvent, contextWindow, setup.modelId);
         } catch (err) {
           // 事件消费者异常不应中断 agent loop。
           options.onEvent({ type: 'error', message: `事件处理失败：${errorMessage(err)}` });

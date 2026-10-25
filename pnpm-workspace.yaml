@@ -1,2 +1,8 @@
 allowBuilds:
   esbuild: true
+  # pnpm 11 对未放行的构建脚本直接报错（ERR_PNPM_IGNORED_BUILDS），
+  # Docker / CI / tarball 全新安装都会失败。这两个是 pi-ai 的传递依赖，
+  # 脚本内容为 SDK 自身的 prepare/postinstall（无外部下载）。
+  "@google/genai": true
+  protobufjs: true
+

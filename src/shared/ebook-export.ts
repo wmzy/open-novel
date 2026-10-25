@@ -9,7 +9,7 @@
  * 输出前统一做 XML 转义，避免正文中的 & < > " ' 破坏文档结构。
  */
 
-import { strToU8, zipSync, type Zippable } from 'fflate';
+import { strToU8, zipSync, unzipSync, strFromU8, type Unzipped, type Zippable } from 'fflate';
 
 export interface EbookChapter {
   number: number;
@@ -472,6 +472,115 @@ export function buildEpub(input: EbookInput): Uint8Array<ArrayBuffer> {
   }
   // fflate 内部新建 ArrayBuffer 支持的 Uint8Array；收窄类型以便 Hono 直接输出字节。
   return zipSync(files, { level: 6 }) as Uint8Array<ArrayBuffer>;
+}
+
+// ── EPUB 结构校验 ────────────────────────────────────────────
+
+export interface EpubValidation {
+  ok: boolean;
+  errors: string[];
+}
+
+/** 读取 ZIP 首条本地文件头的名称与压缩方式（EPUB 规范要求 mimetype stored 居首）。 */
+function firstZipEntry(bytes: Uint8Array): { name: string; method: number } | null {
+  if (bytes.length < 30) return null;
+  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04) return null;
+  const method = bytes[8] | (bytes[9] << 8);
+  const nameLength = bytes[26] | (bytes[27] << 8);
+  if (30 + nameLength > bytes.length) return null;
+  return { name: strFromU8(bytes.slice(30, 30 + nameLength)), method };
+}
+
+/** 从标签文本取属性值（兼容单/双引号）。校验器不依赖 DOM，纯正则即可覆盖我们生成的简单 XML。 */
+function xmlAttr(tag: string, name: string): string | null {
+  return tag.match(new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`))?.[1] ?? null;
+}
+
+/** manifest 的 href 是相对 OPF 所在目录的路径，解析 ./ 与 ../ 后映射到 zip 条目名。 */
+function resolveZipPath(opfPath: string, href: string): string {
+  const parts = opfPath.split('/').slice(0, -1);
+  for (const seg of href.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+/**
+ * EPUB 3 包结构校验（通用函数，不依赖 buildEpub 的产物形态）：
+ * - ZIP 可解；首条目为 mimetype 且 stored（压缩方式 0），内容为 application/epub+zip；
+ * - META-INF/container.xml 存在并声明 OPF full-path，OPF 在包内；
+ * - manifest 非空且含 properties="nav" 的导航文档；
+ * - spine 的每个 itemref 都能映射到 manifest item，manifest 声明的资源都在包内。
+ */
+export function validateEpub(buffer: Uint8Array): EpubValidation {
+  const errors: string[] = [];
+
+  let zip: Unzipped;
+  try {
+    zip = unzipSync(buffer);
+  } catch (err) {
+    return { ok: false, errors: [`ZIP 解析失败: ${err instanceof Error ? err.message : String(err)}`] };
+  }
+
+  const first = firstZipEntry(buffer);
+  if (!first) {
+    errors.push('不是合法 ZIP（缺少本地文件头）');
+  } else {
+    if (first.name !== 'mimetype') errors.push(`首条 ZIP 条目应为 mimetype，实际为 ${first.name}`);
+    if (first.method !== 0) errors.push('mimetype 条目必须 stored（压缩方式 0）');
+  }
+  const mimetype = zip['mimetype'];
+  if (!mimetype) {
+    errors.push('缺少 mimetype 条目');
+  } else if (strFromU8(mimetype) !== 'application/epub+zip') {
+    errors.push('mimetype 内容不是 application/epub+zip');
+  }
+
+  const container = zip['META-INF/container.xml'];
+  if (!container) {
+    errors.push('缺少 META-INF/container.xml');
+    return { ok: false, errors };
+  }
+  const opfPath = strFromU8(container).match(/full-path\s*=\s*["']([^"']+)["']/)?.[1];
+  if (!opfPath) {
+    errors.push('container.xml 未声明 rootfile full-path（OPF 路径）');
+    return { ok: false, errors };
+  }
+  const opf = zip[opfPath];
+  if (!opf) {
+    errors.push(`OPF 文件不在包内: ${opfPath}`);
+    return { ok: false, errors };
+  }
+
+  const opfText = strFromU8(opf);
+  const manifest = new Map<string, { href: string; properties: string }>();
+  let hasNav = false;
+  for (const tag of opfText.match(/<item\b[^>]*>/g) ?? []) {
+    const id = xmlAttr(tag, 'id');
+    const href = xmlAttr(tag, 'href');
+    if (!id || !href) continue;
+    const properties = xmlAttr(tag, 'properties') ?? '';
+    manifest.set(id, { href, properties });
+    if (properties.includes('nav')) hasNav = true;
+  }
+  if (manifest.size === 0) errors.push('manifest 为空');
+  if (!hasNav) errors.push('manifest 缺少 properties="nav" 的导航文档');
+
+  const itemrefs = opfText.match(/<itemref\b[^>]*>/g) ?? [];
+  if (itemrefs.length === 0) errors.push('spine 为空（EPUB 3 要求至少一个 itemref）');
+  for (const tag of itemrefs) {
+    const idref = xmlAttr(tag, 'idref');
+    if (idref && !manifest.has(idref)) errors.push(`spine 引用了 manifest 之外的 id: ${idref}`);
+  }
+
+  for (const [id, item] of manifest) {
+    const entryPath = resolveZipPath(opfPath, item.href);
+    if (!zip[entryPath]) errors.push(`manifest 资源不在包内: ${entryPath}（id=${id}）`);
+  }
+
+  return { ok: errors.length === 0, errors };
 }
 
 // ── DOCX (WordprocessingML) ─────────────────────────────────

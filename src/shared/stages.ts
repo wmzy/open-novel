@@ -60,6 +60,8 @@ export const EXTRA_VIEWS = [
   { id: 'dashboard', label: '总览' },
   { id: 'foreshadow', label: '伏笔' },
   { id: 'canon', label: '设定台账' },
+  { id: 'presets', label: '提示词预设' },
+  { id: 'costs', label: '成本' },
   { id: 'wuxia', label: '武侠' },
 ];
 
@@ -71,5 +73,7 @@ export const ALL_VIEWS = [
   { id: 'story-arc', label: '故事脉络' },
   { id: 'character-graph', label: '角色关系' },
   { id: 'canon', label: '设定台账' },
+  { id: 'presets', label: '提示词预设' },
+  { id: 'costs', label: '成本' },
   { id: 'wuxia', label: '武侠' },
 ];

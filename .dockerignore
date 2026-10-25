@@ -1,0 +1,30 @@
+# 版本控制与 CI 配置（镜像内不需要）
+.git
+.github
+
+# 依赖与构建产物：镜像内重新 install / build
+node_modules
+dist
+build
+coverage
+
+# 测试与文档（运行时不需要；注意 plugins/*/SKILL.md 是运行时数据，必须保留，
+# 因此只用根锚定的 /*.md 排除根目录说明文档，不用 **/*.md）
+tests
+docs
+playwright-report
+test-results
+/*.md
+
+# 本地数据与密钥（绝不进镜像层）
+data
+.novel
+.env
+.env.*
+*.log
+
+# 发布产物与临时目录
+bin
+_explore
+*.tar.gz
+.DS_Store

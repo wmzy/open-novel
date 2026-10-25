@@ -12,9 +12,20 @@ import {
   buildEpub,
   exportChapterTitle,
   stripLeadingChapterHeading,
+  validateEpub,
   type EbookChapter,
   type EbookFrontMatter,
 } from '../../shared/ebook-export';
+import {
+  formatForPublish,
+  PUBLISH_TARGETS,
+  type PublishTarget,
+} from '../../shared/publish-formats';
+import {
+  parseSensitiveWordsFile,
+  scanSensitiveWords,
+  type SensitiveWordHit,
+} from '../../shared/sensitive-words';
 
 /** 读取拆分文档目录（index.md + 全部卡片），合并为单个 markdown。目录不存在返回 null。 */
 async function readSplitDoc(docDir: string): Promise<string | null> {
@@ -302,6 +313,13 @@ exportRouter.get('/epub', async (c) => {
     frontMatter,
   });
 
+  // 导出自检：buildEpub 产物必须通过结构校验。理论上不会失败；
+  // 一旦失败说明生成器与规范脱钩，宁可 500 也不产出坏文件。
+  const validation = validateEpub(bytes);
+  if (!validation.ok) {
+    return c.json({ error: 'EPUB 结构自检失败', details: validation.errors }, 500);
+  }
+
   setExportHeaders(c, `${data.project.title}.epub`, 'application/epub+zip', data.warnings);
   return c.body(bytes);
 });
@@ -330,6 +348,85 @@ exportRouter.get('/docx', async (c) => {
     data.warnings,
   );
   return c.body(bytes);
+});
+
+// 平台发布文本：?target=qidian|fanqie|qimao|jinjiang（必填），?chapter=N 选单章（缺省全本合并）。
+// 输出 text/plain，可直接粘进平台发布框。
+exportRouter.get('/publish', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  const targetParam = c.req.query('target') ?? '';
+  if (!PUBLISH_TARGETS.includes(targetParam as PublishTarget)) {
+    return c.json({ error: `无效平台 target=${targetParam}，支持：${PUBLISH_TARGETS.join('/')}` }, 400);
+  }
+  const target = targetParam as PublishTarget;
+
+  const data = await loadManuscriptExport(projectId);
+  if (!data) return c.json({ error: 'Project not found' }, 404);
+
+  let chapters = data.chapters;
+  let filenameSuffix: string = target;
+  const chapterParam = c.req.query('chapter');
+  if (chapterParam !== undefined) {
+    const num = Number(chapterParam);
+    if (!Number.isInteger(num) || num < 1) {
+      return c.json({ error: 'chapter 参数须为正整数章号' }, 400);
+    }
+    const chapter = data.chapters.find((ch) => ch.number === num);
+    if (!chapter) {
+      return c.json({ error: `第${num}章不存在` }, 404);
+    }
+    chapters = [chapter];
+    filenameSuffix = `${target}-第${num}章`;
+  }
+
+  const text = formatForPublish(target, chapters);
+  setExportHeaders(c, `${data.project.title}-${filenameSuffix}.txt`, 'text/plain; charset=utf-8', data.warnings);
+  return c.body(text);
+});
+
+// 敏感词扫描：默认词表 + 项目级 .novel/sensitive-words.txt 合并，逐章扫描以便样本定位章号。
+// 只读端点，不走 run 锁；缺章/归档章节通过 warnings 与正常导出保持一致口径。
+exportRouter.get('/sensitive-scan', async (c) => {
+  const projectId = c.req.param('projectId')!;
+  const data = await loadManuscriptExport(projectId);
+  if (!data) return c.json({ error: 'Project not found' }, 404);
+
+  const extra = parseSensitiveWordsFile(
+    await readFileOrNull(path.join(data.projectDir, 'sensitive-words.txt')) ?? '',
+  );
+
+  // 逐章扫描后按词合并：count 累加，samples 取最先命中的 3 处。
+  const merged = new Map<string, SensitiveWordHit>();
+  const chapterCounts = new Map<number, number>();
+  for (const ch of data.chapters) {
+    if (ch.content === null) continue;
+    const hits = scanSensitiveWords(ch.content, extra, ch.number);
+    let chapterTotal = 0;
+    for (const hit of hits) {
+      chapterTotal += hit.count;
+      const existing = merged.get(hit.word);
+      if (existing) {
+        existing.count += hit.count;
+        existing.samples.push(...hit.samples);
+        existing.samples = existing.samples.slice(0, 3);
+      } else {
+        merged.set(hit.word, { word: hit.word, count: hit.count, samples: [...hit.samples] });
+      }
+    }
+    if (chapterTotal > 0) chapterCounts.set(ch.number, chapterTotal);
+  }
+
+  const hits = [...merged.values()].sort((a, b) => b.count - a.count || a.word.localeCompare(b.word));
+  const totalHits = hits.reduce((sum, hit) => sum + hit.count, 0);
+  return c.json({
+    totalHits,
+    hits,
+    extraWordCount: extra.length,
+    chapterCounts: [...chapterCounts.entries()]
+      .map(([chapter, count]) => ({ chapter, count }))
+      .sort((a, b) => a.chapter - b.chapter),
+    warnings: data.warnings,
+  });
 });
 
 export default exportRouter;

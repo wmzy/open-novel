@@ -1,0 +1,29 @@
+# open-novel 一键部署：docker compose up -d --build
+#
+# 数据全部持久化在 named volume open-novel-data（容器内 /data）：
+#   /data/pglite   PGlite 数据库
+#   /data/backups  定时备份（保留最近 10 份）
+#   /data/pi-agent Pi 会话元数据
+#   /data/novels   默认项目目录（容器内 HOME=/data）
+services:
+  open-novel:
+    build: .
+    image: open-novel:latest
+    ports:
+      - "3006:3006" # 宿主端口:容器端口；改 PORT 时需同步修改左侧
+    environment:
+      # 镜像内已默认 HOST=0.0.0.0（容器必须监听 0.0.0.0 才能被端口映射），
+      # 这里显式写出便于阅读。
+      HOST: 0.0.0.0
+      # 强烈建议设置访问令牌：映射到宿主端口后通常可被局域网访问，无令牌时
+      # 任何能连上的人都能读写项目文件、触发计费 AI 调用。
+      # 生成方式：openssl rand -hex 24；取消下一行注释并替换。
+      # AUTH_TOKEN: change-me
+    volumes:
+      - open-novel-data:/data
+    restart: unless-stopped
+    # 健康检查继承镜像内 HEALTHCHECK（node fetch /api/health，见 Dockerfile），
+    # 此处无需重复声明；docker compose ps 显示 healthy 即就绪。
+
+volumes:
+  open-novel-data:

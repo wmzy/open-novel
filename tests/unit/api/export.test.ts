@@ -250,6 +250,102 @@ describe('DOCX 导出', () => {
   });
 });
 
+describe('平台发布文本导出', () => {
+  it('四平台 target 返回 text/plain，排版符合平台规则（快照断言）', async () => {
+    const responses = await Promise.all(
+      (['qidian', 'fanqie', 'qimao', 'jinjiang'] as const).map(
+        (target) => apiApp.request(`/api/projects/${projectId}/export/publish?target=${target}&chapter=1`),
+      ),
+    );
+    for (const res of responses) {
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    }
+    const [qidian, fanqie, qimao, jinjiang] = await Promise.all(responses.map((r) => r.text()));
+
+    // 第1章正文（setup 写入）两行两段，DB 无标题 → 章名只有编号
+    expect(qidian).toBe('第1章\n\n第一段 & < > "双引号" \'单引号\'，中文正文。\n\n第二段继续。');
+    expect(jinjiang).toBe(qidian);
+    expect(fanqie).toBe(`第1章\n\n\n第一段 & < > "双引号" \'单引号\'，中文正文。\n\n第二段继续。`);
+    expect(qimao).toBe('第1章\n\n第一段 & < > "双引号" \'单引号\'，中文正文。\n第二段继续。');
+
+    const disposition = responses[0].headers.get('content-disposition') ?? '';
+    expect(decodeURIComponent(disposition.match(/filename\*=UTF-8''([^;]+)/)?.[1] ?? ''))
+      .toBe(`${PROJECT_TITLE}-qidian-第1章.txt`);
+  });
+
+  it('缺省 chapter 合并全本，章节间按平台空行衔接', async () => {
+    const res = await apiApp.request(`/api/projects/${projectId}/export/publish?target=qimao`);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toBe('第1章\n\n第一段 & < > "双引号" \'单引号\'，中文正文。\n第二段继续。\n\n第2章\n\n第二章正文：风雪夜归人。');
+  });
+
+  it('无效 target 400；不存在的章号 404；归档章节不在可导出范围', async () => {
+    const bad = await apiApp.request(`/api/projects/${projectId}/export/publish?target=zongheng`);
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toContain('zongheng');
+
+    const degraded = await apiApp.request(`/api/projects/${projectId}/export/publish?target=qidian&chapter=3`);
+    expect(degraded.status).toBe(404);
+    expect(((await degraded.json()) as { error: string }).error).toContain('第3章');
+  });
+});
+
+describe('敏感词扫描', () => {
+  it('逐章扫描返回命中/计数/样本，合并项目级词表，排除归档章节', async () => {
+    await fs.writeFile(
+      path.join(novelDir, 'chapters', '第1章.md'),
+      '# 第1章 风起\n\n城东的赌场彻夜灯火，赌场外有人私藏枪支。\n',
+    );
+    await fs.writeFile(
+      path.join(novelDir, 'chapters', '第2章.md'),
+      '# 第2章 夜行\n\n他体内灵气紊乱，提剑而去。\n',
+    );
+    await fs.writeFile(path.join(novelDir, 'degraded', '第3章.md'), '这家赌场已停业。\n');
+    await fs.writeFile(
+      path.join(novelDir, 'sensitive-words.txt'),
+      '# 项目级词表\n灵气紊乱\n',
+    );
+
+    const res = await apiApp.request(`/api/projects/${projectId}/export/sensitive-scan`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as {
+      totalHits: number;
+      hits: Array<{ word: string; count: number; samples: Array<{ chapter: number | null; index: number; context: string }> }>;
+      extraWordCount: number;
+      chapterCounts: Array<{ chapter: number; count: number }>;
+    };
+
+    expect(data.totalHits).toBe(4); // 赌场×2 + 私藏枪支 + 灵气紊乱
+    expect(data.extraWordCount).toBe(1);
+    const byWord = new Map(data.hits.map((hit) => [hit.word, hit]));
+    expect(byWord.get('赌场')?.count).toBe(2);
+    expect(byWord.get('赌场')?.samples[0].chapter).toBe(1);
+    expect(byWord.get('赌场')?.samples[0].context).toContain('城东的赌场彻夜灯火');
+    expect(byWord.get('私藏枪支')?.count).toBe(1);
+    expect(byWord.get('灵气紊乱')?.count).toBe(1); // 项目级自定义词
+    expect(data.chapterCounts).toEqual([{ chapter: 1, count: 3 }, { chapter: 2, count: 1 }]);
+    // 归档章节的命中不计入
+    expect(data.hits.some((hit) => hit.samples.some((s) => s.chapter === 3))).toBe(false);
+  });
+
+  it('干净文本零命中', async () => {
+    await fs.writeFile(path.join(novelDir, 'chapters', '第1章.md'), '风平浪静，岁月安然。\n');
+    await fs.writeFile(path.join(novelDir, 'chapters', '第2章.md'), '第二段平静的正文。\n');
+    const res = await apiApp.request(`/api/projects/${projectId}/export/sensitive-scan`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { totalHits: number; hits: unknown[] };
+    expect(data.totalHits).toBe(0);
+    expect(data.hits).toEqual([]);
+  });
+
+  it('项目不存在 404', async () => {
+    const res = await apiApp.request('/api/projects/proj_missing/export/sensitive-scan');
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('导出只读', () => {
   it('markdown/text/epub/docx 导出不修改项目文件', async () => {
     const files = [

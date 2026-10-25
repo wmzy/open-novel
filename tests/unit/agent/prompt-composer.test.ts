@@ -23,6 +23,8 @@ vi.mock('../../../src/plugins/registry', () => ({
 
 // Import AFTER mocks are registered.
 const { composePrompt, parseChapterNumberFromMessage, findNextUnwrittenChapter, buildContextSectionReport } = await import('../../../src/agent/prompt-composer');
+// 预设库与 DB 无关，直接引入供注入测试造数。
+import * as presetLib from '../../../src/shared/prompt-presets';
 
 // 用于识别各阶段指令的特征文本（STAGE_INSTRUCTIONS 的首句片段）。
 const STAGE_FEATURES: Record<string, string> = {
@@ -1960,6 +1962,49 @@ describe('composePrompt', () => {
       await fs.writeFile(path.join(novelDir, 'chapters', '第1章.summary.md'), '摘要');
       await fs.writeFile(path.join(novelDir, 'chapters', '第2章.degraded.md'), '退化');
       expect(await findNextUnwrittenChapter(tempDir)).toBe(1);
+    });
+  });
+
+  describe('阶段提示词预设注入（.novel/prompt-presets）', () => {
+    const { createPreset, setStageBinding } = presetLib;
+
+    it('绑定到当前阶段 → 注入预设内容与名称/版本头', async () => {
+      const m = await createPreset(tempDir, { name: '悬疑节奏', stage: 'concept', content: '每章结尾必须留一个钩子。' });
+      await setStageBinding(tempDir, 'concept', m.id);
+      const prompt = await composePrompt({ message: 'hi', projectId: 'p', stage: 'concept', projectDir: tempDir });
+      expect(prompt).toContain('## 阶段提示词预设：悬疑节奏（v1）');
+      expect(prompt).toContain('每章结尾必须留一个钩子。');
+    });
+
+    it('写作族子阶段复用 writing 绑定；decompose/enrich 不注入', async () => {
+      const m = await createPreset(tempDir, { name: '战斗文风', stage: 'writing', content: '战斗场景用短句。' });
+      await setStageBinding(tempDir, 'writing', m.id);
+      const draftingPrompt = await composePrompt({ message: '写', projectId: 'p', stage: 'drafting', projectDir: tempDir });
+      expect(draftingPrompt).toContain('## 阶段提示词预设：战斗文风（v1）');
+      for (const special of ['decompose', 'enrich'] as const) {
+        const prompt = await composePrompt({ message: 'run', projectId: 'p', stage: special, projectDir: tempDir });
+        expect(prompt).not.toContain('阶段提示词预设');
+      }
+    });
+
+    it('未绑定阶段与 revise 模式 → 不注入', async () => {
+      const m = await createPreset(tempDir, { name: '世界构建', stage: 'world', content: '按主题分区展开。' });
+      await setStageBinding(tempDir, 'world', m.id);
+      const unbound = await composePrompt({ message: 'hi', projectId: 'p', stage: 'concept', projectDir: tempDir });
+      expect(unbound).not.toContain('阶段提示词预设');
+      const revise = await composePrompt({
+        message: '改一下', projectId: 'p', stage: 'world', projectDir: tempDir,
+        mode: 'revise', reviseTarget: 'world/社会结构.md', reviseNote: '精简', reviseContent: '原文',
+      });
+      expect(revise).not.toContain('阶段提示词预设');
+    });
+
+    it('绑定指向损坏预设（current 版本文件被删）→ 跳过注入不抛错', async () => {
+      const preset = await createPreset(tempDir, { name: '坏预设', stage: 'concept', content: 'x' });
+      await setStageBinding(tempDir, 'concept', preset.id);
+      await fs.rm(path.join(tempDir, '.novel', 'prompt-presets', preset.id, 'v1.md'));
+      const prompt = await composePrompt({ message: 'hi', projectId: 'p', stage: 'concept', projectDir: tempDir });
+      expect(prompt).not.toContain('阶段提示词预设');
     });
   });
 });
