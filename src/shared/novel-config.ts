@@ -26,6 +26,15 @@ export async function writeNovelConfig(
   await fs.rename(tmp, file);
 }
 
+/**
+ * P1-a：写作 run 成功后是否自动提取 canon 变更（LLM 语义提取）。
+ * 默认开；只有显式写 false 才关闭（缺省/非法值均视为开）。
+ */
+export async function readCanonAutoExtract(projectDir: string): Promise<boolean> {
+  const raw = (await readNovelConfig(projectDir)).canonAutoExtract;
+  return raw !== false;
+}
+
 /** 自动里程碑间隔（章）。默认 50；0 表示关闭；非法值回退默认。 */
 export async function readMilestoneEvery(projectDir: string): Promise<number> {
   const raw = (await readNovelConfig(projectDir)).milestoneEvery;

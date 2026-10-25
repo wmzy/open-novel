@@ -94,7 +94,9 @@ export interface ContractFinding {
     | 'must-not-reveal-present'
     | 'word-budget'
     | 'unknown-cast'
-    | 'contract-draft';
+    | 'contract-draft'
+    | 'dead-entity-cast'
+    | 'dead-entity-mentioned';
   message: string;
   quote?: string;
 }
@@ -443,11 +445,36 @@ function aliasesFor(name: string, ledger: CanonLedger): string[] {
   return entity ? [entity.name, ...entity.aliases, entity.id] : [name];
 }
 
+/** 死亡/失踪语义关键词（用于从事实文本推断实体退场章）。 */
+const DEATH_KEYWORDS = /死亡|身死|阵亡|毙命|失踪|殁|下落不明|dead|lost/i;
+/** 状态类谓词：宾语命中死亡关键词时同样视为退场事实（如「结局 = 死亡」）。 */
+const STATUS_PREDICATES = /状态|结局|下场|下落/;
+
+/**
+ * 推断实体退场（死亡/失踪）章：
+ * 优先取主语命中该实体、含死亡语义的最早未撤回事实的 validFrom；
+ * 无此类事实时回退 sourceChapter；两者皆无返回 null（无法证明已退场，不判定）。
+ */
+function deathChapterFor(entity: CanonEntity, ledger: CanonLedger): number | null {
+  const names = new Set([entity.name, entity.id, ...entity.aliases].filter(Boolean));
+  let inferred: number | null = null;
+  for (const fact of ledger.facts) {
+    if (fact.status === 'retracted') continue;
+    if (!names.has(fact.subject)) continue;
+    const isDeathFact = DEATH_KEYWORDS.test(fact.predicate)
+      || (STATUS_PREDICATES.test(fact.predicate) && DEATH_KEYWORDS.test(fact.object));
+    if (!isDeathFact) continue;
+    if (inferred === null || fact.validFrom < inferred) inferred = fact.validFrom;
+  }
+  if (inferred !== null) return inferred;
+  return typeof entity.sourceChapter === 'number' ? entity.sourceChapter : null;
+}
+
 /**
  * 确定性合同校验（不调用模型）。
  *
- * blocker 用于“定稿阻断”：POV 缺失、mustNotReveal 泄漏；
- * major 用于出场缺失 / 字数越界；minor 用于合同未冻结、未知角色等提示。
+ * blocker 用于“定稿阻断”：POV 缺失、mustNotReveal 泄漏、已死亡/失踪实体出现在合同；
+ * major 用于出场缺失 / 字数越界 / 正文提及已退场实体；minor 用于合同未冻结、未知角色等提示。
  */
 export function validateChapterContract(input: {
   content: string;
@@ -492,6 +519,40 @@ export function validateChapterContract(input: {
         code: 'unknown-cast',
         message: `合同出场角色「${name}」不在 canon 实体表中`,
       });
+    }
+  }
+
+  // 死亡/失踪实体一致性：合同让已退场角色担任 POV/出场是时间线硬矛盾（blocker）；
+  // 正文提及可能是回忆/闪回，仅提示（major）。退场章必须早于当前章才判定。
+  const deadCandidates = ledger.entities
+    .filter((entity) => entity.status === 'dead' || entity.status === 'lost')
+    .map((entity) => ({ entity, deathChapter: deathChapterFor(entity, ledger) }))
+    .filter((candidate) => candidate.deathChapter !== null && candidate.deathChapter < contract.chapter);
+  if (deadCandidates.length > 0) {
+    const flaggedEntities = new Set<string>();
+    for (const name of [contract.pov, ...contract.cast]) {
+      if (!name) continue;
+      const hit = deadCandidates.find(
+        ({ entity }) => entity.name === name || entity.aliases.includes(name) || entity.id === name,
+      );
+      if (!hit || flaggedEntities.has(hit.entity.name)) continue;
+      flaggedEntities.add(hit.entity.name);
+      const label = name === hit.entity.name ? name : `${name}（即「${hit.entity.name}」）`;
+      findings.push({
+        severity: 'blocker',
+        code: 'dead-entity-cast',
+        message: `合同 POV/出场角色「${label}」已于第 ${hit.deathChapter} 章死亡/失踪，不应出现在第 ${contract.chapter} 章合同中`,
+      });
+    }
+    for (const { entity, deathChapter } of deadCandidates) {
+      const names = [entity.name, ...entity.aliases].filter(Boolean);
+      if (names.some((name) => content.includes(name))) {
+        findings.push({
+          severity: 'major',
+          code: 'dead-entity-mentioned',
+          message: `正文提及已死亡/失踪实体「${entity.name}」（第 ${deathChapter} 章退场）；如属回忆/闪回可忽略`,
+        });
+      }
     }
   }
 

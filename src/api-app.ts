@@ -32,6 +32,7 @@ import backupRouter from './api/routes/backup';
 import foreshadowsRouter from './api/routes/foreshadows';
 import retroRouter from './api/routes/retro';
 import batchRouter from './api/routes/batch';
+import contextRouter from './api/routes/context';
 
 const app = new Hono();
 
@@ -112,6 +113,7 @@ app.route('/api/projects/:projectId/rename', renameRouter);
 app.route('/api/projects/:projectId/review', reviewRouter);
 app.route('/api/projects/:projectId/foreshadows', foreshadowsRouter);
 app.route('/api/projects/:projectId/batch', batchRouter);
+app.route('/api/projects/:projectId/context', contextRouter);
 app.route('/api/projects/:projectId', retroRouter);
 app.route('/api/settings', settingsRouter);
 app.route('/api/agents', agentsRouter);

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { useRun } from '@/web/hooks/useRun';
 import type { SendMessageParams } from '@/web/hooks/useRun';
 import { useModels, useModelSelection } from '@/web/hooks/useModels';
@@ -56,6 +56,27 @@ interface Command {
   description: string;
   action?: () => void;
   source?: 'app' | 'agent';
+}
+
+/** 写作族子阶段：与后端 resolveStagePiModel 一致，回退 writing 的阶段默认模型。 */
+const WRITING_FAMILY_STAGES = new Set(['drafting', 'revision', 'polish', 'decompose', 'enrich', 'retro']);
+
+/** 解析当前阶段的默认模型（pi_stage_models JSON）；损坏数据静默回退 undefined（全局默认）。 */
+function resolveStageDefaultModel(raw: string | undefined, stage: string | undefined): string | undefined {
+  if (!raw || !stage) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+  const map = parsed as Record<string, unknown>;
+  const asModel = (key: string): string | undefined => {
+    const value = map[key];
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  };
+  return asModel(stage) ?? (WRITING_FAMILY_STAGES.has(stage) ? asModel('writing') : undefined);
 }
 
 interface Props {
@@ -373,6 +394,21 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
 
   // 模型选择持久化到 localStorage（跨刷新/重进记住），切 agent 后旧模型不在新列表则自动回退 default
   const [selectedModel, setSelectedModel] = useModelSelection(availableModels.map((m) => m.id));
+
+  // 阶段默认模型（pi_stage_models）：设置页按阶段配置，default 选项的文案/提示用。
+  // 与 SettingsPage 共用 ['settings'] 缓存键，queryFn 形状保持一致。
+  const { data: piSettings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const res = await fetch('/api/settings');
+      const data = await res.json();
+      return data.settings as Record<string, string>;
+    },
+  });
+  const stageDefaultModel = useMemo(
+    () => resolveStageDefaultModel(piSettings?.pi_stage_models, effectiveStage),
+    [piSettings, effectiveStage],
+  );
 
   /** 启动深化循环：从第 1 轮开始 */
   const startDeepen = useCallback(() => {
@@ -1156,9 +1192,13 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
           value={selectedModel}
           onChange={(e) => setSelectedModel(e.target.value)}
           disabled={isRunning}
-          title="选择模型（默认模型 = 由 agent 自行决定）"
+          title={
+            selectedModel === 'default'
+              ? `默认模型：按当前阶段取设置中的阶段默认模型${stageDefaultModel ? `（当前阶段 → ${stageDefaultModel}）` : '；当前阶段未配置，使用全局默认'}`
+              : '选择模型'
+          }
         >
-          <option value="default">默认模型</option>
+          <option value="default">默认（阶段模型{stageDefaultModel ? `：${stageDefaultModel}` : ''}）</option>
           {availableModels.map((m) => (
             <option key={m.id} value={m.id}>{m.label}</option>
           ))}

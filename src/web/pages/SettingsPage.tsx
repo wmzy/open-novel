@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { css } from '@linaria/core';
 import { toast } from 'sonner';
 import { pageContainer, pageTitle, card, input, primaryBtn } from '@/styles/shared';
+import { STAGES } from '@/shared/stages';
 import NavHeader from '@/web/components/NavHeader';
 
 const formGroup = css`
@@ -98,6 +99,24 @@ const PI_PRESETS = [
   },
 ] as const;
 
+/** 解析 pi_stage_models JSON 用于回显；损坏/非对象回退空。过滤逻辑与后端 readStagePiModels 同构。 */
+function parseStageModels(raw: string | undefined): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const source = parsed as Record<string, unknown>;
+    const result: Record<string, string> = {};
+    for (const stage of STAGES) {
+      const value = source[stage.id];
+      if (typeof value === 'string' && value.trim()) result[stage.id] = value.trim();
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 export default function SettingsPage() {
   const qc = useQueryClient();
   const { data: settings } = useQuery({
@@ -139,6 +158,8 @@ export default function SettingsPage() {
   const [piApi, setPiApi] = useState('anthropic-messages');
   const [piThinking, setPiThinking] = useState('medium');
   const [piApiKey, setPiApiKey] = useState('');
+  // 按阶段默认模型：stage → modelId；空值表示「跟随全局默认」。
+  const [piStageModels, setPiStageModels] = useState<Record<string, string>>({});
 
   useEffect(() => {
     setPiProvider(settings?.pi_provider ?? 'anthropic');
@@ -146,6 +167,7 @@ export default function SettingsPage() {
     setPiBaseUrl(settings?.pi_base_url ?? '');
     setPiApi(settings?.pi_api ?? 'anthropic-messages');
     setPiThinking(settings?.pi_thinking_level ?? 'medium');
+    setPiStageModels(parseStageModels(settings?.pi_stage_models));
   }, [settings]);
 
   const piKeyConfigured = settings?.pi_apiKeySet === 'true';
@@ -165,6 +187,13 @@ export default function SettingsPage() {
       pi_api: piApi,
       pi_thinking_level: piThinking,
     };
+    // 只保存非空的阶段配置；全部清空等价于存 '{}'（全部跟随全局默认）。
+    const stageModels: Record<string, string> = {};
+    for (const stage of STAGES) {
+      const value = (piStageModels[stage.id] ?? '').trim();
+      if (value) stageModels[stage.id] = value;
+    }
+    body.pi_stage_models = JSON.stringify(stageModels);
     if (piApiKey.trim()) body.pi_api_key = piApiKey.trim();
     saveSettings.mutate(body, { onSuccess: () => setPiApiKey('') });
   };
@@ -336,6 +365,47 @@ export default function SettingsPage() {
             <option value="high">high</option>
             <option value="max">max</option>
           </select>
+        </div>
+
+        <div className={formGroup}>
+          <label className={label}>按阶段默认模型（可选）</label>
+          <span className={formHint}>
+            为各创作阶段指定默认模型；run 未显式选择模型时按当前阶段取此处的配置。
+            写作子模式（drafting/revision/polish/decompose/enrich/retro）沿用「写作」的配置；
+            选「跟随全局默认」表示该阶段使用上方全局模型 ID。
+          </span>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+              gap: '0.5rem',
+              marginTop: '0.5rem',
+            }}
+          >
+            {STAGES.map((stage) => (
+              <div key={stage.id}>
+                <label className={label}>{stage.label}</label>
+                <select
+                  className={input}
+                  value={piStageModels[stage.id] ?? ''}
+                  disabled={(piAgent?.models?.length ?? 0) === 0}
+                  onChange={(e) =>
+                    setPiStageModels((prev) => ({ ...prev, [stage.id]: e.target.value }))
+                  }
+                >
+                  <option value="">跟随全局默认</option>
+                  {(piAgent?.models ?? []).map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+          {(piAgent?.models?.length ?? 0) === 0 && (
+            <span className={formHint}>
+              当前 provider 模型目录为空：请先在上方配置 Provider / API Key 并保存，再设置阶段模型。
+            </span>
+          )}
         </div>
 
         <div className={buttonRow}>

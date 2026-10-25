@@ -1,7 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
 import { css } from '@linaria/core';
 import { toast } from 'sonner';
 import { reviseBtn } from './viewShared';
+import ContextInspectorPanel from '../ContextInspectorPanel';
 import { useFileRevision } from '@/web/hooks/useFileRevision';
 
 const STATUS_OPTIONS: Array<[string, string]> = [
@@ -192,6 +194,26 @@ const reviewHint = css`
   margin: 0.35rem 0 0;
 `;
 
+/** 上下文检查器折叠面板（写作视图工具区，样式对齐局部重写/质检面板）。 */
+const inspectorDetails = css`
+  border: 1px solid var(--haze-color-border);
+  border-radius: 6px;
+  background: var(--haze-color-bg);
+  overflow: hidden;
+  margin-bottom: 1.5rem;
+  &[open] > summary { border-bottom: 1px solid var(--haze-color-border); }
+`;
+
+const inspectorSummary = css`
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--haze-color-text-secondary);
+  user-select: none;
+  &:hover { color: var(--haze-color-text); }
+`;
+
 export default function WritingView({
   projectId,
   onViewChange,
@@ -204,6 +226,8 @@ export default function WritingView({
 }) {
   const revision = useFileRevision({ projectId, targetFile: '', stage: 'writing' });
   const queryClient = useQueryClient();
+  /** 上下文检查器折叠态：打开才挂载面板（懒加载，关闭即停请求）。 */
+  const [inspectorOpen, setInspectorOpen] = useState(false);
 
   /** 手动流转章节状态（草稿/审阅中/已修订/已定稿）。 */
   const updateStatus = async (num: number, status: string, force = false) => {
@@ -362,6 +386,16 @@ export default function WritingView({
                 : '在右侧对话面板选择「写作」阶段，输入「开始写第 1 章」即可让 AI 根据大纲创作正文。'}
           </p>
         </div>
+        <details
+          className={inspectorDetails}
+          open={inspectorOpen}
+          onToggle={(e) => setInspectorOpen(e.currentTarget.open)}
+        >
+          <summary className={inspectorSummary}>🧭 上下文检查器（分层 token 预算）</summary>
+          {inspectorOpen && (
+            <ContextInspectorPanel projectId={projectId} chapters={list.map((c) => ({ number: c.number }))} />
+          )}
+        </details>
       </div>
     );
   }
@@ -391,6 +425,16 @@ export default function WritingView({
           <div className={statLabel}>平均章节字数</div>
         </div>
       </div>
+      <details
+        className={inspectorDetails}
+        open={inspectorOpen}
+        onToggle={(e) => setInspectorOpen(e.currentTarget.open)}
+      >
+        <summary className={inspectorSummary}>🧭 上下文检查器（分层 token 预算）</summary>
+        {inspectorOpen && (
+          <ContextInspectorPanel projectId={projectId} chapters={list.map((c) => ({ number: c.number }))} />
+        )}
+      </details>
       <div className={chapterList}>
         {list.map((c) => (
           <div key={c.id} className={chapterCard} onClick={() => onViewChange(`chapter-${c.number}`)}>

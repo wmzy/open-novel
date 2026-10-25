@@ -25,6 +25,8 @@ import { resyncChaptersFromDisk } from './chapters';
 import { evaluateMilestones } from '../../agent/milestones';
 import { advanceBatch, readBatchState } from '../../agent/batch';
 import { scheduleSemanticIndexing } from '../../agent/semantic-index';
+import { extractCanonChanges } from '../../agent/canon-extractor';
+import { readCanonAutoExtract } from '../../shared/novel-config';
 
 // ===== 流层 watchdog 配置 =====
 /** 滑动窗口大小（字符数）。窗口内统计 2-gram 重复率。 */
@@ -803,6 +805,8 @@ runsRouter.post('/', async (c) => {
     prompt: composedPrompt,
     cwd: projectDir,
     model,
+    // 未显式指定 model 时按阶段默认模型（pi_stage_models）解析。
+    stage,
     // 阶段推进/模板生成/质量检查走受限的自定义工具，不再暴露 bash。
     allowBash: false,
     api: {
@@ -909,6 +913,66 @@ runsRouter.post('/', async (c) => {
     // 兜底：补全缺失的章节摘要与状态表（仅写作成功时）
     if (code === 0 && writtenPaths.size > 0) {
       await ensureContextArtifacts(projectDir, writtenPaths).catch(() => {});
+    }
+
+    // P1-a：写作产出成功后自动提取 canon 变更并写回台账（LLM 语义提取）。
+    // 位置取舍：放在全部确定性检查（质检/合同/字数/摘要兜底）之后——合同校验
+    // 用的应是对齐写作时的旧 canon，而非提取后的新 canon；放在 createSnapshot
+    // 之前——让快照包含本次 canon 变更。仅写作产出族（writing/sample/drafting）
+    // 触发，改写/拆书不追加事实；项目可用 .novel/config.json 的 canonAutoExtract
+    // 显式 false 关闭。失败完全非阻断：提取是增值动作，只 emit 事件不影响产出。
+    if (code === 0 && writtenPaths.size > 0
+      && (stage === 'writing' || stage === 'sample' || stage === 'drafting')
+      && await readCanonAutoExtract(projectDir).catch(() => true)) {
+      const extracted = new Set<number>(); // writtenPaths 里可能有同一章的多个近似命名
+      for (const p of writtenPaths) {
+        const chapterNum = isChapterBody(p);
+        if (chapterNum === null || extracted.has(chapterNum)) continue;
+        extracted.add(chapterNum);
+        const fullPath = resolveWrittenPath(projectDir, p);
+        if (!fullPath) continue;
+        let content: string;
+        try { content = await readFile(fullPath, 'utf-8'); } catch { continue; }
+        emitEvent(run, 'agent', { type: 'status', label: `第${chapterNum}章 canon 提取中…` });
+        try {
+          const result = await extractCanonChanges({ projectDir, chapter: chapterNum, content, model });
+          emitEvent(run, 'agent', {
+            type: 'canon-update',
+            chapter: chapterNum,
+            ok: result.ok,
+            applied: result.applied,
+            entities: result.entities,
+            facts: result.facts,
+            knowledge: result.knowledge,
+            warnings: result.warnings,
+            ...(result.error !== undefined ? { error: result.error } : {}),
+          });
+          if (result.ok && result.applied) {
+            emitEvent(run, 'agent', {
+              type: 'status',
+              label: `第${chapterNum}章 canon 已更新：+${result.entities} 实体 / +${result.facts} 事实 / +${result.knowledge} 知情`,
+            });
+          } else if (result.ok) {
+            emitEvent(run, 'agent', { type: 'status', label: `第${chapterNum}章无 canon 变更` });
+          } else {
+            emitEvent(run, 'agent', { type: 'status', label: `第${chapterNum}章 canon 提取失败（不影响本章产出）` });
+          }
+        } catch {
+          // extractCanonChanges 本身不抛；此处兜底 emit（如事件推送异常），保证非阻断
+          emitEvent(run, 'agent', {
+            type: 'canon-update',
+            chapter: chapterNum,
+            ok: false,
+            applied: false,
+            entities: 0,
+            facts: 0,
+            knowledge: 0,
+            warnings: [],
+            error: '提取过程出现未预期异常',
+          });
+          emitEvent(run, 'agent', { type: 'status', label: `第${chapterNum}章 canon 提取失败（不影响本章产出）` });
+        }
+      }
     }
 
     // 样章阶段完成标记：sample run 成功后磁盘正文 ≥3 章 → 复盘门正式生效。

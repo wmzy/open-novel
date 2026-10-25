@@ -12,6 +12,12 @@ import { STAGE_OUTPUT_FILES, isCritiqueRound } from '../shared/deepen';
 import { isWritingStage } from '../shared/stages';
 import { parseChapterNumber } from '../shared/chapter-names';
 import {
+  assembleWithBudget,
+  type ContextSection,
+  type ContextSectionReport,
+} from './context-budget';
+import { getPiSetting, PI_SETTING_KEYS } from './pi/config';
+import {
   parseForeshadowFile,
   computeDensityBudget,
   isForeshadowOverdue,
@@ -937,50 +943,99 @@ function commitmentFraming(chapter: number, outline: ChapterOutline): string {
   }
 }
 
+/** 上下文层优先级：数值越小越重要；0 为硬约束层（超预算时永不整层丢弃，只截断）。 */
+const LAYER_PRIORITY = {
+  /** 章节合同：POV/出场/beat/揭示/字数，定稿校验依据。 */
+  contract: 0,
+  /** Canon 台账：结构化可校验事实。 */
+  canon: 1,
+  /** 本章大纲：写作依据。 */
+  outline: 2,
+  /** 状态表 / 角色当前状态。 */
+  state: 3,
+  /** 滚动摘要。 */
+  rolling: 4,
+  /** 其它：核心设定/文风/进度/精排窗口/出场角色/POV 知情/伏笔等。 */
+  misc: 5,
+  /** 语义回忆（可选，配置嵌入服务后才启用）。 */
+  semantic: 6,
+} as const;
+
+/** 上下文层 token 预算系数与上限：min(模型上下文窗口 × 40%, 48k tokens)。 */
+const CONTEXT_BUDGET_WINDOW_RATIO = 0.4;
+const CONTEXT_BUDGET_MAX_TOKENS = 48_000;
+/** Pi 上下文窗口读不到（未设置 / DB 异常）时的默认值。 */
+const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
+
+/** 读取 Pi 上下文窗口设置（只读复用 getPiSetting），换算分层上下文的 token 预算。 */
+async function resolveContextBudgetTokens(): Promise<number> {
+  let contextWindow = DEFAULT_CONTEXT_WINDOW_TOKENS;
+  try {
+    const raw = await getPiSetting(PI_SETTING_KEYS.contextWindow);
+    const parsed = raw === undefined ? NaN : Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) contextWindow = parsed;
+  } catch {
+    // DB 未就绪等异常：回退默认窗口
+  }
+  return Math.min(
+    Math.floor(contextWindow * CONTEXT_BUDGET_WINDOW_RATIO),
+    CONTEXT_BUDGET_MAX_TOKENS,
+  );
+}
+
+/** 上下文检查器结果：各层 token 报告 + 预算 + 组装后的完整 prompt。 */
+export interface ContextPreview {
+  sections: ContextSectionReport[];
+  totalTokens: number;
+  budgetTokens: number;
+  prompt: string;
+}
+
 /**
- * 为写作阶段组装分层上下文：
- * 核心设定（恒定）→ 状态 → 滚动摘要 → 活跃伏笔。
- * 任一层缺失则跳过；整体为空时仍返回占位说明，提示 agent 维护摘要与状态。
+ * 收集写作上下文各层（name / priority / text）。层顺序即注入顺序；
+ * 任一层为空（对应文件缺失）则跳过该层。
  */
-async function buildWritingContextLayers(
+async function collectWritingContextSections(
   projectDir: string,
   currentChapter: number,
   projectId?: string,
-): Promise<string> {
-  const sections: string[] = [];
+): Promise<ContextSection[]> {
+  const sections: ContextSection[] = [];
 
   const core = await buildCoreSettingsLayer(projectDir);
-  if (core) sections.push(core);
+  if (core) sections.push({ name: '核心设定', priority: LAYER_PRIORITY.misc, text: core });
 
   const styleRef = await buildStyleRefLayer(projectDir);
-  if (styleRef) sections.push(styleRef);
+  if (styleRef) sections.push({ name: '文风参考', priority: LAYER_PRIORITY.misc, text: styleRef });
 
   const stateLayer = await buildStateLayer(projectDir);
-  if (stateLayer) sections.push(stateLayer);
+  if (stateLayer) sections.push({ name: '状态表', priority: LAYER_PRIORITY.state, text: stateLayer });
 
   const progressLayer = await buildProgressLayer(projectDir);
-  if (progressLayer) sections.push(progressLayer);
+  if (progressLayer) sections.push({ name: '写作进度', priority: LAYER_PRIORITY.misc, text: progressLayer });
 
   const charStatesLayer = await buildCharacterStatesLayer(projectDir);
-  if (charStatesLayer) sections.push(charStatesLayer);
+  if (charStatesLayer) sections.push({ name: '角色状态', priority: LAYER_PRIORITY.state, text: charStatesLayer });
 
   // 本章大纲块（按承诺等级注入不同框架语：committed=写作依据 / tentative=可推翻须回写 / open=自行决定须回填）
   const outline = await extractChapterOutline(projectDir, currentChapter);
   if (outline.content) {
-    sections.push(`### 本章大纲（第${currentChapter}章）\n${outline.content}\n\n${commitmentFraming(currentChapter, outline)}`);
+    sections.push({ name: '本章大纲', priority: LAYER_PRIORITY.outline, text: `### 本章大纲（第${currentChapter}章）\n${outline.content}\n\n${commitmentFraming(currentChapter, outline)}` });
   }
 
   // 章节合同：POV/出场/beat/揭示/字数预算。存在时作为硬约束注入。
   const contractLayer = await buildContractContext(projectDir, currentChapter);
-  if (contractLayer) sections.push(contractLayer);
+  if (contractLayer) sections.push({ name: '章节合同', priority: LAYER_PRIORITY.contract, text: contractLayer });
 
   // 精排窗口（写作驱动精化：近章须达 beat 级，远粗是设计而非未完成）
   const state = await getStateTable(projectDir);
   const refineFrom = state.lastUpdatedChapter + 1;
   const refineTo = state.lastUpdatedChapter + 10;
-  sections.push(
-    `### 精排窗口\n精排窗口：第 ${refineFrom}..${refineTo} 章应达 beat 级（场景/冲突/结果齐备）；其中仍为 tentative/open 的章节，先精化对应大纲卡片再写。远期章节保持 arc/骨架级是设计意图，无需提前补全。`,
-  );
+  sections.push({
+    name: '精排窗口',
+    priority: LAYER_PRIORITY.misc,
+    text: `### 精排窗口\n精排窗口：第 ${refineFrom}..${refineTo} 章应达 beat 级（场景/冲突/结果齐备）；其中仍为 tentative/open 的章节，先精化对应大纲卡片再写。远期章节保持 arc/骨架级是设计意图，无需提前补全。`,
+  });
 
   // 本章出场角色层（渐进式：内容过长时退化为索引模式）
   const knownNames = await readCharacterNames(projectDir);
@@ -998,16 +1053,16 @@ async function buildWritingContextLayers(
           castNames.push(name);
         }
       }
-      sections.push(`### 本章出场角色索引\n本章涉及角色：${castNames.join('、')}\n角色详细档案见 .novel/characters/profiles/ 目录下的各角色 .md 文件。如需了解某角色的完整设定（动机、背景、弧光），请用 Read 工具读取。`);
+      sections.push({ name: '本章出场角色', priority: LAYER_PRIORITY.misc, text: `### 本章出场角色索引\n本章涉及角色：${castNames.join('、')}\n角色详细档案见 .novel/characters/profiles/ 目录下的各角色 .md 文件。如需了解某角色的完整设定（动机、背景、弧光），请用 Read 工具读取。` });
     } else {
-      sections.push(castLayer);
+      sections.push({ name: '本章出场角色', priority: LAYER_PRIORITY.misc, text: castLayer });
     }
   }
 
   // POV 知情边界层：仅当角色有已知/尚不知数据时注入（无数据时提示词保持不变）
   if (cast.pov) {
     const povKnowledge = await buildPovKnowledgeLayer(projectDir, cast.pov, currentChapter);
-    if (povKnowledge) sections.push(povKnowledge);
+    if (povKnowledge) sections.push({ name: 'POV 知情边界', priority: LAYER_PRIORITY.misc, text: povKnowledge });
   }
 
   // Canon 台账：结构化实体/事实/知情边界，补齐 Markdown 设定之外的可校验事实。
@@ -1016,15 +1071,17 @@ async function buildWritingContextLayers(
     currentChapter,
     [cast.pov, ...cast.full, ...cast.brief],
   );
-  if (canonLayer) sections.push(canonLayer);
+  if (canonLayer) sections.push({ name: 'Canon 台账', priority: LAYER_PRIORITY.canon, text: canonLayer });
 
   const rolling = await buildRollingSummaryContext(projectDir);
   if (rolling) {
-    sections.push(`### 滚动摘要层（最近 3 章详摘，更早章节简摘）\n${rolling}`);
+    sections.push({ name: '滚动摘要', priority: LAYER_PRIORITY.rolling, text: `### 滚动摘要层（最近 3 章详摘，更早章节简摘）\n${rolling}` });
   } else {
-    sections.push(
-      '### 滚动摘要层\n（暂无章节摘要。每写完一章请在 `.novel/chapters/第N章.summary.md` 生成 200 字摘要。）',
-    );
+    sections.push({
+      name: '滚动摘要',
+      priority: LAYER_PRIORITY.rolling,
+      text: '### 滚动摘要层\n（暂无章节摘要。每写完一章请在 `.novel/chapters/第N章.summary.md` 生成 200 字摘要。）',
+    });
   }
 
   // 语义回忆层（可选，默认关闭）：仅在配置嵌入服务后检索更早章节的高相关片段。
@@ -1032,19 +1089,72 @@ async function buildWritingContextLayers(
   if (projectId) {
     const semanticRecall = await buildSemanticRecallContext(projectId, projectDir, currentChapter);
     if (semanticRecall) {
-      sections.push(`### 语义相关前文（自动检索，供保持设定与伏笔一致性参考）\n${semanticRecall}`);
+      sections.push({ name: '语义回忆', priority: LAYER_PRIORITY.semantic, text: `### 语义相关前文（自动检索，供保持设定与伏笔一致性参考）\n${semanticRecall}` });
     }
   }
 
   const foreshadow = await buildForeshadowLayer(projectDir, currentChapter);
-  if (foreshadow) sections.push(foreshadow);
+  if (foreshadow) sections.push({ name: '活跃伏笔', priority: LAYER_PRIORITY.misc, text: foreshadow });
 
   // 逾期/临期提醒：针对本章有界注入（各最多 5 条），确保 agent 写作时优先兑现到期伏笔
   const { foreshadows: writingForeshadows } = await loadForeshadows(projectDir);
   const dueReminder = buildForeshadowDueReminderBlock(writingForeshadows, currentChapter);
-  if (dueReminder) sections.push(dueReminder);
+  if (dueReminder) sections.push({ name: '伏笔到期提醒', priority: LAYER_PRIORITY.misc, text: dueReminder });
 
-  return `## Novel Context Layers\n\n${sections.join('\n\n')}`;
+  return sections;
+}
+
+/**
+ * 组装写作上下文：分层构建 → token 预算裁剪 → 逐层报告。
+ * 未超预算时输出与历史行为逐字一致（各层原样按 '\n\n' 拼接）。
+ * 超预算时按 assembleWithBudget 策略裁剪，并在末尾注明被裁层与补读提示。
+ */
+async function assembleWritingContext(
+  projectDir: string,
+  currentChapter: number,
+  projectId?: string,
+): Promise<ContextPreview> {
+  const sections = await collectWritingContextSections(projectDir, currentChapter, projectId);
+  const budgetTokens = await resolveContextBudgetTokens();
+  const { text, report, totalTokens } = assembleWithBudget(sections, budgetTokens);
+
+  let prompt = `## Novel Context Layers\n\n${text}`;
+  const dropped = report.filter((r) => !r.kept).map((r) => r.name);
+  const truncated = report.filter((r) => r.kept && r.truncatedTo !== undefined).map((r) => r.name);
+  if (dropped.length > 0 || truncated.length > 0) {
+    const notes: string[] = [];
+    if (dropped.length > 0) notes.push(`整层省略：${dropped.join('、')}`);
+    if (truncated.length > 0) notes.push(`尾部截断：${truncated.join('、')}`);
+    prompt += `\n\n> ⚠ 以上上下文超出 token 预算（约 ${totalTokens}/${budgetTokens}），${notes.join('；')}。被裁剪层的完整内容请用 Read 工具读取 .novel/ 目录下对应文件。`;
+  }
+
+  return { sections: report, totalTokens, budgetTokens, prompt };
+}
+
+/**
+ * 为写作阶段组装分层上下文（供 composePrompt 注入）：
+ * 核心设定（恒定）→ 状态 → 滚动摘要 → 活跃伏笔，按 token 预算裁剪。
+ */
+async function buildWritingContextLayers(
+  projectDir: string,
+  currentChapter: number,
+  projectId?: string,
+): Promise<string> {
+  const { prompt } = await assembleWritingContext(projectDir, currentChapter, projectId);
+  return prompt;
+}
+
+/**
+ * 上下文检查器：与 buildWritingContextLayers 共用同一套层构建与预算，
+ * 返回各层 name/priority/tokens/kept 报告 + 总量/预算 + 组装后完整 prompt。
+ * 供 GET /api/projects/:id/context/preview 只读视图使用。
+ */
+export async function buildContextSectionReport(
+  projectDir: string,
+  currentChapter: number,
+  projectId?: string,
+): Promise<ContextPreview> {
+  return assembleWritingContext(projectDir, currentChapter, projectId);
 }
 
 const TOOL_INSTRUCTIONS = `## Available Tools

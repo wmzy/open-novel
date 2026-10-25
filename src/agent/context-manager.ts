@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseOutlineMeta, defaultOutlineMeta } from '../shared/outline-meta';
 import { parseChapterNumber } from '../shared/chapter-names';
+import { summarizeExtractive } from '../shared/extractive-summary';
 import { readEmbeddingConfig } from './embeddings';
 import { searchSemanticChunks } from './semantic-index';
 
@@ -1082,8 +1083,13 @@ function resolveWrittenPath(projectDir: string, p: string): string {
 }
 
 /**
- * 从章节正文生成占位摘要：去掉首行标题（Markdown 标题），
- * 截取前 maxChars 字，以 `[自动生成]` 开头标注，便于区分 agent 手写的语义摘要。
+ * 从章节正文生成占位摘要：去掉首行标题（Markdown 标题）后，
+ * 用确定性抽取式摘要（字符 bigram 词频 + 位置衰减）按句选取，
+ * 以 `[自动生成]` 开头标注，便于区分 agent 手写的语义摘要。
+ *
+ * 摘要质量兜底仍由 isSummaryValid 负责：`[自动生成]` 标记保证占位摘要
+ * 永远不会注入滚动摘要层（isSummaryValid 不依赖「正文前缀重叠」判定，
+ * 改为抽取式选句后无需调整）。
  */
 function buildPlaceholderSummary(body: string, maxChars: number): string {
   const lines = body.split(/\r?\n/);
@@ -1093,9 +1099,7 @@ function buildPlaceholderSummary(body: string, maxChars: number): string {
     .join('\n')
     .replace(/\s+/g, ' ')
     .trim();
-  const truncated =
-    content.length > maxChars ? content.slice(0, maxChars) + '…' : content;
-  return `[自动生成] ${truncated}`;
+  return `[自动生成] ${summarizeExtractive(content, maxChars)}`;
 }
 
 /**

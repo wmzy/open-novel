@@ -55,6 +55,7 @@ const RECONNECT_QUERY_FAMILIES = [
   'canon',
   'degraded-chapters',
   'state-characters',
+  'context-preview',
 ] as const;
 
 type ExportFormat = 'markdown' | 'text' | 'epub' | 'docx';

@@ -16,6 +16,7 @@ import {
   validateChapterContract,
   writeChapterContract,
   writeCanon,
+  type CanonLedger,
   type ChapterContract,
 } from '../../../src/shared/canon';
 
@@ -127,6 +128,125 @@ describe('chapter contract', () => {
     expect(findings.some((f) => f.code === 'pov-missing')).toBe(false);
     expect(findings.some((f) => f.code === 'cast-missing' && f.message.includes('路人甲'))).toBe(true);
     expect(findings.some((f) => f.code === 'unknown-cast' && f.message.includes('路人甲'))).toBe(true);
+  });
+});
+
+describe('死亡/失踪实体一致性', () => {
+  const mk = (over: Partial<ChapterContract> = {}): ChapterContract => ({
+    version: 1,
+    chapter: 9,
+    pov: '林岚',
+    cast: ['林岚'],
+    beats: [],
+    mustReveal: [],
+    mustNotReveal: [],
+    status: 'frozen',
+    updatedAt: '',
+    ...over,
+  });
+
+  const ledgerWith = (entities: CanonLedger['entities'], facts: CanonLedger['facts'] = []): CanonLedger => ({
+    version: 1,
+    entities,
+    facts,
+    knowledge: {},
+    updatedAt: '',
+  });
+
+  // 秦无衣第 2 章死亡（sourceChapter 即退场章）；柳惊鸿第 3 章失踪。
+  const baseLedger = ledgerWith([
+    { id: 'e1', name: '林岚', type: 'character', aliases: ['阿岚'], status: 'active', sourceChapter: 1 },
+    { id: 'e2', name: '秦无衣', type: 'character', aliases: ['无衣先生'], status: 'dead', sourceChapter: 2 },
+    { id: 'e3', name: '柳惊鸿', type: 'character', aliases: [], status: 'lost', sourceChapter: 3 },
+  ]);
+  const content = '林岚推门而入，把伞收在阶下。';
+  const contentMentioningDead = '林岚想起秦无衣生前说过的话，久久没有说话。';
+
+  it('合同 cast/pov 命中已死实体给 dead-entity-cast（blocker），别名同样命中', () => {
+    const byName = validateChapterContract({
+      content,
+      contract: mk({ cast: ['林岚', '秦无衣'] }),
+      canon: baseLedger,
+    });
+    expect(byName.some((f) => f.code === 'dead-entity-cast' && f.severity === 'blocker')).toBe(true);
+
+    const byAlias = validateChapterContract({
+      content,
+      contract: mk({ pov: '无衣先生', cast: ['无衣先生'] }),
+      canon: baseLedger,
+    });
+    const finding = byAlias.find((f) => f.code === 'dead-entity-cast');
+    expect(finding?.severity).toBe('blocker');
+    expect(finding?.message).toContain('秦无衣');
+    expect(finding?.message).toContain('第 2 章');
+  });
+
+  it('active 实体不触发；无 canon 时零误报', () => {
+    const active = validateChapterContract({ content, contract: mk({ cast: ['林岚'] }), canon: baseLedger });
+    expect(active.some((f) => f.code === 'dead-entity-cast' || f.code === 'dead-entity-mentioned')).toBe(false);
+
+    const noCanon = validateChapterContract({ content, contract: mk({ cast: ['林岚', '秦无衣'] }) });
+    expect(noCanon.some((f) => f.code === 'dead-entity-cast' || f.code === 'dead-entity-mentioned')).toBe(false);
+  });
+
+  it('退场章不早于当前章不触发（本章死亡/失踪仍可出场与被提及）', () => {
+    // sourceChapter=11：第 9、11 章合同均不触发（11 不早于 11），第 12 章触发。
+    const lateDead = ledgerWith([
+      { id: 'e1', name: '林岚', type: 'character', aliases: [], status: 'active', sourceChapter: 1 },
+      { id: 'e2', name: '秦无衣', type: 'character', aliases: [], status: 'dead', sourceChapter: 11 },
+    ]);
+    expect(validateChapterContract({
+      content: contentMentioningDead,
+      contract: mk({ chapter: 9, cast: ['林岚', '秦无衣'] }),
+      canon: lateDead,
+    }).some((f) => f.code === 'dead-entity-cast' || f.code === 'dead-entity-mentioned')).toBe(false);
+    expect(validateChapterContract({
+      content: contentMentioningDead,
+      contract: mk({ chapter: 11, cast: ['林岚', '秦无衣'] }),
+      canon: lateDead,
+    }).some((f) => f.code === 'dead-entity-cast' || f.code === 'dead-entity-mentioned')).toBe(false);
+    expect(validateChapterContract({
+      content: contentMentioningDead,
+      contract: mk({ chapter: 12, cast: ['林岚', '秦无衣'] }),
+      canon: lateDead,
+    }).some((f) => f.code === 'dead-entity-cast')).toBe(true);
+  });
+
+  it('事实推断的退场章优先于 sourceChapter', () => {
+    // 登场于第 2 章，但「结局 = 死亡」事实发生在第 7 章：第 6 章合同不触发，第 8 章触发。
+    const factLedger = ledgerWith(
+      [
+        { id: 'e1', name: '林岚', type: 'character', aliases: [], status: 'active', sourceChapter: 1 },
+        { id: 'e2', name: '秦无衣', type: 'character', aliases: [], status: 'dead', sourceChapter: 2 },
+      ],
+      [{ id: 'f1', subject: '秦无衣', predicate: '结局', object: '死亡', validFrom: 7, sourceChapter: 7, status: 'active', confidence: 'confirmed' }],
+    );
+    expect(validateChapterContract({
+      content,
+      contract: mk({ chapter: 6, cast: ['林岚', '秦无衣'] }),
+      canon: factLedger,
+    }).some((f) => f.code === 'dead-entity-cast')).toBe(false);
+    const at8 = validateChapterContract({
+      content,
+      contract: mk({ chapter: 8, cast: ['林岚', '秦无衣'] }),
+      canon: factLedger,
+    });
+    expect(at8.some((f) => f.code === 'dead-entity-cast' && f.message.includes('第 7 章'))).toBe(true);
+  });
+
+  it('正文提及已退场实体给 dead-entity-mentioned（major），lost 实体同样提示', () => {
+    const findings = validateChapterContract({
+      content: contentMentioningDead,
+      contract: mk({ cast: ['林岚', '柳惊鸿'] }),
+      canon: baseLedger,
+    });
+    const deadFinding = findings.find((f) => f.code === 'dead-entity-mentioned' && f.message.includes('秦无衣'));
+    expect(deadFinding?.severity).toBe('major');
+    // 柳惊鸿在合同 cast 中但正文未出现 → cast-missing；其「退场后被提及」不应误报（正文没提它）。
+    expect(findings.some((f) => f.code === 'dead-entity-mentioned' && f.message.includes('柳惊鸿'))).toBe(false);
+    // 干净正文不产生该 code。
+    expect(validateChapterContract({ content, contract: mk(), canon: baseLedger })
+      .some((f) => f.code === 'dead-entity-mentioned')).toBe(false);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   createPiModelRuntime,
   piAgentDir,
   resolvePiModel,
+  resolveStagePiModel,
   type PiSettings,
   type PiThinkingLevel,
 } from './config';
@@ -108,6 +109,8 @@ export interface PiRunOptions {
   cwd: string;
   /** 模型 ID；省略时使用设置里的模型。 */
   model?: string | null;
+  /** 创作阶段；model 未显式指定时用于解析按阶段默认模型（pi_stage_models）。 */
+  stage?: string | null;
   thinkingLevel?: PiThinkingLevel;
   /** 是否启用 bash；默认关闭，避免 agent 越出项目目录。 */
   allowBash?: boolean;
@@ -260,9 +263,21 @@ async function createPiSession(options: PiRunOptions): Promise<{
   contextWindow: number;
 }> {
   const { runtime, settings } = await createPiModelRuntime();
+  // 模型优先级：显式 model > 阶段默认（pi_stage_models 按 stage 解析）> 全局设置。
+  // 阶段设置读取失败（DB 异常等）不阻断 run，静默回退全局。
+  let stageModel: string | undefined;
+  if (!options.model && options.stage) {
+    try {
+      stageModel = await resolveStagePiModel(options.stage);
+    } catch {
+      stageModel = undefined;
+    }
+  }
   const configured: PiSettings = options.model
     ? { ...settings, model: options.model }
-    : settings;
+    : stageModel
+      ? { ...settings, model: stageModel }
+      : settings;
   const model = await resolvePiModel(runtime, configured);
 
   const agentDir = piAgentDir();

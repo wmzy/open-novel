@@ -28,6 +28,8 @@ export const PI_SETTING_KEYS = {
   thinkingLevel: 'pi_thinking_level',
   contextWindow: 'pi_context_window',
   maxTokens: 'pi_max_tokens',
+  /** 按阶段默认模型：JSON 字符串 `{ [stage]: modelId }`，只允许 7 主阶段键。 */
+  stageModels: 'pi_stage_models',
 } as const;
 
 /** 密钥类设置：GET /api/settings 不返回原值，只返回 `${key}Set`。 */
@@ -269,4 +271,60 @@ export async function testPiConfig(): Promise<{
 export async function getPiSetting(key: string): Promise<string | undefined> {
   const [row] = await db.select().from(userSettings).where(eq(userSettings.key, key)).limit(1);
   return row?.value;
+}
+
+/** 7 个主阶段：pi_stage_models 的合法键。 */
+export const PI_MAIN_STAGES = [
+  'concept',
+  'world',
+  'characters',
+  'outline',
+  'scenes',
+  'sample',
+  'writing',
+] as const;
+
+export type PiMainStage = (typeof PI_MAIN_STAGES)[number];
+
+/** 写作族子阶段：没有独立模型配置，统一回退 writing 的阶段默认模型。 */
+const WRITING_FAMILY_STAGES = new Set(['drafting', 'revision', 'polish', 'decompose', 'enrich', 'retro']);
+
+/**
+ * 读取按阶段默认模型（pi_stage_models）。
+ *
+ * 宽容解析：损坏 JSON / 非对象 → 空（回退全局）；未知阶段键丢弃；
+ * 空模型值丢弃——避免把无效配置带进模型解析链路。
+ */
+export async function readStagePiModels(): Promise<Partial<Record<PiMainStage, string>>> {
+  const raw = await getPiSetting(PI_SETTING_KEYS.stageModels);
+  if (!raw) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  const source = parsed as Record<string, unknown>;
+  const result: Partial<Record<PiMainStage, string>> = {};
+  for (const stage of PI_MAIN_STAGES) {
+    const value = source[stage];
+    if (typeof value === 'string' && value.trim()) result[stage] = value.trim();
+  }
+  return result;
+}
+
+/**
+ * 解析某阶段应使用的默认模型 ID。
+ *
+ * 精确匹配主阶段 → 写作族子阶段（drafting/revision/polish/decompose/enrich/retro）
+ * 回退 writing → 其余（含未知/未传 stage）返回 undefined，表示用全局设置。
+ */
+export async function resolveStagePiModel(stage: string | undefined): Promise<string | undefined> {
+  if (!stage) return undefined;
+  const stageModels = await readStagePiModels();
+  const exact = stageModels[stage as PiMainStage];
+  if (exact) return exact;
+  if (WRITING_FAMILY_STAGES.has(stage)) return stageModels.writing;
+  return undefined;
 }

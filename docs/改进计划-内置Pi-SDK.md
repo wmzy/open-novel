@@ -215,7 +215,51 @@ Pi 只认兼容 API。订阅用户需在本地启动一个反代，把订阅转�
 
 仍待后续：
 
-- B5 按阶段默认模型（当前为全局模型 + 对话面板临时覆盖）。
-- P1 进阶：LLM 语义 `CHANGES` 自动提取/写回、100 章一致性 fixture、
-  上下文引擎（摘要/预算/context inspector）。
 - P2 编辑器/分发/发布/评测。
+
+## 12. 第二轮实施记录（2026-10-25）
+
+本轮完成首轮遗留的 B5 与 P1 进阶全部三项（P2 仍待后续）：
+
+- **B5 按阶段默认模型**：设置 `pi_stage_models`（7 主阶段 → 模型 ID JSON）；
+  模型优先级：显式指定 > 阶段默认 > 全局；写作族子阶段
+  （drafting/revision/polish/decompose/enrich/retro）回退 `writing` 配置。
+  设置页「按阶段默认模型（可选）」7 个下拉；ChatPanel 默认项内联显示
+  当前阶段解析到的模型 ID。落点：`src/agent/pi/config.ts`、`runtime.ts`、
+  `SettingsPage.tsx`、`ChatPanel.tsx`、`runs.ts`（传 stage）。
+- **P1-a CHANGES 自动提取/写回**：新增 `src/agent/canon-extractor.ts`——
+  章节写完后用 `callPiOnce` 从正文提取 `CanonChanges` JSON（括号计数健壮
+  解析、失败折叠为 `ok:false` 绝不阻断），`appendCanonChanges` 写回台账；
+  `finalizePiRun` 在确定性检查之后、快照之前自动执行（writing/sample/
+  drafting，项目开关 `canonAutoExtract` 默认开），emit `canon-update` 事件；
+  新增 `POST /api/projects/:id/canon/extract` 手动补录（带 run 锁 409）。
+- **P1-b 100 章一致性 fixture**：`validateChapterContract` 新增
+  `dead-entity-cast`（blocker：合同 POV/出场命中已死亡实体）与
+  `dead-entity-mentioned`（major：正文提及退场实体）；种子化生成器
+  `tests/fixtures/consistency-fixture.ts` + 注入器；
+  `tests/integration/canon-consistency.test.ts`：100 章注入 42 个矛盾，
+  P0 命中 30/30（100% ≥ 90%）、major 13/13、干净章节零误报、
+  `buildCanonContext` 100 章台账 1ms < 500ms。
+- **P1-c 上下文引擎**：`src/shared/extractive-summary.ts` 确定性抽取式摘要
+  替代占位摘要「前 200 字」截断；`src/agent/context-budget.ts` token 估算
+  （CJK×1 + 拉丁词×1.3）+ 分层预算组装（合同=0/canon=1/大纲=2 等七级优先，
+  超预算先丢低优先层、priority 0 永不整层丢弃），接入
+  `buildWritingContextLayers`（预算 = min(窗口×40%, 48k)，未超预算时输出
+  与改前逐字一致）；新增 `GET /api/projects/:id/context/preview` 分层
+  token 报告 + 写作视图「🧭 上下文检查器」只读面板（懒加载）。
+
+已验证：
+
+- `pnpm typecheck` 通过；`pnpm lint` 0 error（仅历史 warning）；`pnpm build` 通过。
+- `pnpm vitest run --changed --maxWorkers=4`：36 files / 509 tests 通过
+  （新增：pi-config-stages 11、canon-extractor 15+6、canon-auto-extract 2、
+  canon-consistency 4、context-budget/extractive-summary 24、context 6、
+  canon 死亡实体 5 等）。
+- 生产服务冒烟：`PATCH /api/settings`（pi_stage_models 保存/回显）、
+  `GET /api/projects/:id/context/preview`（分层 token 报告 + 预算）、
+  `POST /api/projects/:id/canon/extract`（无 Key 时优雅降级 `ok:false`
+  带明确指引，不崩溃）实测通过。
+
+仍待后续：
+
+- P2 编辑器/分发/发布/评测（段落级 diff/合并、Docker、成本面板、发布适配、长程评测）。

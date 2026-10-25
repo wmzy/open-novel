@@ -22,7 +22,7 @@ vi.mock('../../../src/plugins/registry', () => ({
 }));
 
 // Import AFTER mocks are registered.
-const { composePrompt, parseChapterNumberFromMessage, findNextUnwrittenChapter } = await import('../../../src/agent/prompt-composer');
+const { composePrompt, parseChapterNumberFromMessage, findNextUnwrittenChapter, buildContextSectionReport } = await import('../../../src/agent/prompt-composer');
 
 // 用于识别各阶段指令的特征文本（STAGE_INSTRUCTIONS 的首句片段）。
 const STAGE_FEATURES: Record<string, string> = {
@@ -804,6 +804,57 @@ describe('composePrompt', () => {
       expect(idx('### 状态层')).toBeLessThan(idx('### 写作进度层（progress.md）'));
       expect(idx('### 写作进度层（progress.md）')).toBeLessThan(idx('### 角色当前状态层（character-states.md）'));
       expect(idx('### 角色当前状态层（character-states.md）')).toBeLessThan(idx('### 滚动摘要层'));
+    });
+
+    it('buildContextSectionReport：未超预算时逐字保留全部层文本（组装行为与改前一致）', async () => {
+      await seedWritingProject(tempDir);
+      const report = await buildContextSectionReport(tempDir, 2, 'p');
+
+      expect(report.prompt.startsWith('## Novel Context Layers\n\n')).toBe(true);
+      // 未发生任何裁剪
+      expect(report.prompt).not.toContain('…（已截断）');
+      expect(report.sections.every((s) => s.kept)).toBe(true);
+      expect(report.sections.some((s) => s.truncatedTo !== undefined)).toBe(false);
+      expect(report.totalTokens).toBeLessThanOrEqual(report.budgetTokens);
+      // DB mock 查不到 pi_context_window → 默认 128k；128k×0.4=51.2k 触及 48k 上限
+      expect(report.budgetTokens).toBe(48_000);
+
+      // 各层文本逐字进入 prompt（与层构建函数输出一致，未被预算改写）
+      expect(report.prompt).toContain('### 核心设定层（恒定）');
+      expect(report.prompt).toContain('### 状态层\n- 时间线：第一夜\n- **林青**；位置=客栈；情绪=警觉；已知=[密道]；关系=[苏晚:盟友]；最后出场=第1章');
+      expect(report.prompt).toContain('### 精排窗口\n精排窗口：第 2..11 章应达 beat 级（场景/冲突/结果齐备）；其中仍为 tentative/open 的章节，先精化对应大纲卡片再写。远期章节保持 arc/骨架级是设计意图，无需提前补全。');
+      expect(report.prompt).toContain('### 滚动摘要层（最近 3 章详摘，更早章节简摘）');
+      expect(report.prompt).toContain('林青抵达客栈');
+      expect(report.prompt).toContain('### 活跃伏笔层');
+
+      // 报告含层名/优先级/token
+      const stateEntry = report.sections.find((s) => s.name === '状态表')!;
+      expect(stateEntry.priority).toBe(3);
+      expect(stateEntry.tokens).toBeGreaterThan(0);
+      expect(report.sections.find((s) => s.name === '滚动摘要')!.priority).toBe(4);
+      expect(report.sections.find((s) => s.name === '活跃伏笔')!.priority).toBe(5);
+    });
+
+    it('buildContextSectionReport：滚动摘要层超预算时被整层丢弃并注明', async () => {
+      await seedWritingProject(tempDir);
+      // 6 万字摘要 → 滚动摘要层 token 远超 48k 预算
+      await fs.writeFile(
+        path.join(tempDir, '.novel', 'chapters', '第1章.summary.md'),
+        '概'.repeat(60_000),
+      );
+      const report = await buildContextSectionReport(tempDir, 2, 'p');
+
+      const rolling = report.sections.find((s) => s.name === '滚动摘要')!;
+      expect(rolling.kept).toBe(false);
+      expect(rolling.tokens).toBeGreaterThan(48_000);
+      // 高优先层（状态 priority 3 < 滚动摘要被丢后仍保留）不受影响
+      expect(report.sections.find((s) => s.name === '状态表')!.kept).toBe(true);
+      expect(report.prompt).toContain('### 状态层');
+      expect(report.prompt).not.toContain('概概');
+      expect(report.totalTokens).toBeLessThanOrEqual(report.budgetTokens);
+      // 裁剪发生时 prompt 末尾注明被裁层
+      expect(report.prompt).toContain('以上上下文超出 token 预算');
+      expect(report.prompt).toMatch(/整层省略：.*滚动摘要/);
     });
 
     it('buildForeshadowLayer: planted 进待回收区，pending 本章须埋置顶，逾期未埋单独警示', async () => {

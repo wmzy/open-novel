@@ -287,13 +287,46 @@ describe('context-manager', () => {
     });
 
     it('正文字符超过上限时截断并补省略号', async () => {
-      const long = '甲'.repeat(300); // 300 字
+      const long = '甲'.repeat(300); // 300 字，无分句标点 → 抽取式回退为截断
       await writeChapterBody(dir, '.novel/chapters/chapter-1.md', long);
       await ensureContextArtifacts(dir, new Set(['.novel/chapters/chapter-1.md']));
       const summaries = await getChapterSummaries(dir);
       // [自动生成](6) + 空格(1) + 200字 + '…'(1) = 208
       expect(summaries[0].summary.endsWith('…')).toBe(true);
       expect(summaries[0].summary.length).toBe(6 + 1 + 200 + 1);
+    });
+
+    it('多句正文生成抽取式占位摘要：按分选句、保持语序、不超上限', async () => {
+      const sentences = [
+        '林青抵达北境小镇的当晚，风雪就封了官道。',
+        '林青在客栈的大堂里坐下，要了一壶热茶，等着掌柜的消息。',
+        '林青把密信贴身收好，密信的蜡封上有半枚指纹。',
+        '林青问掌柜最近有没有黑衣人路过，掌柜摇头不语。',
+        '林青决定先去城北的当铺，密信上画着当铺的记号。',
+        '林青离开客栈时天色刚亮，街上的雪还没被人踩脏。',
+        '林青在当铺门口停了很久，密信上的记号和他记忆里的一样。',
+        '林青推开当铺的门，柜台后的老人抬起头来。',
+        '城墙上有一只乌鸦叫了两声，然后飞走了。',
+      ];
+      const body = '# 第一章\n' + sentences.join('');
+      await writeChapterBody(dir, '.novel/chapters/chapter-1.md', body);
+
+      await ensureContextArtifacts(dir, new Set(['.novel/chapters/chapter-1.md']));
+
+      const summaries = await getChapterSummaries(dir);
+      const s = summaries[0].summary;
+      expect(s.startsWith('[自动生成] ')).toBe(true);
+      // 标题行仍被去掉
+      expect(s).not.toContain('第一章');
+      // 高频句（林青/密信贯穿全文）被选取，且保持原文语序
+      expect(s).toContain('林青在客栈的大堂里坐下');
+      expect(s.indexOf('大堂里坐下')).toBeLessThan(s.indexOf('推开当铺的门'));
+      // 低频尾句（乌鸦）在预算内被排除
+      expect(s).not.toContain('乌鸦');
+      // 整句选取：以句号收尾、不补截断省略号、总长不超上限
+      expect(s.endsWith('。')).toBe(true);
+      expect(s.endsWith('…')).toBe(false);
+      expect(s.length - '[自动生成] '.length).toBeLessThanOrEqual(200);
     });
 
     it('state.json 损坏（键含冒号）时自动修复', async () => {
