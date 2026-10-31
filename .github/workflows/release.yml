@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write # 创建 Release 与上传产物
+  packages: write # 推送 GHCR 镜像
 
 jobs:
   release:
@@ -47,11 +48,11 @@ jobs:
           fi
           STAGE="open-novel-$VERSION"
           mkdir -p "pkg/$STAGE"
-          # tarball 只含运行所需：构建产物 + 启动器 + 插件 + migration + 安装清单。
+          # tarball 只含运行所需：构建产物 + 启动器 + 插件 + 模板 + migration + 安装清单。
           # 不打包 node_modules——用户侧 pnpm install --prod 安装（见 README「部署」）。
           # pnpm-workspace.yaml（allowBuilds）必须随包，否则全新安装触发
           # ERR_PNPM_IGNORED_BUILDS 直接失败。
-          cp -r dist bin plugins drizzle package.json pnpm-lock.yaml pnpm-workspace.yaml README.md LICENSE "pkg/$STAGE/"
+          cp -r dist bin plugins templates drizzle package.json pnpm-lock.yaml pnpm-workspace.yaml README.md LICENSE "pkg/$STAGE/"
           tar -czf "open-novel-$VERSION.tar.gz" -C pkg "$STAGE"
           sha256sum "open-novel-$VERSION.tar.gz" > "open-novel-$VERSION.tar.gz.sha256"
 
@@ -63,6 +64,42 @@ jobs:
             open-novel-*.tar.gz.sha256
           generate_release_notes: true
 
-      # TODO: Docker 镜像发布（ghcr.io）。当前无 registry 凭据，暂不启用；
-      # 启用时追加 docker/build-push-action 步骤（push ghcr.io/<owner>/open-novel），
-      # 并确认 GITHUB_TOKEN 具备 packages:write 权限。
+  docker:
+    # 镜像内容与 Release tarball 同源；依赖 release job 的测试/构建门槛。
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 规范化镜像名（GHCR 要求全小写）
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

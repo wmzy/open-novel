@@ -15,6 +15,35 @@ const execFileAsync = promisify(execFile);
  */
 const inflightGitOps = new Set<string>();
 
+/**
+ * 每个项目目录的结构性 git 操作串行链。
+ *
+ * 背景：ensureDraftBranch 是「探测分支是否存在 → 不存在则创建」的 check-then-act，
+ * 两个并发调用会同时判定「draft 不存在」并各自执行 `git branch draft`，
+ * 后者报「分支已存在」而失败。项目页首访会并发触发
+ * `GET /api/projects/:id`（迁移双分支）与 `GET /api/projects/:id/review`
+ * （审阅 diff 前同样要迁移），于是审阅接口 500、控制台报错——首访必现。
+ *
+ * 这里把同一目录的结构性 git 操作串成一条链：后者等前者完成再跑，
+ * check-then-act 不再有窗口期。链本身不参与 inflightGitOps 的「忙则跳过」
+ * 语义（那是给审阅/回滚这类用户显式操作用的）。
+ */
+const gitOpChains = new Map<string, Promise<void>>();
+
+/** 在项目目录的 git 操作链上串行执行 fn（同名目录的调用依次排队）。 */
+function runExclusiveGitOp<T>(projectDir: string, fn: () => Promise<T>): Promise<T> {
+  const previous = gitOpChains.get(projectDir) ?? Promise.resolve();
+  // 前一个操作失败不应阻断后一个（链只做串行，不做错误传播）。
+  const result = previous.then(fn, fn);
+  const tail = result.then(() => {}, () => {});
+  gitOpChains.set(projectDir, tail);
+  void tail.then(() => {
+    // 链尾已出队则清理，避免目录数增长导致 Map 无限膨胀。
+    if (gitOpChains.get(projectDir) === tail) gitOpChains.delete(projectDir);
+  });
+  return result;
+}
+
 /** 某项目目录是否有 git 结构操作在途（手改防抖快照应跳过）。 */
 export function isReviewOpInFlight(projectDir: string): boolean {
   return inflightGitOps.has(projectDir);
@@ -27,7 +56,13 @@ export async function ensureGitInit(projectDir: string): Promise<void> {
   const gitDir = path.join(projectDir, '.git');
   if (existsSync(gitDir)) return;
 
-  await execFileAsync('git', ['init'], { cwd: projectDir });
+  try {
+    await execFileAsync('git', ['init'], { cwd: projectDir });
+  } catch (err: unknown) {
+    // 并发 init：另一个调用已建好仓库时 git init 可能因锁冲突失败。
+    // 目标「仓库已初始化」已达成，复核 .git 存在即视为成功。
+    if (!existsSync(gitDir)) throw err;
+  }
   await execFileAsync('git', ['config', 'user.email', 'open-novel@local'], { cwd: projectDir });
   await execFileAsync('git', ['config', 'user.name', 'Open Novel'], { cwd: projectDir });
 
@@ -379,6 +414,12 @@ export async function gitSync(projectDir: string): Promise<{ success: boolean; m
  * 幂等：已处于双分支模型时无副作用。
  */
 export async function ensureDraftBranch(projectDir: string): Promise<void> {
+  // 串行化：分支创建是 check-then-act，并发调用会互相踩（见 gitOpChains 注释）。
+  return runExclusiveGitOp(projectDir, () => ensureDraftBranchUnlocked(projectDir));
+}
+
+/** ensureDraftBranch 的实际实现（调用方需自行保证同目录串行）。 */
+async function ensureDraftBranchUnlocked(projectDir: string): Promise<void> {
   await ensureGitInit(projectDir);
 
   const hasBranch = async (name: string): Promise<boolean> => {
@@ -410,20 +451,41 @@ export async function ensureDraftBranch(projectDir: string): Promise<void> {
     // 若用户原分支是 master，将其视为 main（不强制改名：在 main 上 mirror master 的位置）
     const masterExists = await hasBranch('master');
     if (masterExists && cur === 'master') {
-      await execFileAsync('git', ['branch', 'main', 'master'], { cwd: projectDir });
+      await createBranch(projectDir, 'main', 'master');
     } else {
-      await execFileAsync('git', ['branch', 'main'], { cwd: projectDir });
+      await createBranch(projectDir, 'main');
     }
   }
 
   // 确保 draft 存在
   const draftExists = await hasBranch('draft');
   if (!draftExists) {
-    await execFileAsync('git', ['branch', 'draft'], { cwd: projectDir });
+    await createBranch(projectDir, 'draft');
   }
 
   // checkout 到 draft
   await execFileAsync('git', ['checkout', 'draft'], { cwd: projectDir });
+}
+
+/**
+ * 创建分支；分支已被并发创建时视为成功。
+ *
+ * `git branch <name>` 在同名分支存在时报 fatal（消息随 locale 变化）。
+ * 并发场景（跨进程/多实例，或同进程内未串行的调用）下这是可预期的竞态结果，
+ * 不是错误状态——目标「分支存在」已达成。因此失败后复核分支是否真的存在：
+ * 存在则视为成功，不存在才抛出原始错误（不依赖任何本地化文案）。
+ */
+async function createBranch(projectDir: string, name: string, startPoint?: string): Promise<void> {
+  try {
+    await execFileAsync('git', ['branch', name, ...(startPoint ? [startPoint] : [])], { cwd: projectDir });
+  } catch (err: unknown) {
+    try {
+      await execFileAsync('git', ['rev-parse', '--verify', name], { cwd: projectDir });
+      return; // 分支已存在（并发创建）：目标已达成。
+    } catch {
+      throw err; // 分支确实没建出来：保留原始错误。
+    }
+  }
 }
 
 export interface ReviewCommit {
@@ -458,7 +520,14 @@ export interface ReviewResult {
  * 4. 对每个文件 diff main..draft -- <path> 取 unified diff，summarizeDiff 统计行数
  */
 export async function reviewDiff(projectDir: string): Promise<ReviewResult> {
-  await ensureDraftBranch(projectDir);
+  // 串行化：审阅会 checkpoint commit（写索引 + 提交），与并发迁移双分支
+  // （checkout）交错会把提交落到错误分支上（见 gitOpChains 注释）。
+  return runExclusiveGitOp(projectDir, () => reviewDiffUnlocked(projectDir));
+}
+
+/** reviewDiff 的实际实现（调用方需自行保证同目录串行）。 */
+async function reviewDiffUnlocked(projectDir: string): Promise<ReviewResult> {
+  await ensureDraftBranchUnlocked(projectDir);
 
   // 1. checkpoint 未提交改动
   await execFileAsync('git', ['add', '-A'], { cwd: projectDir });

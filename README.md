@@ -21,6 +21,8 @@ concept → world → characters → outline → scenes → sample → writing
 - **导出**：顶部「导出」菜单支持 Markdown（含设定/纯正文）、TXT、EPUB 3 电子书与 DOCX（Word）；EPUB/DOCX 均按章号顺序输出，章节标题为 Heading 1，正文首行缩进 2 字符，缺章/质检归档会通过 `x-export-warnings` 提示。
 - **批量写作**：输入 `/batch 10-20` 或「写第10到20章」（单批 ≤10 章），每章是串行锁下的真实 run；支持暂停（当前章写完）、继续、取消与失败章恢复，进度落盘 `.novel/batch.json`，刷新/重启后可继续。
 - **自动里程碑**：每 `milestoneEvery` 章（默认 50，0 关闭）与卷末自动创建 `milestone-*` 快照（幂等账本 `.novel/milestones.json`），空闲时以正常 `retro` run 生成阶段回顾报告；有 run 在途时跳过并记录备注。
+- **编辑器三模式**：源码（Markdown textarea）、富文本（WYSIWYG：标题/加粗/斜体/引用/列表，保存仍是 Markdown）、预览（实体链接可点击）。内联 AI 润色/扩写/续写在源码模式使用。
+- **成本与预算**：侧栏「成本」按模型/run/章节/日聚合；设置 `cost_budget_usd` 后，run 期间首次越过预算会实时推送提醒（不必打开成本面板），并可一键关闭。
 
 ## 技术栈
 
@@ -62,6 +64,8 @@ npm start             # 生产启动 node dist/server/api.js
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `200` / `60000` | API 限流 |
 | `AGENT_TIMEOUT_MS` | `1800000` | 单次 Pi run 超时（30 分钟） |
 | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `GEMINI_API_KEY` | — | 可选：作为 Pi 的初始凭据（也可在设置页保存） |
+| `PI_PROVIDER` / `PI_MODEL` / `PI_BASE_URL` / `PI_API` / `PI_API_KEY` | — | 通用 Pi 配置（Docker/CI 友好）；优先级低于设置页，高于 provider 专用 Key |
+| `PI_THINKING_LEVEL` / `PI_CONTEXT_WINDOW` / `PI_MAX_TOKENS` | `medium` / `128000` / `16384` | 通用 Pi 运行参数 |
 | `OPEN_NOVEL_HOME` | `~/.open-novel` | Pi 资源/会话元数据目录 |
 
 **模型配置（BYOK）**：详见 [订阅反代接入](docs/订阅反代接入.md)。优先在「设置 → 内置 Pi 模型」填写 provider / 模型 / API Key；也可以设置上表的环境变量作为初始值。自定义 provider（Ollama、LM Studio、本地订阅反代）需要填写 Base URL 与 API 协议。密钥只保存在服务端，接口不回显。
@@ -99,11 +103,27 @@ docker compose ps   # STATUS 显示 (healthy) 即就绪
 - **健康检查**：镜像内置 `HEALTHCHECK`（`node` 调 `/api/health`，30s 间隔；数据库异常时报告 `degraded` 并判为不健康），Compose 直接继承，无需配置。
 - **安全**：容器必须监听 `0.0.0.0`（镜像已设置），端口映射后通常可被局域网访问，**务必设置 `AUTH_TOKEN`**：在 `docker-compose.yml` 取消 `AUTH_TOKEN` 注释并替换为 `openssl rand -hex 24` 的输出；浏览器首次访问 `http://<host>:3006/api/health?token=<AUTH_TOKEN>` 完成登录，详见上文「访问控制」。
 
+### GHCR 镜像（免构建）
+
+每次 `v*` tag 发布时，Release workflow 会把同一份 Dockerfile 构建并推送到
+`ghcr.io/wmzy/open-novel`（标签：`X.Y.Z`、`X.Y`、`latest`）：
+
+```bash
+docker run -d --name open-novel -p 3006:3006 \
+  -v open-novel-data:/data \
+  -e AUTH_TOKEN="$(openssl rand -hex 24)" \
+  ghcr.io/wmzy/open-novel:latest
+```
+
+镜像内已包含 `dist/`、`plugins/`、`templates/` 与 `drizzle/`；只读资源按包根解析，
+与启动目录无关。
+
 ### npx / 发布包
 
 ```bash
-# 发布到 npm 后：
-npx open-novel@latest
+# 发布到 npm 后（全局安装或 npx 均可；包名为 scoped，CLI 命令仍是 open-novel）：
+npx @wmzy/open-novel@latest
+npm install -g @wmzy/open-novel && open-novel
 
 # 或从 GitHub Release 下载 tarball（https://github.com/wmzy/open-novel/releases/latest），
 # tarball 不打包 node_modules，需自行安装生产依赖：
@@ -113,11 +133,19 @@ pnpm install --prod --frozen-lockfile   # 或 npm install --omit=dev
 node bin/open-novel.mjs
 ```
 
+- **随包资源**：`templates/`（新项目初始文件）、`plugins/`（内置技能）、`drizzle/`（migration）都包含在 npm 包与 tarball 中，并按包根解析（`OPEN_NOVEL_PACKAGE_ROOT` 可显式覆盖），因此从任意目录启动都不会丢模板/插件/迁移。
+
 - **数据位置**：`bin/open-novel.mjs` 启动器把数据收敛到 `OPEN_NOVEL_HOME`（默认 `~/.open-novel/`：`pglite/` 数据库、`backups/` 备份、`pi-agent/` 会话元数据），不会在当前目录散落 `./data`；项目默认仍在 `~/novels/`。`PORT` / `HOST` / `OPEN_NOVEL_HOME` / `PGLITE_DATA_DIR` 等环境变量均可覆盖（全表见「配置」）。
 - **安全默认**：启动器沿用服务的单机默认——只监听 `127.0.0.1`。需要局域网访问时 `HOST=0.0.0.0 AUTH_TOKEN=... node bin/open-novel.mjs`。
 - 从源码运行（未构建）会得到明确报错并退出：请先 `pnpm build` 或改用发布包。
 
+### 发布（维护者）
 
+- **GitHub Release + Docker**：推送 `vX.Y.Z` tag（`package.json` 版本需一致）触发 `.github/workflows/release.yml`：类型检查/测试/构建 → `open-novel-X.Y.Z.tar.gz` + sha256 → GitHub Release，并把镜像推送到 `ghcr.io/<owner>/open-novel`（`GITHUB_TOKEN` 的 `packages:write`，无需额外凭据）。
+- **npm**：`.github/workflows/publish-npm.yml` 在 Release published 时发布；仓库需配置 `NPM_TOKEN` secret（npm Automation token），并开启 `id-token: write` 以生成 provenance。未配置 token 时只打印 notice 并跳过，不影响 Release。
+- **夜间评测**：`.github/workflows/eval-nightly.yml` 每天 UTC 19:00 跑 300 章一致性评测。配置 `PI_API_KEY` secret（可选 `PI_PROVIDER`/`PI_MODEL`/`PI_BASE_URL`/`PI_API` variables）后自动启用 LLM judge；`EVAL_JUDGE_MODEL` variable 可指定便宜模型。未配置凭据时 judge 自动跳过，确定性评测照常执行。注意：judge 模型必须存在于该 provider 的模型目录中——自定义 provider 只注册 `PI_MODEL` 一个模型，此时 judge 模型需与 `PI_MODEL` 相同。
+
+## 目录结构
 
 ```
 src/

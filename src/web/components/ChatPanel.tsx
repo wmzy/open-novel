@@ -47,6 +47,7 @@ import {
   deepenOverlay, deepenDialog, deepenInput, deepenActions,
   deepenConfirmBtn, deepenCancelBtn, deepenBanner,
   deepenScores, deepenHintLabel, deepenHintInput,
+  costAlertBanner, costAlertDismiss,
   planToggle, planToggleActive,
   ctxBar, ctxBarTrack, ctxBarFill, ctxBarWarn,
 } from './ChatPanel.styles';
@@ -135,6 +136,16 @@ const emptyHint = css`
 function fmtTok(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
+}
+
+/**
+ * 金额格式化：常规保留 4 位小数；极小值（如 0.00001 预算）保留有效数字，
+ * 避免 toFixed 把非零金额显示成 0.0000。
+ */
+function fmtUsd(n: number): string {
+  if (!Number.isFinite(n)) return '—';
+  if (n !== 0 && Math.abs(n) < 0.0001) return n.toExponential(2);
+  return n.toFixed(4);
 }
 
 /** 活跃运行数标记 */
@@ -343,7 +354,7 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
   const fileAutocomplete = useFileAutocomplete(projectId);
   const queryClient = useQueryClient();
 
-  const { messages: chatMessages, isRunning, status, contextSize, runtimeUsage, lastFinishedRun, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
+  const { messages: chatMessages, isRunning, status, contextSize, runtimeUsage, costAlert, dismissCostAlert, lastFinishedRun, activeRunCount, availableCommands, pendingAsk, resolveAsk, sendMessage, cancel, conversationId: hookConversationId, resetConversation, loadConversation } = useRun(activeConversationId || undefined);
 
   // 灵感注入：来自视图 💡 按钮 dispatch 的事件，直接 sendMessage（消息已组装好）
   useEffect(() => {
@@ -1504,6 +1515,18 @@ export default function ChatPanel({ projectId, agentId, skillId, stage, onStageC
       )}
 
       <div className={inputArea}>
+        {costAlert && (
+          <div className={costAlertBanner} role="alert" data-testid="cost-alert">
+            <span>
+              ⚠ 预算提醒：项目累计 ${fmtUsd(costAlert.spentUsd)} / 预算 ${fmtUsd(costAlert.budgetUsd)}
+              {' '}（{costAlert.percent}%）
+              {costAlert.runCostUsd > 0
+                ? `；本次 run ${fmtUsd(costAlert.runCostUsd)}`
+                : '；本次 run 尚未产生新消耗'}
+            </span>
+            <button type="button" className={costAlertDismiss} onClick={dismissCostAlert} title="关闭提醒">✕</button>
+          </div>
+        )}
         {pendingRevise && (
           <div className={reviseBanner}>
             <span>📌 正在修订 {pendingRevise.targetFile}{pendingRevise.sectionTitle ? ` · ${pendingRevise.sectionTitle}` : ''}</span>

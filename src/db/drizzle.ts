@@ -7,6 +7,7 @@ import { sql } from 'drizzle-orm';
 import { PGlite } from '@electric-sql/pglite';
 import postgres from 'postgres';
 import * as schema from './schema';
+import { packageMigrationsDir } from '../shared/package-root';
 import { acquireDataDirLock, releaseDataDirLock } from './data-dir-lock';
 import {
   cleanStaleLock,
@@ -169,9 +170,7 @@ async function initPgliteCore(): Promise<void> {
   await pglite.query('SELECT 1');
   // PGlite runs the standard Drizzle migrations generated from schema.ts,
   // so schema.ts is the single source of truth for table definitions.
-  const migrationsFolder =
-    process.env.DRIZZLE_MIGRATIONS_FOLDER ?? path.resolve(process.cwd(), 'drizzle');
-  await migrate(db, { migrationsFolder });
+  await migrate(db, { migrationsFolder: packageMigrationsDir() });
 }
 
 /**

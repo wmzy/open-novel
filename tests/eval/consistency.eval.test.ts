@@ -13,6 +13,7 @@
  *   EVAL_RUN=1 npx vitest run tests/eval/ --maxWorkers=4     # 100 章
  *   EVAL_CHAPTERS=300 EVAL_RUN=1 npx vitest run tests/eval/  # 300 章
  *   EVAL_JUDGE=1 …                                           # 追加 LLM judge
+ *   EVAL_JUDGE_MODEL=gpt-4.1-mini EVAL_JUDGE=1 …             # judge 用独立便宜模型
  * 等价一条命令：node scripts/eval-consistency.mjs（见其头注释）。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -39,6 +40,8 @@ import {
 const CHAPTERS = Math.max(1, Number.parseInt(process.env.EVAL_CHAPTERS ?? '', 10) || 100);
 const SEED = 20261025;
 const JUDGE_REQUESTED = process.env.EVAL_JUDGE === '1';
+/** 可选：judge 使用独立（更便宜）模型；空则沿用 Pi 全局/阶段配置。 */
+const JUDGE_MODEL = process.env.EVAL_JUDGE_MODEL?.trim() || null;
 const JUDGE_SAMPLE = 5;
 const JUDGE_TIMEOUT_MS = 120_000;
 /** buildCanonContext 采样章节：首/中/末（台账静态，末章上下文最全、最耗时）。 */
@@ -70,6 +73,7 @@ interface EvalResult {
     p0PerKind: number;
     majorPerKind: number;
     judgeRequested: boolean;
+    judgeModel: string | null;
     node: string;
   };
   deterministic: {
@@ -102,6 +106,7 @@ const result: EvalResult = {
     p0PerKind,
     majorPerKind,
     judgeRequested: JUDGE_REQUESTED,
+    judgeModel: JUDGE_MODEL,
     node: process.version,
   },
   deterministic: {
@@ -359,6 +364,7 @@ describe.skipIf(!process.env.EVAL_RUN)(`长程一致性评测（${CHAPTERS} 章�
           buildJudgePrompt(chapter, content, contract.pov, contract.cast),
           dir,
           JUDGE_TIMEOUT_MS,
+          { model: JUDGE_MODEL },
         );
         const candidate = extractBalancedJson(raw);
         const parsed = candidate ? (JSON.parse(candidate) as { scores?: Record<string, unknown>; notes?: unknown }) : null;
@@ -400,7 +406,7 @@ describe.skipIf(!process.env.EVAL_RUN)(`长程一致性评测（${CHAPTERS} 章�
     }
     result.judge = {
       status: okEntries.length > 0 ? 'ran' : 'failed',
-      model: `${settings.provider}/${settings.model || '(默认)'}`,
+      model: JUDGE_MODEL || `${settings.provider}/${settings.model || '(默认)'}`,
       entries,
       averages,
     };

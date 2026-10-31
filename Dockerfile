@@ -22,6 +22,7 @@ COPY src ./src
 COPY scripts ./scripts
 # plugins/（插件清单 + SKILL.md）与 drizzle/（migration）是运行时数据，打进镜像。
 COPY plugins ./plugins
+COPY templates ./templates
 COPY drizzle ./drizzle
 RUN pnpm build
 
@@ -47,6 +48,7 @@ WORKDIR /app
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/plugins ./plugins
+COPY --from=build /app/templates ./templates
 COPY --from=build /app/drizzle ./drizzle
 COPY package.json ./
 # node:22 镜像自带 uid=1000 的 node 用户。/data 预授权给 node：named volume

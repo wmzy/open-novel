@@ -7,7 +7,7 @@ import { Hono } from 'hono';
 import { eq, inArray } from 'drizzle-orm';
 import { db, ensureDbReady } from '../../../src/db/drizzle';
 import { conversations, projects, runEvents, runs as runsTable, userSettings } from '../../../src/db/schema';
-import costsRouter, { COST_BUDGET_SETTING_KEY } from '../../../src/api/routes/costs';
+import costsRouter, { COST_BUDGET_SETTING_KEY, getProjectCostSnapshot } from '../../../src/api/routes/costs';
 
 // 本路由尚未由父任务挂载进 api-app，测试内自行挂到与线上一致的前缀
 const app = new Hono().route('/api/projects/:projectId/costs', costsRouter);
@@ -209,5 +209,10 @@ describe('GET /api/projects/:projectId/costs/budget', () => {
   it('非法预算值视为未设置', async () => {
     await db.insert(userSettings).values({ id: 'set_cost_budget_3', key: COST_BUDGET_SETTING_KEY, value: 'not-a-number' });
     expect(await budget(PROJ_A)).toEqual({ budgetUsd: null, spentUsd: 0.75, percent: null, exceeded: false });
+  });
+
+  it('run 启动快照与 budget 接口同源（含预算）', async () => {
+    await db.insert(userSettings).values({ id: 'set_cost_budget_4', key: COST_BUDGET_SETTING_KEY, value: '0.5' });
+    expect(await getProjectCostSnapshot(PROJ_A)).toEqual({ spentUsd: 0.75, budgetUsd: 0.5 });
   });
 });

@@ -13,6 +13,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distEntry = path.resolve(__dirname, '..', 'dist', 'server', 'api.js');
+// 只读资源（templates/plugins/drizzle）相对包根解析；显式传给服务端，
+// 兼容非常规安装布局（shared/package-root.ts 也支持向上查找 package.json）。
+process.env.OPEN_NOVEL_PACKAGE_ROOT ||= path.resolve(__dirname, '..');
 
 if (!fs.existsSync(distEntry)) {
   console.error(

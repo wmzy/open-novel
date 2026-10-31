@@ -557,9 +557,16 @@ export default function HelpPage() {
               <div className={sectionBody}>
                 <p className={paragraph}>在侧边栏点击某章即可打开编辑器：</p>
                 <ul className={ul}>
-                  <li><b>编辑器面板</b>：直接查看与编辑章节正文</li>
+                  <li><b>编辑器面板</b>：直接查看与编辑章节正文，三种模式切换：
+                    <ul className={ul}>
+                      <li><b>编辑</b>：Markdown 源码；内联 AI（润色 / 扩写 / 续写）在此使用，选区感知、先预览后应用</li>
+                      <li><b>富文本</b>：所见即所得编辑（标题 / 加粗 / 斜体 / 引用 / 列表），保存的仍然是 Markdown</li>
+                      <li><b>预览</b>：渲染后的正文，设定中的实体名可点击查看档案</li>
+                    </ul>
+                  </li>
                   <li><b>局部重写工作台</b>：展开后可对选中片段进行指令式重写（换风格、改人称、压缩/扩写等）</li>
                   <li><b>质量检查面板</b>：展开后对当前章节跑 AI 味 / 一致性 / 节奏检查</li>
+                  <li><b>成本提醒</b>：设置预算（USD）后，写作过程中首次超预算会即时提醒，无需打开成本面板</li>
                 </ul>
               </div>
             </section>

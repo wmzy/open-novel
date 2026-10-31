@@ -48,7 +48,7 @@ export interface CostBudget {
 /**
  * 成本面板查询：summary 全维度聚合 + budget 阈值。
  * 预算通过既有 PATCH /api/settings 保存（键 cost_budget_usd），null 表示清除。
- * 只读聚合，打开面板才拉取；无后台轮询，超支横幅由 summary.budget 驱动。
+ * 只读聚合，打开面板才拉取；run 期间越界由服务端 cost_alert 实时推送。
  */
 export function useCosts(projectId: string, enabled = true) {
   const qc = useQueryClient();

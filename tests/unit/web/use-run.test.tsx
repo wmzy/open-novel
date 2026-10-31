@@ -109,6 +109,48 @@ describe('useRun — 流结束时 flush 最后一批 text_delta', () => {
   });
 });
 
+describe('useRun — run 级预算提醒', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('收到 cost_alert 后暴露状态，可手动关闭', async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = url.toString();
+      if (init?.method === 'POST' && u.endsWith('/api/runs')) {
+        return new Response(JSON.stringify({ runId: 'r-cost', conversationId: 'c-cost' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (u.includes('/api/runs/r-cost/events')) {
+        return sseResponse([
+          { event: 'agent', data: { type: 'runtime_usage', used: 100, size: 1000, costUsd: 0.2 } },
+          { event: 'agent', data: { type: 'cost_alert', spentUsd: 1.2, budgetUsd: 1, percent: 120, runCostUsd: 0.2 } },
+          { event: 'end', data: {} },
+        ]);
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useRun());
+    await act(async () => {
+      await result.current.sendMessage({ projectId: 'p1', agentId: 'pi', skillId: 's', stage: 'writing', message: 'hi' });
+    });
+
+    expect(result.current.costAlert).toEqual({
+      spentUsd: 1.2,
+      budgetUsd: 1,
+      percent: 120,
+      runCostUsd: 0.2,
+    });
+    act(() => result.current.dismissCostAlert());
+    expect(result.current.costAlert).toBeNull();
+  });
+});
+
 describe('useRun — mount 连 conversation 流追回历史 + 活跃 run', () => {
   afterEach(() => {
     vi.restoreAllMocks();

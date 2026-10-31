@@ -13,6 +13,7 @@ import { resolveSkillId } from '../../shared/skill-id';
 import { subscribe } from '../../agent/file-watcher';
 import { subscribeProjectEvents, emitProjectEvent } from '../../agent/project-events';
 import { resolveProjectDir, resolveNovelDir } from '../../shared/project-dir';
+import { packageTemplatesDir } from '../../shared/package-root';
 import { getActiveRunForProject } from '../../agent/run';
 import { buildIntentSkeleton, type IntentInput } from '../../shared/intent-card';
 import { detectChapters, type ChunkSource } from '../../shared/text-chunker';
@@ -621,7 +622,7 @@ function initWorkspace(projectDir: string, opts: WorkspaceOpts): void {
   mkdirSync(stylesDir, { recursive: true });
   const stylesReadme = path.join(stylesDir, 'README.md');
   if (!existsSync(stylesReadme)) {
-    const stylesReadmeTemplate = path.resolve(process.cwd(), 'templates', 'styles', 'README.md');
+    const stylesReadmeTemplate = path.join(packageTemplatesDir(), 'styles', 'README.md');
     if (existsSync(stylesReadmeTemplate)) {
       copyFileSync(stylesReadmeTemplate, stylesReadme);
     }
@@ -630,7 +631,7 @@ function initWorkspace(projectDir: string, opts: WorkspaceOpts): void {
   // 初始化创作者约束层：若 .novel/CREATOR.md 不存在，从项目根 templates/ 拷贝默认内容。
   const creatorPath = path.join(novelDir, 'CREATOR.md');
   if (!existsSync(creatorPath)) {
-    const creatorTemplate = path.resolve(process.cwd(), 'templates', 'CREATOR.md');
+    const creatorTemplate = path.join(packageTemplatesDir(), 'CREATOR.md');
     if (existsSync(creatorTemplate)) {
       copyFileSync(creatorTemplate, creatorPath);
     }
@@ -640,7 +641,7 @@ function initWorkspace(projectDir: string, opts: WorkspaceOpts): void {
   for (const tmplName of ['progress.md', 'character-states.md']) {
     const dest = path.join(novelDir, tmplName);
     if (!existsSync(dest)) {
-      const tmpl = path.resolve(process.cwd(), 'templates', tmplName);
+      const tmpl = path.join(packageTemplatesDir(), tmplName);
       if (existsSync(tmpl)) {
         copyFileSync(tmpl, dest);
       }

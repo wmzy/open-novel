@@ -520,6 +520,30 @@ export const deepenBanner = css`
   color: var(--haze-color-text);
 `;
 
+/** Run 级预算提醒条：首次越过 cost_budget_usd 时由服务端推送。 */
+export const costAlertBanner = css`
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: color-mix(in srgb, var(--haze-color-warning, #f59e0b) 14%, transparent);
+  border: 1px solid var(--haze-color-warning, #f59e0b);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  color: var(--haze-color-text);
+`;
+
+export const costAlertDismiss = css`
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--haze-color-text-secondary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0.125rem;
+`;
+
 /** 深化状态指示条：最新一轮维度评分轨迹 */
 export const deepenScores = css`
   opacity: 0.85;

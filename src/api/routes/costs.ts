@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import path from 'node:path';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../../db/drizzle';
 import { conversations, projects, runs as runsTable, runEvents, userSettings } from '../../db/schema';
 import { parseChapterNumber } from '../../shared/chapter-names';
@@ -165,6 +165,38 @@ function budgetBlock(spentUsd: number, budgetUsd: number | null): CostBudget {
   };
 }
 
+/**
+ * 内部只读快照：run 启动时取项目累计花费 + 预算，供 runs 事件流做
+ * run 级实时提醒。必须在 run 的任何 runtime_usage 事件落盘前调用，
+ * 否则本次 run 的已产生成本会被重复计入。
+ *
+ * 只拉 runtime_usage 事件（每条 assistant 消息一条）而不是全部 agent 事件——
+ * run 启动在延迟敏感路径上，不能把上万条 text_delta 也读进内存。
+ * 汇总口径与 summary 完全一致（同一批 runtime_usage 事件求和后 round4）。
+ */
+export async function getProjectCostSnapshot(
+  projectId: string,
+): Promise<{ spentUsd: number; budgetUsd: number | null }> {
+  const rows = await db
+    .select({ data: runEvents.data })
+    .from(runEvents)
+    .innerJoin(runsTable, eq(runEvents.runId, runsTable.id))
+    .innerJoin(conversations, eq(runsTable.conversationId, conversations.id))
+    .where(and(
+      eq(conversations.projectId, projectId),
+      eq(runEvents.type, 'agent'),
+      sql`${runEvents.data}->>'type' = 'runtime_usage'`,
+    ));
+
+  let total = 0;
+  for (const row of rows) {
+    const data = row.data as { costUsd?: unknown } | null;
+    const cost = data?.costUsd;
+    if (typeof cost === 'number' && Number.isFinite(cost)) total += cost;
+  }
+  return { spentUsd: round4(total), budgetUsd: await readBudgetUsd() };
+}
+
 async function computeSummary(projectId: string): Promise<Omit<CostsSummary, 'budget'>> {
   const { usage, runRows, eventRows } = await loadProjectUsage(projectId);
 
@@ -256,9 +288,8 @@ async function computeSummary(projectId: string): Promise<Omit<CostsSummary, 'bu
 
 /**
  * GET /summary — 全维度成本聚合 + 预算块。
- * 预算提醒取舍：服务端不建定时器/轮询（零额外开销），超支状态随
- * summary/budget 响应返回，前端打开面板即见横幅；如需 run 级实时提醒，
- * 后续可挂 runs 事件流，本轮不做。
+ * 预算提醒取舍：不建定时器/轮询（零额外开销）；run 期间由 runs 路由消费
+ * `cost_alert` 事件实时提醒，面板/接口按需返回同一口径的超支状态。
  */
 costsRouter.get('/summary', async (c) => {
   const projectId = c.req.param('projectId')!;

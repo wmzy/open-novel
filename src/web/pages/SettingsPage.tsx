@@ -460,7 +460,7 @@ export default function SettingsPage() {
             placeholder="text-embedding-3-small"
             autoComplete="off"
           />
-          <span className={formHint}>模型名由嵌入服务定义。更换模型后，下一次索引会自动重建全部向量。</span>
+          <span className={formHint}>模型名由嵌入服务定义。更换模型后会立即重建全部向量（后台进行，旧模型向量当场失效）。</span>
         </div>
         <div className={formGroup}>
           <label className={label}>API Key</label>

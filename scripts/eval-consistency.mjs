@@ -3,7 +3,8 @@
  * P2 长程一致性评测薄壳（不改 package.json，一条命令可跑）：
  *   node scripts/eval-consistency.mjs                    # 100 章（默认）
  *   EVAL_CHAPTERS=300 node scripts/eval-consistency.mjs  # 300 章（夜间 CI 规模）
- *   EVAL_JUDGE=1 …                                       # 有 Pi API Key 时追加 LLM judge
+ *   EVAL_JUDGE=1 …                                       # 有 Pi 凭据时追加 LLM judge
+ *   EVAL_JUDGE=1 EVAL_JUDGE_MODEL=gpt-4.1-mini …        # judge 用独立便宜模型
  *
  * 等价命令（父任务 npm script 可直接引用其中之一）：
  *   EVAL_RUN=1 npx vitest run tests/eval/ --maxWorkers=4 --disable-console-intercept
@@ -29,9 +30,10 @@ if (!fs.existsSync(vitestBin)) {
 }
 
 const chapters = process.env.EVAL_CHAPTERS?.trim() || '';
+const judgeModel = process.env.EVAL_JUDGE_MODEL?.trim() || '';
 console.log(
   `[eval] 启动长程一致性评测：${chapters ? `${chapters} 章` : '默认 100 章'}；` +
-  `LLM judge ${process.env.EVAL_JUDGE === '1' ? '已请求' : '未请求'}`,
+  `LLM judge ${process.env.EVAL_JUDGE === '1' ? `已请求${judgeModel ? `（${judgeModel}）` : ''}` : '未请求'}`,
 );
 
 const child = spawnSync(

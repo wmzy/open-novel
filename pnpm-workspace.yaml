@@ -5,4 +5,5 @@ allowBuilds:
   # 脚本内容为 SDK 自身的 prepare/postinstall（无外部下载）。
   "@google/genai": true
   protobufjs: true
-
+minimumReleaseAgeExclude:
+  - marked@18.1.2

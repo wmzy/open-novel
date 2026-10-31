@@ -127,7 +127,8 @@ const STATUS_LABELS: Record<string, string> = {
 /**
  * 成本面板（只读聚合 + 预算提醒）：
  * 按 模型/run/章节/日 聚合 runtime_usage 的 tokens 与 costUsd，
- * 超出 cost_budget_usd 预算时显示醒目横幅（服务端无定时轮询，打开面板即提醒）。
+ * 超出 cost_budget_usd 预算时显示醒目横幅。run 期间的首次越界由服务端
+ * cost_alert 事件实时提醒（见 ChatPanel），本面板提供完整明细与预算编辑。
  */
 export default function CostPanel({ projectId }: Props) {
   const { summary, budget, saveBudget } = useCosts(projectId, true);

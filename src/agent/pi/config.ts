@@ -95,6 +95,27 @@ const ENV_KEYS: Array<[string, string]> = [
   ['xai', 'XAI_API_KEY'],
 ];
 
+/**
+ * 通用环境变量：Docker / CI / 一次性部署无需先写 DB 设置。
+ * 优先级：user_settings > 通用 env > provider 专用 env（如 OPENAI_API_KEY）> 默认值。
+ * `PI_PROVIDER` 未设置时仍按 provider 专用 key 推断；使用 `PI_API_KEY` 时应同时
+ * 设置 `PI_PROVIDER`（否则默认 anthropic）。
+ */
+export const PI_ENV_KEYS = {
+  provider: 'PI_PROVIDER',
+  model: 'PI_MODEL',
+  baseUrl: 'PI_BASE_URL',
+  api: 'PI_API',
+  apiKey: 'PI_API_KEY',
+  thinkingLevel: 'PI_THINKING_LEVEL',
+  contextWindow: 'PI_CONTEXT_WINDOW',
+  maxTokens: 'PI_MAX_TOKENS',
+} as const;
+
+function readEnv(key: string): string {
+  return (process.env[key] ?? '').trim();
+}
+
 /** 设置目录只用于 Pi 的资源发现/会话元数据；会话本身是内存态。 */
 export function piAgentDir(): string {
   // 显式 Pi 目录（测试/高级部署）优先；否则放在 open-novel 自己的 home 下。
@@ -128,19 +149,28 @@ export async function readPiSettings(): Promise<PiSettings> {
   const rows = await db.select().from(userSettings);
   const map = new Map(rows.map((row) => [row.key, row.value]));
 
-  const provider = (map.get(PI_SETTING_KEYS.provider) || detectEnvProvider()).trim();
+  const provider = (
+    map.get(PI_SETTING_KEYS.provider)
+    || readEnv(PI_ENV_KEYS.provider)
+    || detectEnvProvider()
+  ).trim();
   const envKey = ENV_KEYS.find(([id]) => id === provider)?.[1];
-  const apiKey = (map.get(PI_SETTING_KEYS.apiKey) || (envKey ? process.env[envKey] : '') || '').trim();
+  const apiKey = (
+    map.get(PI_SETTING_KEYS.apiKey)
+    || readEnv(PI_ENV_KEYS.apiKey)
+    || (envKey ? readEnv(envKey) : '')
+    || ''
+  ).trim();
 
   return {
     provider,
-    model: (map.get(PI_SETTING_KEYS.model) || DEFAULT_MODEL[provider] || '').trim(),
-    baseUrl: (map.get(PI_SETTING_KEYS.baseUrl) || '').trim(),
-    api: (map.get(PI_SETTING_KEYS.api) || DEFAULT_API[provider] || 'openai-completions').trim(),
+    model: (map.get(PI_SETTING_KEYS.model) || readEnv(PI_ENV_KEYS.model) || DEFAULT_MODEL[provider] || '').trim(),
+    baseUrl: (map.get(PI_SETTING_KEYS.baseUrl) || readEnv(PI_ENV_KEYS.baseUrl)).trim(),
+    api: (map.get(PI_SETTING_KEYS.api) || readEnv(PI_ENV_KEYS.api) || DEFAULT_API[provider] || 'openai-completions').trim(),
     apiKey,
-    thinkingLevel: asThinkingLevel(map.get(PI_SETTING_KEYS.thinkingLevel)),
-    contextWindow: asPositiveInt(map.get(PI_SETTING_KEYS.contextWindow), 128_000),
-    maxTokens: asPositiveInt(map.get(PI_SETTING_KEYS.maxTokens), 16_384),
+    thinkingLevel: asThinkingLevel(map.get(PI_SETTING_KEYS.thinkingLevel) || readEnv(PI_ENV_KEYS.thinkingLevel)),
+    contextWindow: asPositiveInt(map.get(PI_SETTING_KEYS.contextWindow) || readEnv(PI_ENV_KEYS.contextWindow), 128_000),
+    maxTokens: asPositiveInt(map.get(PI_SETTING_KEYS.maxTokens) || readEnv(PI_ENV_KEYS.maxTokens), 16_384),
   };
 }
 

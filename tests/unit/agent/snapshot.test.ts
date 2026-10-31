@@ -61,6 +61,44 @@ describe('ensureDraftBranch', () => {
   });
 });
 
+describe('并发结构操作（git 竞态回归）', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    // 只做 git init，不建初始 commit：让 ensureDraftBranch 走「探测分支→创建分支」
+    // 的 check-then-act 路径（竞态窗口所在）。
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'snap-race-'));
+    await ensureGitInit(dir);
+  });
+  afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+
+  it('并发 ensureDraftBranch 不因「分支已存在」失败', async () => {
+    const results = await Promise.allSettled([
+      ensureDraftBranch(dir),
+      ensureDraftBranch(dir),
+      ensureDraftBranch(dir),
+    ]);
+    expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+    expect(await branchExists(dir, 'draft')).toBe(true);
+    expect(await branchExists(dir, 'main')).toBe(true);
+    expect(await currentBranch(dir)).toBe('draft');
+  });
+
+  it('并发 ensureDraftBranch + reviewDiff 全部成功', async () => {
+    await fs.writeFile(path.join(dir, 'ch1.md'), '第一章内容\n');
+    const results = await Promise.allSettled([
+      ensureDraftBranch(dir),
+      reviewDiff(dir),
+      ensureDraftBranch(dir),
+    ]);
+    for (const r of results) {
+      expect(r.status).toBe('fulfilled');
+    }
+    expect(await branchExists(dir, 'draft')).toBe(true);
+    expect(await currentBranch(dir)).toBe('draft');
+  });
+});
+
 describe('reviewDiff', () => {
   let dir: string;
 

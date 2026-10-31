@@ -479,6 +479,43 @@ export async function searchSemanticChunks(
 }
 
 /**
+ * 列出已有语义索引的项目（用于嵌入配置变更后批量重建）。
+ */
+export async function listProjectsWithSemanticIndex(): Promise<string[]> {
+  const rows = await db
+    .selectDistinct({ projectId: semanticChunks.projectId })
+    .from(semanticChunks);
+  return rows.map((r) => r.projectId);
+}
+
+/**
+ * 嵌入模型/地址变更后重建所有已有索引的项目。
+ *
+ * 必要性：检索与写作期的语义回忆都按「当前配置的模型」过滤向量
+ * （row.model === config.model），换模型后旧向量立即失效，语义检索会退化为
+ * 'index-empty'、语义回忆注入为空——直到某次章节同步触发重建为止。
+ * 这里显式重建，换模型即刻生效。
+ *
+ * 逐项目调度（复用 scheduleSemanticIndexing 的防抖与 run 锁保护），
+ * 失败只记录日志：索引是派生数据，不影响正文与写作。
+ */
+export function scheduleSemanticReindexAll(delayMs = 0): void {
+  void (async () => {
+    try {
+      const config = await readEmbeddingConfig();
+      if (!config) return;
+      const projectIds = await listProjectsWithSemanticIndex();
+      for (const projectId of projectIds) {
+        scheduleSemanticIndexing(projectId, delayMs);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown error';
+      console.warn(`[semantic] 嵌入配置变更后的批量重建调度失败：${msg}`);
+    }
+  })();
+}
+
+/**
  * 章节同步/正文保存后调度一次后台增量索引（非阻塞）。
  *
  * 项目有活跃 run 时跳过：agent 正在写盘，半成品不应进入索引；

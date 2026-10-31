@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { toast } from 'sonner';
 import type { AgentEvent, AgentCommand, AskPrompt } from '@/agent/types';
+import type { CostAlert } from '@/shared/cost-budget';
 import { consumeSseStream, MAX_RECONNECT_ATTEMPTS } from './sse-stream';
 
 let msgIdCounter = 0;
@@ -70,6 +71,8 @@ export function useRun(conversationId?: string) {
   const [runtimeUsage, setRuntimeUsage] = useState<{ used: number; size: number; costUsd?: number } | null>(null);
   const [availableCommands, setAvailableCommands] = useState<AgentCommand[]>([]);
   const [pendingAsk, setPendingAsk] = useState<AskPrompt | null>(null);
+  /** Run 级预算提醒（服务端首次越过预算时推送一次；关闭后本次 run 不再显示）。 */
+  const [costAlert, setCostAlert] = useState<CostAlert | null>(null);
   // 活跃 run 数量：曾是 ref 派生值，读 ref 不触发重渲染——并行 run 场景下
   // 其中一个结束时无 state 变化，ChatPanel 的「(N active)」徽标显示过期值。改真实 state。
   const [activeRunCount, setActiveRunCount] = useState(0);
@@ -220,6 +223,7 @@ export function useRun(conversationId?: string) {
     setIsRunning(true);
     setStatus('starting');
     setContextSize(null);
+    setCostAlert(null);
     // runtimeUsage 不重置：新消息复用上次的上下文基线，usage_update 会覆盖
 
     try {
@@ -463,6 +467,17 @@ export function useRun(conversationId?: string) {
   function handleAgentEvent(event: Record<string, unknown>) {
     const type = event.type as string;
 
+    // 预算提醒：临时 UI 状态，不挂到消息事件上（刷新后由服务端事件流重放）。
+    if (type === 'cost_alert') {
+      setCostAlert({
+        spentUsd: Number(event.spentUsd || 0),
+        budgetUsd: Number(event.budgetUsd || 0),
+        percent: Number(event.percent || 0),
+        runCostUsd: Number(event.runCostUsd || 0),
+      });
+      return;
+    }
+
     // runtime_usage 是临时 UI 状态（运行时真实上下文 token），不挂到消息上
     if (type === 'runtime_usage') {
       setRuntimeUsage({
@@ -685,11 +700,13 @@ export function useRun(conversationId?: string) {
     conversationIdRef.current = null;
     setMessages([]);
     setRuntimeUsage(null);
+    setCostAlert(null);
   }, []);
 
   const loadConversation = useCallback(async (convId: string) => {
     conversationIdRef.current = convId;
     setRuntimeUsage(null);
+    setCostAlert(null);
     try {
       const res = await fetch(`/api/conversations/${convId}/messages`);
       if (!res.ok) return;
@@ -710,6 +727,8 @@ export function useRun(conversationId?: string) {
     status,
     contextSize,
     runtimeUsage,
+    costAlert,
+    dismissCostAlert: () => setCostAlert(null),
     lastFinishedRun,
     availableCommands,
     pendingAsk,

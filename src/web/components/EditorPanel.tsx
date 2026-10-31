@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { css } from '@linaria/core';
 import { useQuery } from '@tanstack/react-query';
 import RewritePanel from './RewritePanel';
+import RichMarkdownEditor from './RichMarkdownEditor';
 import { useEntityDict } from '@/web/hooks/useEntityDict';
 import { EntityMarkdown } from './EntityMarkdown';
 import { useInlineEdit } from '@/web/hooks/useInlineEdit';
@@ -188,6 +189,14 @@ const wordCount = css`
   font-variant-numeric: tabular-nums;
 `;
 
+const richHint = css`
+  padding: 0.25rem 0.75rem;
+  border-bottom: 1px solid var(--haze-color-border);
+  font-size: 0.68rem;
+  color: var(--haze-color-text-secondary);
+  opacity: 0.85;
+`;
+
 interface Props {
   projectId: string;
   chapterNum: number;
@@ -196,7 +205,14 @@ interface Props {
 }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
-type EditorMode = 'edit' | 'preview' | 'rewrite';
+type EditorMode = 'edit' | 'rich' | 'preview' | 'rewrite';
+
+/** 中文字符 + 英文单词，与 PATCH 的 wordCount 口径保持一致。 */
+function countWords(value: string): number {
+  const chinese = (value.match(/[一-鿿]/g) || []).length;
+  const english = (value.match(/[a-zA-Z]+/g) || []).length;
+  return chinese + english;
+}
 
 export default function EditorPanel({ projectId, chapterNum, agentId = 'pi', skillId = 'novel' }: Props) {
   const { data: chapter } = useQuery({
@@ -242,9 +258,7 @@ export default function EditorPanel({ projectId, chapterNum, agentId = 'pi', ski
   }, [chapter]);
 
   useEffect(() => {
-    const chinese = (content.match(/[一-鿿]/g) || []).length;
-    const english = (content.match(/[a-zA-Z]+/g) || []).length;
-    setCharCount(chinese + english);
+    setCharCount(countWords(content));
   }, [content]);
 
   const saveContent = useCallback(async (value: string, count: number) => {
@@ -274,9 +288,7 @@ export default function EditorPanel({ projectId, chapterNum, agentId = 'pi', ski
     setContent(value);
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const chinese = (value.match(/[一-鿿]/g) || []).length;
-      const english = (value.match(/[a-zA-Z]+/g) || []).length;
-      saveContent(value, chinese + english);
+      saveContent(value, countWords(value));
     }, 1000);
   };
 
@@ -284,7 +296,7 @@ export default function EditorPanel({ projectId, chapterNum, agentId = 'pi', ski
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
       e.preventDefault();
       clearTimeout(saveTimer.current);
-      saveContent(content, charCount);
+      saveContent(content, countWords(content));
     }
   };
 
@@ -371,6 +383,13 @@ export default function EditorPanel({ projectId, chapterNum, agentId = 'pi', ski
           </button>
           <button
             className={toggleBtn}
+            data-active={mode === 'rich'}
+            onClick={() => setMode('rich')}
+          >
+            富文本
+          </button>
+          <button
+            className={toggleBtn}
             data-active={mode === 'preview'}
             onClick={() => setMode('preview')}
           >
@@ -391,6 +410,15 @@ export default function EditorPanel({ projectId, chapterNum, agentId = 'pi', ski
         </div>
       ) : mode === 'rewrite' ? (
         <RewritePanel projectId={projectId} chapterNum={chapterNum} agentId={agentId} skillId={skillId} />
+      ) : mode === 'rich' ? (
+        <>
+          <div className={richHint}>富文本模式：内联 AI（润色/扩写/续写）请切回「编辑」模式。</div>
+          <RichMarkdownEditor
+            value={content}
+            onChange={handleChange}
+            placeholder="开始写作... (Ctrl+S 保存)"
+          />
+        </>
       ) : (
         <>
           <div className={inlineBar}>

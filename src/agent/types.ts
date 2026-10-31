@@ -21,6 +21,7 @@ export type StreamEvent =
   | { type: 'usage'; usage?: unknown; costUsd?: number | null }
   | { type: 'context_size'; chars: number; tokens: number }
   | { type: 'runtime_usage'; used: number; size: number; costUsd?: number | null; model?: string | null }
+  | { type: 'cost_alert'; spentUsd: number; budgetUsd: number; percent: number; runCostUsd: number }
   | { type: 'error'; message: string }
   | { type: 'commands'; commands: AgentCommand[] }
   | { type: 'ask'; ask: AskPrompt }

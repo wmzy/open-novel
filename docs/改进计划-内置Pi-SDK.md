@@ -327,8 +327,114 @@ Pi 只认兼容 API。订阅用户需在本地启动一个反代，把订阅转�
 
 仍待后续（P3 候选）：
 
-- 富文本/Markdown WYSIWYG 编辑器（当前内联 AI 基于纯文本 textarea）。
-- npm 实际发布（package.json bin/files 已就绪，需 registry 凭据）；
-  Docker 镜像发布（workflow 留 TODO）。
-- run 级实时成本提醒（当前打开成本面板才提醒）；语义回忆向量化模型可配。
-- LLM judge 接入夜间 CI（需 CI 凭据注入）。
+- ~~富文本/Markdown WYSIWYG 编辑器（当前内联 AI 基于纯文本 textarea）~~ → 已在第四轮完成（见第 14 节）。
+- ~~npm 实际发布（package.json bin/files 已就绪，需 registry 凭据）~~ → 第四轮完成发布通道（workflow + 包内容校验 + 包名改 scoped）；仍需维护者配置 `NPM_TOKEN` 与 npm 组织权限后首次发布。
+- ~~Docker 镜像发布（workflow 留 TODO）~~ → 第四轮完成（`release.yml` 的 `docker` job 推 GHCR）。
+- ~~run 级实时成本提醒（当前打开成本面板才提醒）~~ → 第四轮完成（`cost_alert` 事件 + 对话面板横幅）。
+- ~~语义回忆向量化模型可配~~ → 第四轮完成：嵌入模型/地址变更立即触发全量索引重建，换模型当场生效。
+- ~~LLM judge 接入夜间 CI（需 CI 凭据注入）~~ → 第四轮完成：夜间 workflow 注入 `PI_*` 凭据与 `EVAL_JUDGE_MODEL`。
+
+## 14. 第四轮实施记录（2026-10-27）
+
+本轮收口第三轮遗留的 P3 候选，并修掉两个「装不上/跑不起来」的发布级缺陷。
+
+### 14.1 富文本（Markdown WYSIWYG）编辑器
+
+- 新增 `src/shared/rich-markdown.ts`：`markdownToEditorHtml`（marked + GFM，原始 HTML 一律丢弃）
+  与 `editorHtmlToMarkdown`（turndown，ATX 标题 / `-` 项目符号 / 围栏代码块）双向转换，
+  外加 `sanitizeEditorHtml` 白名单清洗（仅 p/h1-h6/strong/em/del/code/pre/blockquote/ul/ol/li/hr/br/a；
+  丢弃 script/style/iframe 等连内容标签；`javascript:`/`data:` 链接拒绝；属性只留 `a[href]` 与 `ol[start]`）。
+- 新增 `src/web/components/RichMarkdownEditor.tsx`：完全非受控的 `contentEditable`
+  （React 只在外部 value 变化时写 innerHTML，打字过程不回写 DOM——光标不跳）；
+  粘贴一律按纯文本处理，杜绝从网页粘入脚本/外链图片；工具栏含加粗/斜体/标题/引用/无序/有序列表
+  （`document.execCommand` 不可用时静默跳过，不抛错）。
+- `EditorPanel` 新增「富文本」模式（源码 / 富文本 / 预览 / 局部重写 四态）；
+  富文本模式下内联 AI（润色/扩写/续写）仍以源码模式为准，界面给出明确提示。
+- 落盘的权威格式仍是 Markdown：编辑走既有 `handleChange` → 1s 防抖 → PATCH，
+  字数口径（中文按字 + 英文按词）与源码模式完全一致。
+
+### 14.2 run 级实时成本提醒
+
+- 新增 `src/shared/cost-budget.ts`：`createBudgetTracker` 纯函数层——run 启动时快照项目累计花费，
+  之后按 `runtime_usage` 累加本次 run 成本，首次越过预算产出一次 alert（只提醒一次）。
+- 服务端：`src/api/routes/costs.ts` 导出 `getProjectCostSnapshot`（与 summary/budget 同源）；
+  `src/api/routes/runs.ts` 在 run 启动时取快照并创建 tracker，
+  越过预算时 emit `cost_alert`（含 `spentUsd`/`budgetUsd`/`percent`/`runCostUsd`）；
+  启动时已超支也会立即提醒（不等第一条 usage）。
+- 前端：`useRun` 新增 `costAlert` 状态与 `dismissCostAlert`；`ChatPanel` 输入区上方显示可关闭的提醒条
+  （`role="alert"`，带 `data-testid="cost-alert"`）。新 run 开始时清空旧提醒。
+
+### 14.3 发布通道（npm + Docker 镜像）
+
+- **包根解析修复（关键）**：此前 `templates/`、`plugins/`、`drizzle/` 全部按 `process.cwd()` 解析——
+  `npx`/全局安装时 cwd 是用户目录，模板、插件、migration 全部找不到（新建项目没有初始文件、
+  技能消失、PGlite 首次启动无 migration）。新增 `src/shared/package-root.ts`：
+  `OPEN_NOVEL_PACKAGE_ROOT` 显式覆盖 → 从模块位置向上找 `package.json` → 兜底 cwd；
+  插件/模板/migration 三处改用它，`bin/open-novel.mjs` 启动器显式注入包根。
+- **包名改 scoped**：`open-novel` 在 npm 上已被他人占用（现有 1.1.2），改用 `@wmzy/open-novel`
+  （`bin` 名仍是 `open-novel`，命令不变）。
+- `package.json` 补 `description`/`repository`/`homepage`/`bugs`/`publishConfig.access`；
+  `files` 增 `templates/`；新增 `prepack`（打包前自动构建，避免发布过期产物）。
+- 新增 `.github/workflows/publish-npm.yml`：Release published 或手动触发 →
+  typecheck → 测试 → 构建 → `npm pack --json --dry-run` 内容校验 → `npm publish --provenance`。
+  未配置 `NPM_TOKEN` 时只打印 notice 跳过，不影响 Release。
+- 新增 `scripts/verify-package-contents.mjs`（含单测）：发布包缺 dist/启动器/插件/模板/migration 任一项即失败。
+- `release.yml` 增加 `docker` job：登录 GHCR → `docker/metadata-action` 打 `X.Y.Z`/`X.Y`/`latest` 标签
+  → `docker/build-push-action` 推送（`packages: write` 权限）。Dockerfile 同步补 `templates/`。
+
+### 14.4 Pi 配置的环境变量回退 + 夜间 LLM judge
+
+- `src/agent/pi/config.ts` 新增通用环境变量：`PI_PROVIDER`/`PI_MODEL`/`PI_BASE_URL`/`PI_API`/`PI_API_KEY`/
+  `PI_THINKING_LEVEL`/`PI_CONTEXT_WINDOW`/`PI_MAX_TOKENS`。
+  优先级：设置页（DB）> 通用 env > provider 专用 env（`OPENAI_API_KEY` 等）> 默认值。
+  Docker / CI / 一次性部署无需先写数据库设置。
+- `tests/eval/consistency.eval.test.ts` 支持 `EVAL_JUDGE_MODEL`（judge 用独立便宜模型）。
+- `.github/workflows/eval-nightly.yml` 注入 `PI_API_KEY`（secret）与 `PI_PROVIDER`/`PI_MODEL`/
+  `PI_BASE_URL`/`PI_API`/`EVAL_JUDGE_MODEL`（variables）；有凭据时自动 `EVAL_JUDGE=1`，
+  无凭据时 judge 跳过、确定性评测照常执行。`EVAL_JUDGE_MODEL` 建议指向便宜模型。
+
+### 14.5 语义回忆的向量化模型「可配」落地
+
+嵌入模型/地址此前只能在设置页改，但换模型后既有向量立即失效（检索按 `row.model === config.model`
+过滤 → 退化为 `index-empty`，写作期语义回忆注入为空），要等下一次章节同步才重建。
+现在 `PATCH /api/settings` 检测到模型/地址/密钥变更即调度全量重建
+（`scheduleSemanticReindexAll`），换模型当场生效。
+
+### 14.6 首访 500 修复（并发 git 竞态）
+
+`GET /api/projects/:id`（迁移双分支）与 `GET /api/projects/:id/review`（审阅 diff 前同样要迁移）
+在项目页首访并发触发，两次 `ensureDraftBranch` 都判定「draft 不存在」并各自执行
+`git branch draft`，后者报「分支已存在」→ 审阅接口 500 → 浏览器控制台报错，E2E 首访用例失败。
+
+修复（`src/agent/snapshot.ts`）：
+- 每个项目目录一条 git 操作串行链（`runExclusiveGitOp`），结构性操作排队执行，
+  check-then-act 不再有窗口期；
+- `ensureDraftBranch` / `reviewDiff` 走该链；`git init` 与分支创建对「已存在」幂等容忍
+  （跨进程/多实例场景同样安全）；
+- 新增回归用例：并发 `ensureDraftBranch` 与并发 `ensureDraftBranch + reviewDiff` 全部成功。
+
+### 14.7 已验证
+
+- `pnpm typecheck` 通过；`pnpm lint` 0 error（41 历史 warning）；`pnpm build` 通过。
+- `pnpm vitest run --changed --maxWorkers=4`：110 files / 1528 tests 通过
+  （1 skipped 为 eval 门控文件，符合设计）。新增用例：
+  rich-markdown 转换/清洗、rich-editor 组件、cost-budget 纯函数、
+  run-cost-alert 端到端接线、package-root 资源解析、pi-config-env 环境变量回退、
+  verify-package-contents 发布包校验、semantic-model-switch 换模型重建、
+  snapshot 并发 git 竞态回归。
+- `npm pack --dry-run` 内容校验通过：207 个文件，必需条目 13 项齐全。
+- GitHub Actions YAML 四个 workflow 均可被 `yaml.safe_load` 解析。
+- `npx playwright test`：25/25 通过（修复前 22/25，首访 500 已消除）。
+- 生产构建冒烟（真实浏览器 + 假 provider）：
+  新建项目时 `templates/` 模板正常初始化（CREATOR/progress/character-states 落盘）；
+  富文本模式渲染 `<h1>`/`<p>`，工具栏「加粗」产出 `**…**` 并经既有防抖保存写回
+  `.novel/chapters/第1章.md`；运行期 SSE 推送 `cost_alert`，
+  对话面板出现「⚠ 预算提醒」横幅（可关闭）；换嵌入模型后后台重建索引、检索与语义回忆恢复。
+
+仍待后续：
+
+- npm 首次发布需维护者配置 `NPM_TOKEN` 与 `@wmzy` 组织权限；GHCR 首次推送同理。
+- 富文本模式暂不支持内联 AI（内联 AI 仍在源码模式）。
+- run 级成本提醒按「项目累计 + 本次 run」判定，未做按章节/按模型的细分预算。
+- 局部重写（`/api/projects/:id/rewrite`）的 run 不绑定对话，成本不计入项目累计
+  （与成本面板口径一致），因此也不会触发预算提醒。

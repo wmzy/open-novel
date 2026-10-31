@@ -1,0 +1,76 @@
+name: Publish npm
+
+# 发布 npm 包（可选凭据路径）：
+# - GitHub Release published 时触发；仓库需配置 NPM_TOKEN secret（npm Automation token）。
+# - 未配置 NPM_TOKEN 时打印 notice 并跳过，不影响 Release 本身。
+# - 也支持手动 workflow_dispatch（可指定 tag/ref）。
+#
+# 包内容由 package.json files 定义：dist / bin / plugins / templates / drizzle /
+# pnpm 安装清单 + README/LICENSE。prepack 会重新构建，确保不含过期产物。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance（Sigstore）
+
+concurrency:
+  group: publish-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: 检查凭据
+        if: env.NPM_TOKEN == ''
+        run: |
+          echo "::notice::NPM_TOKEN 未配置；跳过 npm 发布（GitHub Release / Docker 镜像不受影响）。"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        id: gate
+
+      - name: 安装依赖
+        if: env.NPM_TOKEN != ''
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        if: env.NPM_TOKEN != ''
+        run: npm run typecheck
+
+      - name: 单元与集成测试
+        if: env.NPM_TOKEN != ''
+        run: pnpm vitest run --maxWorkers=4
+
+      - name: 构建并检查发布内容
+        if: env.NPM_TOKEN != ''
+        run: |
+          npm run build
+          # dist 与随包资源必须在 tarball 中；缺失时立即失败而不是发布空壳。
+          npm pack --json --dry-run --ignore-scripts > /tmp/pack.json
+          node scripts/verify-package-contents.mjs /tmp/pack.json
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+
+      - name: 发布到 npm
+        if: env.NPM_TOKEN != ''
+        run: npm publish --provenance --access public --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}

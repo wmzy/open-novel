@@ -1,12 +1,11 @@
-import path from 'node:path';
 import { loadPlugins } from './loader';
+import { packagePluginsDir } from '../shared/package-root';
 import type { Plugin } from './types';
 
 let plugins: Plugin[] = [];
 
 export function initPlugins() {
-  const dir = path.resolve(process.cwd(), 'plugins');
-  plugins = loadPlugins(dir);
+  plugins = loadPlugins(packagePluginsDir());
 }
 
 export function getPlugins(): Plugin[] {

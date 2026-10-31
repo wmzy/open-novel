@@ -27,6 +27,8 @@ import { advanceBatch, readBatchState } from '../../agent/batch';
 import { scheduleSemanticIndexing } from '../../agent/semantic-index';
 import { extractCanonChanges } from '../../agent/canon-extractor';
 import { readCanonAutoExtract } from '../../shared/novel-config';
+import { createBudgetTracker } from '../../shared/cost-budget';
+import { getProjectCostSnapshot } from './costs';
 
 // ===== 流层 watchdog 配置 =====
 /** 滑动窗口大小（字符数）。窗口内统计 2-gram 重复率。 */
@@ -686,6 +688,12 @@ runsRouter.post('/', async (c) => {
     interruptedResume,
   });
 
+  // Run 级实时预算提醒：启动前快照项目累计花费（此时本 run 尚无事件落盘）。
+  // tracker 跨零产出重试 attempt 共享，避免重复累计/重复提醒。
+  const budgetTracker = await getProjectCostSnapshot(projectId)
+    .then((snapshot) => createBudgetTracker(snapshot))
+    .catch(() => null);
+
   /**
    * Launch the agent subprocess and wire up all stream handling, watchdog,
    * quality checks, and teardown. Extracted as a closure so it can be
@@ -704,6 +712,12 @@ runsRouter.post('/', async (c) => {
   }
   const run = existingRun ?? createRun({ projectId, agentId, skillId, stage, conversationId: convId });
   run.status = 'running';
+
+  // 启动时预算已超支：不等第一条 usage 就提醒（tracker 只提醒一次）。
+  if (!existingRun && budgetTracker) {
+    const alert = budgetTracker.record(null);
+    if (alert) emitEvent(run, 'agent', { type: 'cost_alert', ...alert });
+  }
 
   // 历史折叠提示：仅首次 attempt 推送，向用户说明早期对话已折叠（文件是跨轮状态层）
   if (!existingRun && historyTrimmed) {
@@ -795,6 +809,13 @@ runsRouter.post('/', async (c) => {
           return;
         }
       }
+    }
+    // Run 级实时预算：首次越过预算时 emit 一次（前端横幅 + 可关闭）。
+    // 只消费 runtime_usage（Pi 每条 assistant 消息一条）；usage 事件是同一笔，
+    // 两者都计会重复累计。
+    if (event.type === 'runtime_usage' && budgetTracker) {
+      const alert = budgetTracker.record(event.costUsd);
+      if (alert) emitEvent(run, 'agent', { type: 'cost_alert', ...alert });
     }
     emitEvent(run, 'agent', event);
   };
